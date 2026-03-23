@@ -84,7 +84,20 @@ export const remove = mutation({
         .collect();
 
       if (remainingMentions.length === 0) {
-        // No more mentions — delete the entity
+        // No more mentions — delete relationships referencing this entity
+        const sourceRels = await ctx.db
+          .query("relationships")
+          .withIndex("by_source", (q) => q.eq("sourceEntityId", entityId))
+          .collect();
+        for (const rel of sourceRels) await ctx.db.delete(rel._id);
+
+        const targetRels = await ctx.db
+          .query("relationships")
+          .withIndex("by_target", (q) => q.eq("targetEntityId", entityId))
+          .collect();
+        for (const rel of targetRels) await ctx.db.delete(rel._id);
+
+        // Delete the entity itself
         await ctx.db.delete(entityId);
       } else {
         const remainingDocs = new Set(
