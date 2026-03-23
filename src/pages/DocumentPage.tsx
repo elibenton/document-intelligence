@@ -15,6 +15,7 @@ import { ProcessingStatus } from "@/components/documents/ProcessingStatus";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Id } from "../../convex/_generated/dataModel";
 
@@ -396,6 +397,13 @@ export default function DocumentPage() {
             )
           }
           sidebar={
+            <Tabs defaultValue="entities" className="h-full">
+              <TabsList className="w-full">
+                <TabsTrigger value="entities">Entities</TabsTrigger>
+                <TabsTrigger value="notes">Notes</TabsTrigger>
+                <TabsTrigger value="info">Info</TabsTrigger>
+              </TabsList>
+              <TabsContent value="entities">
             <div className="flex flex-col gap-4">
               {/* New Entity */}
               {isParsed && (
@@ -627,6 +635,45 @@ export default function DocumentPage() {
               })}
 
             </div>
+              </TabsContent>
+              <TabsContent value="notes">
+                <div className="flex flex-col gap-4">
+                  <p className="text-sm text-muted-foreground py-8 text-center">
+                    Notes for this document will appear here.
+                  </p>
+                </div>
+              </TabsContent>
+              <TabsContent value="info">
+                <div className="flex flex-col gap-4">
+                  {document && (
+                    <div className="flex flex-col gap-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Name</span>
+                        <span className="truncate ml-4 text-right">{document.name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Pages</span>
+                        <span>{document.pageCount ?? "—"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Status</span>
+                        <span className="capitalize">{document.status}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Uploaded</span>
+                        <span>{new Date(document.uploadedAt).toLocaleDateString()}</span>
+                      </div>
+                      {document.completedAt && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Completed</span>
+                          <span>{new Date(document.completedAt).toLocaleDateString()}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
           }
         />
       </div>

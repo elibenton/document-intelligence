@@ -104,6 +104,13 @@ export const remove = mutation({
       .collect();
     for (const r of research) await ctx.db.delete(r._id);
 
+    // Remove from any stories
+    const storyLinks = await ctx.db
+      .query("storyDocuments")
+      .withIndex("by_document", (q) => q.eq("documentId", args.id))
+      .collect();
+    for (const link of storyLinks) await ctx.db.delete(link._id);
+
     // Delete the document itself
     await ctx.db.delete(args.id);
   },

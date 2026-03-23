@@ -20,6 +20,7 @@ import type * as processing from "../processing.js";
 import type * as processingJobs from "../processingJobs.js";
 import type * as research from "../research.js";
 import type * as researchQueries from "../researchQueries.js";
+import type * as stories from "../stories.js";
 import type * as upload from "../upload.js";
 
 import type {
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   processingJobs: typeof processingJobs;
   research: typeof research;
   researchQueries: typeof researchQueries;
+  stories: typeof stories;
   upload: typeof upload;
 }>;
 

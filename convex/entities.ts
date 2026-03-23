@@ -28,6 +28,17 @@ export const listByType = query({
 });
 
 // ---------------------------------------------------------------------------
+// List all entities (for homepage grouped display)
+// ---------------------------------------------------------------------------
+
+export const listAll = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("entities").order("desc").take(200);
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Get all entities that have mentions in a given document,
 // including their global documentCount for cross-doc display.
 // ---------------------------------------------------------------------------
@@ -64,6 +75,31 @@ export const byDocument = query({
         localMentionCount: localCounts.get(e._id) ?? 0,
         isCustom: e.isCustom,
       }));
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Get entity by name slug (for /entity/:slug URL)
+// ---------------------------------------------------------------------------
+
+export const getBySlug = query({
+  args: { slug: v.string() },
+  handler: async (ctx, args) => {
+    // Reconstruct name from slug for search
+    const searchTerm = args.slug.replace(/-/g, " ");
+    const results = await ctx.db
+      .query("entities")
+      .withSearchIndex("search_name", (q) => q.search("name", searchTerm))
+      .take(20);
+
+    // Match by slug: normalize entity name the same way
+    const toSlug = (name: string) =>
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+
+    return results.find((e) => toSlug(e.name) === args.slug) ?? null;
   },
 });
 

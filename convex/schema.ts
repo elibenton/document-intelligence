@@ -152,6 +152,27 @@ export default defineSchema({
     .index("by_document", ["documentId"])
     .index("by_document_entity", ["documentId", "entityName"]),
 
+  // Stories — collections of documents
+  stories: defineTable({
+    name: v.string(),
+    slug: v.string(),
+    description: v.optional(v.string()),
+    starred: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_starred", ["starred", "createdAt"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_slug", ["slug"]),
+
+  // Many-to-many join: stories ↔ documents
+  storyDocuments: defineTable({
+    storyId: v.id("stories"),
+    documentId: v.id("documents"),
+    addedAt: v.number(),
+  })
+    .index("by_story", ["storyId"])
+    .index("by_document", ["documentId"]),
+
   // Entity relationships
   relationships: defineTable({
     sourceEntityId: v.id("entities"),
