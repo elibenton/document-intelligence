@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Document Intelligence Clipper — Settings</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      max-width: 560px; margin: 40px auto; padding: 0 20px;
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    h1 { font-size: 18px; }
+    label { display: block; font-weight: 600; margin: 16px 0 4px; }
+    .hint { font-weight: 400; color: #888; font-size: 12px; }
+    input {
+      width: 100%; box-sizing: border-box; padding: 8px 10px;
+      border: 1px solid #ccc; border-radius: 6px; font: inherit;
+    }
+    button {
+      margin-top: 20px; padding: 8px 20px; border: 0; border-radius: 6px;
+      background: #4f46e5; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+    }
+    #saved { color: #16a34a; margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Document Intelligence Clipper</h1>
+
+  <label for="endpoint">Convex endpoint URL
+    <span class="hint">— your deployment's .convex.site origin, e.g. https://happy-otter-123.convex.site</span>
+  </label>
+  <input id="endpoint" type="url" placeholder="https://your-deployment.convex.site" />
+
+  <label for="apiKey">API key
+    <span class="hint">— must match the CLIPPER_API_KEY env var on your Convex deployment</span>
+  </label>
+  <input id="apiKey" type="password" />
+
+  <label for="appBaseUrl">App URL
+    <span class="hint">— where the web app runs, used for "Open in app" links</span>
+  </label>
+  <input id="appBaseUrl" type="url" placeholder="http://localhost:5173" />
+
+  <button id="save">Save</button><span id="saved" hidden>Saved ✓</span>
+  <script src="options.js"></script>
+</body>
+</html>

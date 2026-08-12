@@ -15,9 +15,11 @@ const BLOCK_TYPE_COLORS: Record<string, { fill: string; border: string; label: s
 
 const DEFAULT_COLORS = { fill: "rgba(59,130,246,0.08)", border: "rgba(59,130,246,0.25)", label: "#3b82f6" };
 
+import type { PageDims } from "./PersonHighlight";
+
 interface BlockOverlayProps {
   blocks: Doc<"blocks">[];
-  pages: Doc<"pages">[];
+  pages: PageDims[];
   pageNumber: number;
   renderedWidth: number;
 }

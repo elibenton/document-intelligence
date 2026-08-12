@@ -1,4 +1,5 @@
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { findNameBoxes } from "./entityBoxes";
 
 interface PersonMention {
   blockId: string;
@@ -7,16 +8,25 @@ interface PersonMention {
   snippet: string; // short context around the name
 }
 
+/** Page dimensions as returned by the lightweight `pages.byDocument` query. */
+export interface PageDims {
+  pageNumber: number;
+  width?: number;
+  height?: number;
+  viewerRotationAdjustment?: 0 | 90 | 180 | 270;
+}
+
 interface PersonHighlightProps {
   blocks: Doc<"blocks">[];
-  pages: Doc<"pages">[];
+  pages: PageDims[];
   personName: string;
-  pageNumber: number; // 1-indexed from react-pdf
+  pageNumber: number; // 1-indexed viewer page
   renderedWidth: number;
 }
 
 /**
- * Overlay that highlights blocks containing a person's name on a given page.
+ * Overlay that highlights a person's name on a given page — word-tight when
+ * the block carries word-level OCR boxes, whole-line otherwise.
  */
 export function PersonHighlight({
   blocks,
@@ -44,11 +54,11 @@ export function PersonHighlight({
 
   return (
     <>
-      {matchingBlocks.map((block) => {
-        const bbox = block.bbox!;
-        return (
+      {matchingBlocks.flatMap((block) => {
+        const boxes = findNameBoxes(block, personName);
+        return (boxes.length > 0 ? boxes : [block.bbox!]).map((bbox, i) => (
           <div
-            key={`person-${block._id}`}
+            key={`person-${block._id}-${i}`}
             className="absolute pointer-events-none"
             style={{
               left: bbox.x * scale,
@@ -64,17 +74,18 @@ export function PersonHighlight({
               {personName}
             </span>
           </div>
-        );
+        ));
       })}
     </>
   );
 }
 
 /**
- * Find all mentions of a person across all blocks, returning page numbers and snippets.
+ * Find all mentions of a person across all blocks, returning page numbers and
+ * snippets. Accepts the lightweight block shape (no word boxes needed).
  */
 export function findPersonMentions(
-  blocks: Doc<"blocks">[],
+  blocks: { _id: string; text: string; pageNumber: number }[],
   personName: string
 ): PersonMention[] {
   const nameLower = personName.toLowerCase();

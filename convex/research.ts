@@ -3,6 +3,8 @@
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { chatCompletion } from "./interfaze";
+import { usageLogger } from "./apiLogs";
 
 // ---------------------------------------------------------------------------
 // Structured JSON schema for the dossier response_format
@@ -195,45 +197,20 @@ export const runResearch = action({
     );
 
     try {
-      const response = await fetch(
-        "https://api.interfaze.ai/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-            max_tokens: 2048,
-            response_format: {
-              type: "json_schema",
-              json_schema: {
-                name: "dossier",
-                schema: DOSSIER_SCHEMA,
-              },
-            },
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `Interfaze API error (${response.status}): ${errorText}`
-        );
-      }
-
-      const data = await response.json();
-
-      // Content is structured JSON, store it as-is
-      const content = data.choices?.[0]?.message?.content ?? "";
-      const precontext: Array<{ name?: string; result?: unknown }> =
-        Array.isArray(data.precontext) ? data.precontext : [];
+      // Go through the shared client rather than a private fetch: it carries
+      // the 9-minute abort that keeps the action from being killed before its
+      // catch block runs, plus the common usage/cost reporting and HTML-safe
+      // error truncation.
+      const { content, precontext } = await chatCompletion(apiKey, {
+        usage: {
+          log: usageLogger(ctx, { documentId: args.documentId }),
+          operation: "research",
+        },
+        systemPrompt,
+        content: [{ type: "text", text: userPrompt }],
+        responseSchema: { name: "dossier", schema: DOSSIER_SCHEMA },
+        maxTokens: 2048,
+      });
 
       const searchResults = extractSearchResults(precontext);
       const citations: string[] = searchResults.map((r) => r.url);
@@ -246,6 +223,7 @@ export const runResearch = action({
         status: "completed",
       });
     } catch (e) {
+      // chatCompletion already reported the failed call to the usage log.
       const msg = e instanceof Error ? e.message : String(e);
       await ctx.runMutation(internal.researchQueries.saveResult, {
         researchId,

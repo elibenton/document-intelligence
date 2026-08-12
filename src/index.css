@@ -1,11 +1,31 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+
+/* Native range/caret behavior remains active, but selection paint comes from
+   validated PDF word boxes in ImagePdfViewer instead of arbitrary DOM rects. */
+.pdf-text-layer [data-pdf-text-token]::selection {
+  background: transparent;
+}
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
 
+@keyframes progress-indeterminate {
+    0% {
+        left: -40%;
+    }
+    100% {
+        left: 100%;
+    }
+}
+
+.progress-indeterminate {
+    animation: progress-indeterminate 1.2s ease-in-out infinite;
+}
+
 :root {
+    color-scheme: light;
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
@@ -38,9 +58,16 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+
+    /* Relationship-graph chrome. Set here rather than as Tailwind classes
+       because they are consumed as inline SVG paint attributes. */
+    --graph-edge: oklch(0.869 0.022 252.9);
+    --graph-edge-label: oklch(0.554 0.041 257.4);
+    --graph-node-ring: oklch(1 0 0);
 }
 
 .dark {
+    color-scheme: dark;
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
@@ -72,6 +99,10 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+
+    --graph-edge: oklch(0.446 0.03 256.8);
+    --graph-edge-label: oklch(0.704 0.04 256.8);
+    --graph-node-ring: oklch(0.205 0 0);
 }
 
 @theme inline {

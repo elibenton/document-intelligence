@@ -1,27 +1,41 @@
-import { useState, useCallback, useRef, useMemo } from "react";
-import { useParams, Link } from "react-router-dom";
-import { useQuery, useAction } from "convex/react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { useParams, useSearchParams, Link, useNavigate } from "react-router-dom";
+import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
-import { PdfViewer } from "@/components/viewer/PdfViewer";
+import {
+  ImagePdfViewer,
+  type ImagePdfViewerRef,
+  type PageImage,
+} from "@/components/viewer/ImagePdfViewer";
+import { ImageViewer } from "@/components/viewer/ImageViewer";
+import { WebClipViewer } from "@/components/viewer/WebClipViewer";
+import { CsvViewer } from "@/components/viewer/CsvViewer";
+import { TranslatedDocumentView } from "@/components/viewer/TranslatedDocumentView";
+import { RecordingView } from "@/components/recordings/RecordingView";
+import { ExtractionSetup } from "@/components/documents/ExtractionSetup";
 import { ViewerLayout } from "@/components/viewer/ViewerLayout";
 import { TableOfContents } from "@/components/viewer/TableOfContents";
-import { BlockOverlay } from "@/components/viewer/BlockOverlay";
-import {
-  PersonHighlight,
-  findPersonMentions,
-} from "@/components/viewer/PersonHighlight";
-import { ProcessingStatus } from "@/components/documents/ProcessingStatus";
+import { PageOverlays } from "@/components/viewer/PageOverlays";
+import { findPersonMentions } from "@/components/viewer/PersonHighlight";
+import type { EntityHover } from "@/components/viewer/EntityHighlights";
+import { PipelineProgress } from "@/components/documents/PipelineProgress";
+import { DocumentActions } from "@/components/documents/DocumentActions";
+import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { documentTitles } from "@/lib/documentTitle";
+import { isCsvDocument } from "@/lib/uploadTypes";
 import type { Id } from "../../convex/_generated/dataModel";
 
 export default function DocumentPage() {
   const { id } = useParams<{ id: string }>();
   const documentId = id as Id<"documents">;
+  const navigate = useNavigate();
   const document = useQuery(api.documents.get, { id: documentId });
   const url = useQuery(
     api.documents.getUrl,
@@ -34,6 +48,16 @@ export default function DocumentPage() {
   const runResearch = useAction(api.research.runResearch);
   const researchDossiers = useQuery(api.researchQueries.byDocument, { documentId });
   const documentEntities = useQuery(api.entities.byDocument, { documentId });
+  const detections = useQuery(api.detections.byDocument, { documentId });
+  const pageImages = useQuery(api.pageImages.byDocument, { documentId });
+  const translatedPages = useQuery(api.translations.pagesByDocument, {
+    documentId,
+  });
+  const ensureRendered = useMutation(api.pageImages.ensureRendered);
+  const retryRender = useMutation(api.pageImages.retryRender);
+  const retryTranslation = useMutation(api.translations.retry);
+  const rotatePage = useMutation(api.pages.rotatePage);
+  const rotateDocument = useMutation(api.documents.rotateDocument);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [showBlocks, setShowBlocks] = useState(false);
@@ -45,30 +69,77 @@ export default function DocumentPage() {
   const [presetExtracting, setPresetExtracting] = useState<Set<string>>(new Set());
   const [researching, setResearching] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
-  const viewerContainerRef = useRef<HTMLDivElement | null>(null);
+  const [showReextract, setShowReextract] = useState(false);
+  const [languageView, setLanguageView] = useState<"translated" | "original">(
+    "translated"
+  );
+  const [hoveredEntity, setHoveredEntity] = useState<EntityHover | null>(null);
+  const imageViewerRef = useRef<ImagePdfViewerRef | null>(null);
 
   const handleVisiblePageChange = useCallback((page: number) => {
     setCurrentPage(page);
   }, []);
 
-  const scrollToPage = useCallback(
-    (page: number) => {
-      const container = viewerContainerRef.current;
-      if (container) {
-        const scrollContainer = container.querySelector(
-          "[data-page-number]"
-        )?.parentElement?.parentElement?.parentElement;
-        if (
-          scrollContainer &&
-          "scrollToPage" in scrollContainer &&
-          typeof scrollContainer.scrollToPage === "function"
-        ) {
-          scrollContainer.scrollToPage(page);
-        }
+  const scrollToPage = useCallback((page: number) => {
+    imageViewerRef.current?.scrollToPage(page);
+  }, []);
+
+  // Deep link support (?page=N&highlight=text): arm the highlight search and
+  // scroll to the page once the viewer has rendered it.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const highlight = searchParams.get("highlight");
+    if (highlight) {
+      setSearchQuery(highlight);
+      setSelectedItem(highlight);
+    }
+    const page = Number(searchParams.get("page"));
+    if (!page || page < 1) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      const el = window.document.querySelector(
+        `[data-page-number="${page}"]`
+      );
+      if (el) {
+        el.scrollIntoView({ block: "start" });
+        clearInterval(timer);
+      } else if (tries > 40) {
+        clearInterval(timer);
       }
-    },
-    []
+    }, 250);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Documents uploaded before page pre-rendering existed have no images —
+  // kick off a render for them on first view (the mutation is a no-op if
+  // images already exist or a render is already scheduled).
+  const isCsv = document ? isCsvDocument(document) : false;
+  const isPdfDocument =
+    !isCsv &&
+    (document?.mediaType === "pdf" || document?.mimeType === "application/pdf");
+  const isRecording = Boolean(
+    document &&
+      (document.mediaType === "audio" ||
+        document.mediaType === "video" ||
+        document.mimeType.startsWith("audio/") ||
+        document.mimeType.startsWith("video/"))
   );
+
+  // Recordings navigate via the transcript, so the page/section Contents tab
+  // only applies to paged documents.
+  const showContentsTab = !isCsv && !(
+    document?.mediaType === "audio" ||
+    document?.mediaType === "video" ||
+    document?.mimeType.startsWith("audio/") ||
+    document?.mimeType.startsWith("video/")
+  );
+  useEffect(() => {
+    if (isPdfDocument && pageImages) {
+      void ensureRendered({ documentId });
+    }
+  }, [isPdfDocument, pageImages, ensureRendered, documentId]);
 
   // Parse people from extraction results
   const people = useMemo(() => {
@@ -143,6 +214,21 @@ export default function DocumentPage() {
       ),
     }));
   }, [entityGroups, mentionData]);
+
+  // Every tagged entity name, deduped — the set the viewer makes hoverable.
+  // Very short names are dropped: they match too much to be useful targets.
+  const entityNames = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const group of entityGroups) {
+      for (const item of group.items) {
+        const name = item.trim();
+        if (name.length < 3) continue;
+        const key = name.toLowerCase();
+        if (!seen.has(key)) seen.set(key, name);
+      }
+    }
+    return [...seen.values()];
+  }, [entityGroups]);
 
   // Cross-document entity lookup: lowercase name → { entityId, documentCount }
   const crossDocMap = useMemo(() => {
@@ -293,35 +379,47 @@ export default function DocumentPage() {
     }
   }
 
+  const titles = documentTitles(document);
   const hasBlocks = blocks && blocks.some((b) => b.bbox);
   const isParsed =
     document.status === "parsed" ||
     document.status === "completed" ||
     document.status === "extracting";
+  const hasTranslatedContent =
+    document.translationStatus === "complete" &&
+    document.translationLanguageCode !== document.sourceLanguageCode &&
+    (isRecording || Boolean(translatedPages?.length));
+  const translationInProgress =
+    document.translationStatus === "queued" ||
+    document.translationStatus === "translating";
 
   // Build the overlay render function
   const activeSearch = searchQuery.trim().length >= 2 ? searchQuery.trim() : null;
   const overlayTerm = activeSearch;
 
+  // Each rendered page fetches its own full blocks (with word-level boxes)
+  // inside PageOverlays — the page-level `blocks` subscription stays light.
   const renderOverlay =
-    (showBlocks || overlayTerm) && blocks && pages
-      ? (pageNumber: number) => (
+    (showBlocks || overlayTerm || entityNames.length > 0) && pages
+      ? (pageNumber: number, renderedWidth = 700) => (
           <>
-            {showBlocks && (
-              <BlockOverlay
-                blocks={blocks}
-                pages={pages}
+            <PageOverlays
+              documentId={documentId}
+              pageNumber={pageNumber}
+              pages={pages}
+              showBlocks={showBlocks}
+              highlightTerm={overlayTerm ?? undefined}
+              entityNames={entityNames}
+              hoveredEntity={hoveredEntity}
+              onHoverEntity={setHoveredEntity}
+              renderedWidth={renderedWidth}
+            />
+            {showBlocks && detections && pageImages && (
+              <VisualObjectOverlay
                 pageNumber={pageNumber}
-                renderedWidth={700}
-              />
-            )}
-            {overlayTerm && (
-              <PersonHighlight
-                blocks={blocks}
+                detections={detections}
                 pages={pages}
-                personName={overlayTerm}
-                pageNumber={pageNumber}
-                renderedWidth={700}
+                pageImages={pageImages}
               />
             )}
           </>
@@ -331,16 +429,103 @@ export default function DocumentPage() {
   return (
     <div className="flex flex-col h-screen">
       <header className="border-b px-6 py-3 flex items-center gap-4 shrink-0">
-        <Link to="/">
+        <Link to={document.projectId ? `/p/${document.projectId}` : "/"}>
           <Button variant="ghost" size="sm">
             &larr; Back
           </Button>
         </Link>
         <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-semibold truncate">{document.name}</h1>
+          <h1 className="text-sm font-semibold truncate flex items-center gap-1.5">
+            <DocumentIdentityMenu document={document} />
+            <span className="truncate">{titles.primary}</span>
+          </h1>
+          {/* Original upload name under the AI-written title, indented past
+              the icon so it lines up with the title text above it. */}
+          {titles.original && (
+            <p className="text-xs text-muted-foreground truncate ml-5">
+              {titles.original}
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
+          {isPdfDocument && (
+            <div className="inline-flex rounded-md border" aria-label="Rotate document">
+              <button
+                type="button"
+                className="px-2 py-1.5 text-xs hover:bg-accent"
+                title="Rotate every page clockwise"
+                onClick={() =>
+                  void rotateDocument({ id: documentId, degrees: 90 })
+                }
+              >
+                ↻ All
+              </button>
+            </div>
+          )}
+          {translationInProgress && (
+            <span className="text-xs text-muted-foreground">
+              Translating…
+            </span>
+          )}
+          {document.translationStatus === "failed" && (
+            <Button
+              variant="outline"
+              size="sm"
+              title={document.translationError}
+              onClick={() => void retryTranslation({ documentId })}
+            >
+              Retry translation
+            </Button>
+          )}
+          {hasTranslatedContent && (
+            <div
+              className="inline-flex rounded-md border bg-muted/30 p-0.5"
+              aria-label="Document language view"
+            >
+              <button
+                type="button"
+                onClick={() => setLanguageView("translated")}
+                className={cn(
+                  "rounded px-2 py-1 text-xs transition-colors",
+                  languageView === "translated"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Translated
+              </button>
+              <button
+                type="button"
+                onClick={() => setLanguageView("original")}
+                className={cn(
+                  "rounded px-2 py-1 text-xs transition-colors",
+                  languageView === "original"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Original
+              </button>
+            </div>
+          )}
+          {isPdfDocument &&
+            (document.renderStatus === "queued" ||
+              document.renderStatus === "rendering") && (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                Preparing pages {document.renderedPageCount ?? 0}/
+                {document.renderExpectedPages ?? document.pageCount ?? "…"}
+              </span>
+            )}
+          {isPdfDocument && document.renderStatus === "failed" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void retryRender({ documentId })}
+            >
+              Retry pages
+            </Button>
+          )}
           {hasBlocks && (
             <Button
               variant={showBlocks ? "default" : "outline"}
@@ -361,38 +546,59 @@ export default function DocumentPage() {
               Blocks
             </Button>
           )}
-
         </div>
       </header>
 
-      <div className="flex-1 overflow-hidden" ref={viewerContainerRef}>
+      <div className="flex-1 overflow-hidden">
         <ViewerLayout
-          toc={
-            <TableOfContents
-              blocks={blocks ?? []}
-              currentPage={currentPage}
-              totalPages={document.pageCount ?? 0}
-              onNavigate={scrollToPage}
-              searchQuery={searchQuery}
-              onSearchChange={(q) => {
-                setSearchQuery(q);
-                // Clear entity selection if user manually clears or edits the search
-                if (q !== selectedItem) setSelectedItem(null);
-              }}
-              isEntitySearch={!!selectedItem}
-            />
-          }
           viewer={
-            url ? (
-              <PdfViewer
+            isRecording ? (
+              <RecordingView
+                document={document}
                 url={url}
-                highlightText={overlayTerm ?? undefined}
-                onVisiblePageChange={handleVisiblePageChange}
-                renderOverlay={renderOverlay}
+                showTranslation={
+                  hasTranslatedContent && languageView === "translated"
+                }
               />
+            ) : hasTranslatedContent && languageView === "translated" ? (
+              <TranslatedDocumentView pages={translatedPages ?? []} />
+            ) : url ? (
+              document.mediaType === "webScrape" ? (
+                <WebClipViewer
+                  url={url}
+                  sourceUrl={document.sourceUrl}
+                  clippedAt={document.uploadedAt}
+                />
+              ) : isCsv ? (
+                <CsvViewer url={url} name={document.name} />
+              ) : document.mediaType === "image" ? (
+                <ImageViewer url={url} name={document.name} />
+              ) : isPdfDocument ? (
+                // Pre-rendered page images: no client-side PDF parsing, so
+                // pages never come up blank and scanned docs behave the same
+                // as born-digital ones.
+                <ImagePdfViewer
+                  ref={imageViewerRef}
+                  documentId={documentId}
+                  pageImages={pageImages ?? []}
+                  pages={pages ?? []}
+                  totalPages={document.pageCount ?? pageImages?.length ?? 1}
+                  documentRotation={document.viewerRotation ?? 0}
+                  onVisiblePageChange={handleVisiblePageChange}
+                  onRotatePage={(pageNumber) =>
+                    void rotatePage({
+                      documentId,
+                      pageNumber: pageNumber - 1,
+                      degrees: 90,
+                    })
+                  }
+                  renderOverlay={renderOverlay}
+                />
+              ) : null
             ) : (
-              <div className="flex items-center justify-center h-96">
-                <p className="text-muted-foreground">Loading PDF...</p>
+              <div className="flex flex-col items-center justify-center h-96 gap-3">
+                <Spinner className="h-6 w-6 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Loading document…</p>
               </div>
             )
           }
@@ -402,9 +608,51 @@ export default function DocumentPage() {
                 <TabsTrigger value="entities">Entities</TabsTrigger>
                 <TabsTrigger value="notes">Notes</TabsTrigger>
                 <TabsTrigger value="info">Info</TabsTrigger>
+                {showContentsTab && (
+                  <TabsTrigger value="contents">Contents</TabsTrigger>
+                )}
               </TabsList>
+              {showContentsTab && (
+                <TabsContent value="contents">
+                  {/* Full-bleed inside the padded sidebar so rows and their
+                      hover state span the panel edge to edge */}
+                  <div className="-mx-4 -mt-4">
+                    <TableOfContents
+                      blocks={blocks ?? []}
+                      currentPage={currentPage}
+                      totalPages={document.pageCount ?? 0}
+                      onNavigate={scrollToPage}
+                      searchQuery={searchQuery}
+                      onSearchChange={(q) => {
+                        setSearchQuery(q);
+                        // Clear entity selection if the user edits the search
+                        if (q !== selectedItem) setSelectedItem(null);
+                      }}
+                      isEntitySearch={!!selectedItem}
+                    />
+                  </div>
+                </TabsContent>
+              )}
               <TabsContent value="entities">
             <div className="flex flex-col gap-4">
+              <PipelineProgress document={document} />
+
+              {/* Upload review: confirm the extraction template before running */}
+              {(document.status === "parsed" || showReextract) && (
+                <ExtractionSetup
+                  document={document}
+                  onDone={() => setShowReextract(false)}
+                />
+              )}
+              {document.status === "completed" && !showReextract && (
+                <button
+                  onClick={() => setShowReextract(true)}
+                  className="text-xs text-muted-foreground hover:text-foreground text-left"
+                >
+                  ↻ Re-run extraction with template…
+                </button>
+              )}
+
               {/* New Entity */}
               {isParsed && (
                 <div className="flex flex-col gap-3">
@@ -483,15 +731,14 @@ export default function DocumentPage() {
                 </div>
               )}
 
-              <ProcessingStatus documentId={documentId} />
-
               {/* Entity groups */}
               {sortedEntityGroups.map((group) => {
                 const isGroupCollapsed = collapsedGroups.has(group.id);
                 const toggleGroup = () =>
                   setCollapsedGroups((prev) => {
                     const next = new Set(prev);
-                    next.has(group.id) ? next.delete(group.id) : next.add(group.id);
+                    if (next.has(group.id)) next.delete(group.id);
+                    else next.add(group.id);
                     return next;
                   });
 
@@ -550,7 +797,7 @@ export default function DocumentPage() {
                                 className={cn(
                                   "flex-1 text-left px-2 py-1.5 flex items-center gap-1.5 text-[13px] transition-colors",
                                   isActive
-                                    ? "bg-purple-50 font-semibold text-purple-900"
+                                    ? "bg-purple-50 font-semibold text-purple-900 dark:bg-purple-950/50 dark:text-purple-100"
                                     : "hover:bg-accent"
                                 )}
                               >
@@ -558,7 +805,7 @@ export default function DocumentPage() {
                                 <span
                                   className={cn(
                                     "text-xs tabular-nums shrink-0",
-                                    isActive ? "text-purple-600 font-semibold" : "text-muted-foreground"
+                                    isActive ? "text-purple-600 dark:text-purple-400 font-semibold" : "text-muted-foreground"
                                   )}
                                 >
                                   {mentions.length}
@@ -576,7 +823,7 @@ export default function DocumentPage() {
                                   isResearching || dossier?.status === "pending"
                                     ? "text-muted-foreground/40"
                                     : dossier?.status === "completed"
-                                      ? "text-purple-400 hover:text-purple-600"
+                                      ? "text-purple-400 hover:text-purple-600 dark:hover:text-purple-300"
                                       : "text-muted-foreground/40 hover:text-muted-foreground"
                                 )}
                                 title={dossier?.status === "completed" ? "Refresh dossier" : "Research this entity"}
@@ -608,7 +855,7 @@ export default function DocumentPage() {
                             {/* Research dossier — show when active or completed */}
                             {dossier?.status === "failed" && isActive && (
                               <div className="px-2 pb-2">
-                                <p className="text-xs text-red-500">
+                                <p className="text-xs text-red-500 dark:text-red-400">
                                   Research failed: {dossier.errorMessage}
                                 </p>
                               </div>
@@ -646,10 +893,47 @@ export default function DocumentPage() {
               <TabsContent value="info">
                 <div className="flex flex-col gap-4">
                   {document && (
+                    <div className="flex items-center justify-between rounded-md border px-2.5 py-1.5">
+                      <span className="text-xs text-muted-foreground">
+                        {document.archivedAt !== undefined
+                          ? `Archived ${new Date(document.archivedAt).toLocaleDateString()}`
+                          : "Manage document"}
+                      </span>
+                      <DocumentActions
+                        documentId={document._id}
+                        documentName={document.name}
+                        archived={document.archivedAt !== undefined}
+                        onDeleted={() =>
+                          navigate(
+                            document.projectId
+                              ? `/p/${document.projectId}`
+                              : "/"
+                          )
+                        }
+                      />
+                    </div>
+                  )}
+                  {document && <DocumentMetaEditor document={document} />}
+                  {detections && detections.length > 0 && (
+                    <VisualEvidenceList
+                      detections={detections}
+                      onJumpToPage={(page) => {
+                        const el = window.document.querySelector(
+                          `[data-page-number="${page}"]`
+                        );
+                        el?.scrollIntoView({ block: "start" });
+                      }}
+                    />
+                  )}
+                  {document && (
                     <div className="flex flex-col gap-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Name</span>
                         <span className="truncate ml-4 text-right">{document.name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Media</span>
+                        <span className="capitalize">{document.mediaType ?? "pdf"}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Pages</span>
@@ -677,6 +961,257 @@ export default function DocumentPage() {
           }
         />
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Visual evidence: signatures, redactions, stamps, handwriting, photos, logos
+// detected on document pages (approximate, model-estimated regions)
+// ---------------------------------------------------------------------------
+
+const DETECTION_ICONS: Record<string, string> = {
+  signature: "✍️",
+  redaction: "⬛",
+  stamp_or_seal: "🔏",
+  handwriting: "📝",
+  photograph: "📷",
+  logo: "🏷️",
+};
+
+function VisualEvidenceList({
+  detections,
+  onJumpToPage,
+}: {
+  detections: Doc<"detections">[];
+  onJumpToPage: (pageNumber: number) => void; // 1-based
+}) {
+  const sorted = [...detections].sort(
+    (a, b) => a.pageNumber - b.pageNumber || a.label.localeCompare(b.label)
+  );
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        Visual Evidence
+        <span className="ml-1.5 normal-case font-normal">
+          ({detections.length})
+        </span>
+      </h3>
+      {sorted.map((d) => (
+        <button
+          key={d._id}
+          onClick={() => onJumpToPage(d.pageNumber + 1)}
+          className="flex items-start gap-2 text-left border rounded-md px-2.5 py-1.5 hover:bg-accent/50 transition-colors"
+          title="Jump to page"
+        >
+          <span className="text-sm leading-5">
+            {DETECTION_ICONS[d.label] ?? "🔎"}
+          </span>
+          <span className="flex-1 min-w-0">
+            <span className="flex items-center gap-2 text-sm">
+              <span className="font-medium capitalize">
+                {d.label.replace(/_/g, " ")}
+              </span>
+              <span className="text-xs text-muted-foreground shrink-0 ml-auto">
+                p. {d.pageNumber + 1}
+              </span>
+            </span>
+            <span className="block text-xs text-muted-foreground mt-0.5">
+              {d.description}
+            </span>
+          </span>
+        </button>
+      ))}
+      <p className="text-[10px] text-muted-foreground mt-0.5">
+        Locations are approximate, detected by AI.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Visual objects emitted by the same Interfaze completion as OCR and metadata.
+ * Their stored coordinates are normalized against the OCR geometry. Correct
+ * the vertical ratio when that geometry represents a stacked visual asset,
+ * then place the object over the actual rendered PDF page.
+ */
+function VisualObjectOverlay({
+  pageNumber,
+  detections,
+  pages,
+  pageImages,
+}: {
+  pageNumber: number; // 1-based
+  detections: Doc<"detections">[];
+  pages: Array<{ pageNumber: number; width?: number; height?: number }>;
+  pageImages: PageImage[];
+}) {
+  const pageIndex = pageNumber - 1;
+  const page = pages.find((candidate) => candidate.pageNumber === pageIndex);
+  const image = pageImages.find(
+    (candidate) => candidate.pageNumber === pageIndex
+  );
+  const expectedOcrHeight =
+    page?.width && image?.width && image.height
+      ? page.width * (image.height / image.width)
+      : undefined;
+  const yCorrection =
+    page?.height && expectedOcrHeight ? page.height / expectedOcrHeight : 1;
+
+  return detections
+    .filter((detection) => detection.pageNumber === pageIndex && detection.bbox)
+    .map((detection) => {
+      const bbox = detection.bbox!;
+      const top = Math.min(1, Math.max(0, bbox.y * yCorrection));
+      const height = Math.min(
+        1 - top,
+        Math.max(0, bbox.height * yCorrection)
+      );
+      return (
+        <div
+          key={detection._id}
+          className="absolute rounded-sm border-2 border-orange-500 bg-orange-400/15"
+          style={{
+            left: `${Math.max(0, bbox.x) * 100}%`,
+            top: `${top * 100}%`,
+            width: `${Math.min(1 - bbox.x, bbox.width) * 100}%`,
+            height: `${height * 100}%`,
+          }}
+          title={detection.description}
+        >
+          <span className="absolute -top-5 left-0 rounded bg-orange-500 px-1 py-0.5 text-[9px] font-semibold leading-none text-white whitespace-nowrap">
+            {detection.label.replace(/_/g, " ")}
+          </span>
+        </div>
+      );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Document meta editor: kind + tags (human-owned) and extracted metadata
+// ---------------------------------------------------------------------------
+
+interface ExtractedMetadata {
+  title?: string;
+  summary?: string;
+  date?: string;
+  author?: string;
+  language?: string;
+  additional?: { key: string; value: string }[];
+}
+
+function DocumentMetaEditor({ document }: { document: Doc<"documents"> }) {
+  const updateDocumentMeta = useMutation(api.metadata.updateDocumentMeta);
+  const kinds = useQuery(api.kinds.list);
+  const [kindDraft, setKindDraft] = useState<string | null>(null);
+  const [tagsDraft, setTagsDraft] = useState<string | null>(null);
+
+  const meta = useMemo<ExtractedMetadata | null>(() => {
+    if (!document.metadata) return null;
+    try {
+      return JSON.parse(document.metadata) as ExtractedMetadata;
+    } catch {
+      return null;
+    }
+  }, [document.metadata]);
+
+  const kind = kindDraft ?? document.primaryKind ?? "";
+  const tags = tagsDraft ?? (document.tags ?? []).join(", ");
+  const dirty =
+    (kindDraft !== null && kindDraft !== (document.primaryKind ?? "")) ||
+    (tagsDraft !== null && tagsDraft !== (document.tags ?? []).join(", "));
+
+  async function save() {
+    await updateDocumentMeta({
+      documentId: document._id,
+      ...(kindDraft !== null ? { primaryKind: kindDraft } : {}),
+      ...(tagsDraft !== null
+        ? {
+            tags: tagsDraft
+              .split(",")
+              .map((t) => t.trim().toLowerCase())
+              .filter(Boolean),
+          }
+        : {}),
+    });
+    setKindDraft(null);
+    setTagsDraft(null);
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-medium text-muted-foreground">
+          Kind{" "}
+          {document.kindSource === "ai" && (
+            <span className="text-[10px] uppercase tracking-wide text-purple-500">
+              ai guess
+            </span>
+          )}
+        </label>
+        <Input
+          list="info-document-kinds"
+          value={kind}
+          placeholder="e.g. legal brief"
+          onChange={(e) => setKindDraft(e.target.value.toLowerCase())}
+          className="text-xs h-8"
+        />
+        <datalist id="info-document-kinds">
+          {(kinds ?? []).map((k) => (
+            <option key={k._id} value={k.name} />
+          ))}
+        </datalist>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-medium text-muted-foreground">
+          Tags (comma-separated)
+        </label>
+        <Input
+          value={tags}
+          placeholder="e.g. litigation, 2024"
+          onChange={(e) => setTagsDraft(e.target.value)}
+          className="text-xs h-8"
+        />
+      </div>
+
+      {dirty && (
+        <Button size="sm" variant="outline" onClick={save}>
+          Save
+        </Button>
+      )}
+
+      {meta && (
+        <div className="flex flex-col gap-1.5 text-sm border-t pt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Extracted metadata
+          </h4>
+          {meta.summary && (
+            <p className="text-xs text-muted-foreground">{meta.summary}</p>
+          )}
+          {[
+            ["Title", meta.title],
+            ["Date", meta.date],
+            ["Author", meta.author],
+            ["Language", meta.language],
+            ...(meta.additional ?? []).map(
+              (kv) => [kv.key, kv.value] as [string, string]
+            ),
+          ]
+            .filter(
+              ([, value]) =>
+                value && value !== "Unknown" && String(value).trim()
+            )
+            .map(([label, value]) => (
+              <div key={label} className="flex justify-between gap-3 text-xs">
+                <span className="text-muted-foreground capitalize shrink-0">
+                  {label}
+                </span>
+                <span className="text-right truncate">{value}</span>
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -816,7 +1351,7 @@ function ResearchDossier({
                     href={url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-950/50 dark:text-purple-300 dark:hover:bg-purple-900/50 transition-colors"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {label}
@@ -985,8 +1520,6 @@ function CrossDocIndicator({
     expanded ? { entityId } : "skip"
   );
 
-  const otherCount = documentCount - 1;
-
   return (
     <div className="px-2">
       <button
@@ -1088,4 +1621,3 @@ function CitationChip({
     </span>
   );
 }
-

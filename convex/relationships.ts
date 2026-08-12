@@ -1,196 +1,7 @@
-import {
-  action,
-  internalAction,
-  internalMutation,
-  query,
-} from "./_generated/server";
+import { internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api";
-import { chatCompletion } from "./interfaze";
-import type { Doc, Id } from "./_generated/dataModel";
-
-// ---------------------------------------------------------------------------
-// Extraction schema for the Interfaze structured-output call
-// ---------------------------------------------------------------------------
-
-const RELATIONSHIP_SCHEMA = {
-  type: "object",
-  properties: {
-    relationships: {
-      type: "array",
-      description:
-        "Relationships between named entities that are explicitly supported by the document text.",
-      items: {
-        type: "object",
-        properties: {
-          source: {
-            type: "object",
-            properties: {
-              name: { type: "string", description: "Entity name as written" },
-              type: {
-                type: "string",
-                enum: ["person", "organization", "place", "other"],
-              },
-            },
-            required: ["name", "type"],
-          },
-          target: {
-            type: "object",
-            properties: {
-              name: { type: "string" },
-              type: {
-                type: "string",
-                enum: ["person", "organization", "place", "other"],
-              },
-            },
-            required: ["name", "type"],
-          },
-          relation_type: {
-            type: "string",
-            description:
-              "Short lowercase verb phrase with underscores, e.g. met_with, employed_by, paid, represents, signed_contract_with, family_of, located_in, works_at",
-          },
-          quote: {
-            type: "string",
-            description:
-              "Verbatim sentence from the document that supports this relationship",
-          },
-          confidence: {
-            type: "number",
-            description:
-              "0-1: how directly the text supports this relationship (1 = stated outright, lower = inferred)",
-          },
-        },
-        required: ["source", "target", "relation_type", "quote", "confidence"],
-      },
-    },
-  },
-  required: ["relationships"],
-};
-
-// Map schema entity types to the app's entity `type` values
-const TYPE_MAP: Record<string, string> = {
-  person: "people",
-  organization: "organization",
-  place: "places",
-  other: "other",
-};
-
-// ---------------------------------------------------------------------------
-// Action: extract relationships from a parsed document
-// ---------------------------------------------------------------------------
-
-export const extract = internalAction({
-  args: { documentId: v.id("documents") },
-  handler: async (ctx, args) => {
-    const apiKey = process.env.INTERFAZE_API_KEY;
-    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
-
-    const pages: Doc<"pages">[] = await ctx.runQuery(api.pages.byDocument, {
-      documentId: args.documentId,
-    });
-    if (pages.length === 0) return;
-
-    const entities = await ctx.runQuery(api.entities.byDocument, {
-      documentId: args.documentId,
-    });
-
-    await ctx.runMutation(internal.processing.createJob, {
-      documentId: args.documentId,
-      stage: "relationships",
-    });
-    await ctx.runMutation(internal.processing.updateJobStatus, {
-      documentId: args.documentId,
-      stage: "relationships",
-      status: "running",
-    });
-
-    try {
-      const documentText = pages
-        .map((p) => `[Page ${p.pageNumber + 1}]\n${p.markdownText}`)
-        .join("\n\n");
-
-      const knownEntities =
-        entities.length > 0
-          ? `Known entities already identified in this document:\n${entities
-              .map((e) => `- ${e.name} (${e.type})`)
-              .join("\n")}\n\n`
-          : "";
-
-      const { content } = await chatCompletion(apiKey, {
-        systemPrompt:
-          "You are an analyst mapping relationships between entities in documents. Only report relationships the text explicitly supports — never invent connections. Use the known entity names verbatim when they appear; add other entities (organizations, places) only when the document names them.",
-        content: [
-          {
-            type: "text",
-            text: `${knownEntities}Document text:\n\n${documentText}\n\nIdentify all relationships between named entities (people, organizations, places) in this document.`,
-          },
-        ],
-        responseSchema: {
-          name: "relationship_extraction",
-          schema: RELATIONSHIP_SCHEMA,
-        },
-      });
-
-      const parsed = JSON.parse(content) as {
-        relationships?: Array<{
-          source?: { name?: string; type?: string };
-          target?: { name?: string; type?: string };
-          relation_type?: string;
-          quote?: string;
-          confidence?: number;
-        }>;
-      };
-
-      const relationships = (parsed.relationships ?? [])
-        .filter(
-          (r) =>
-            r.source?.name?.trim() &&
-            r.target?.name?.trim() &&
-            r.relation_type?.trim() &&
-            r.source.name.toLowerCase() !== r.target.name.toLowerCase()
-        )
-        .map((r) => ({
-          sourceName: r.source!.name!.trim(),
-          sourceType: TYPE_MAP[r.source!.type ?? "other"] ?? "other",
-          targetName: r.target!.name!.trim(),
-          targetType: TYPE_MAP[r.target!.type ?? "other"] ?? "other",
-          relationType: r.relation_type!.trim(),
-          quote: (r.quote ?? "").slice(0, 500),
-          confidence: Math.min(1, Math.max(0, r.confidence ?? 0.5)),
-        }));
-
-      await ctx.runMutation(internal.relationships.ingestRelationships, {
-        documentId: args.documentId,
-        relationships,
-      });
-
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "relationships",
-        status: "completed",
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "relationships",
-        status: "failed",
-      });
-      console.error(`Relationship extraction failed: ${msg}`);
-    }
-  },
-});
-
-/** Public entry point: (re)build relationships for one document. */
-export const runForDocument = action({
-  args: { documentId: v.id("documents") },
-  handler: async (ctx, args) => {
-    await ctx.runAction(internal.relationships.extract, {
-      documentId: args.documentId,
-    });
-  },
-});
+import { resolveEntity, recountEntity } from "./entityResolution";
+import type { Id } from "./_generated/dataModel";
 
 // ---------------------------------------------------------------------------
 // Mutation: resolve names to entities and store relationship rows
@@ -207,6 +18,8 @@ export const ingestRelationships = internalMutation({
         targetType: v.string(),
         relationType: v.string(),
         quote: v.string(),
+        pageNumber: v.optional(v.number()),
+        eventDate: v.optional(v.string()),
         confidence: v.number(),
       })
     ),
@@ -232,62 +45,62 @@ export const ingestRelationships = internalMutation({
     const pageIdByNumber = new Map<number, Id<"pages">>();
     for (const page of pages) pageIdByNumber.set(page.pageNumber, page._id);
 
-    // Resolve an entity name to an existing entity, or create one (with
-    // mentions from matching blocks) if it's new to the graph.
+    // Resolve names through the shared resolver (exact/alias auto-link,
+    // fuzzy lookalikes queue merge suggestions), then make sure the entity has
+    // mentions in THIS document.
+    //
+    // Mention-backfill used to be gated on `created`, so an entity that already
+    // existed (typically created by template extraction on another document)
+    // got no mentions here: the relationship cited this document while the
+    // entity was missing from its sidebar — entities.byDocument is
+    // mention-driven — and absent from its documentCount.
     const resolved = new Map<string, Id<"entities">>();
-    const resolveEntity = async (
+    const resolve = async (
       name: string,
-      type: string
+      legacyType: string
     ): Promise<Id<"entities">> => {
       const key = name.toLowerCase();
       const cached = resolved.get(key);
       if (cached) return cached;
 
-      let entity = await ctx.db
-        .query("entities")
-        .withIndex("by_name", (q) => q.eq("name", name))
-        .first();
-
-      if (!entity) {
-        const candidates = await ctx.db
-          .query("entities")
-          .withSearchIndex("search_name", (q) => q.search("name", name))
-          .take(10);
-        entity =
-          candidates.find((e) => e.name.toLowerCase() === key) ?? null;
-      }
-
-      if (entity) {
-        resolved.set(key, entity._id);
-        return entity._id;
-      }
-
-      // New entity discovered via relationship extraction
-      const matchingBlocks = blocks.filter((b) =>
-        b.text.toLowerCase().includes(key)
-      );
-      const entityId = await ctx.db.insert("entities", {
+      const stableType =
+        { people: "person", organization: "organization", places: "place" }[
+          legacyType
+        ] ?? "other";
+      const { entityId } = await resolveEntity(ctx, {
         name,
-        type,
-        mentionCount: matchingBlocks.length,
-        documentCount: 1,
-        avgConfidence: 1.0,
-        aliases: [],
-        isCustom: type !== "people",
+        stableType,
+        documentId: args.documentId,
       });
-      for (const block of matchingBlocks) {
-        const pageId = pageIdByNumber.get(block.pageNumber);
-        if (!pageId) continue;
-        await ctx.db.insert("mentions", {
-          entityId,
-          documentId: args.documentId,
-          pageId,
-          pageNumber: block.pageNumber,
-          text: block.text,
-          confidence: 1.0,
-          blockId: block.blockId,
-          bbox: block.bbox,
-        });
+
+      // Idempotent: template extraction may already have recorded this
+      // entity's mentions for this document, and this mutation re-runs on
+      // every relationship rebuild.
+      const existingHere = await ctx.db
+        .query("mentions")
+        .withIndex("by_entity", (q) =>
+          q.eq("entityId", entityId).eq("documentId", args.documentId)
+        )
+        .first();
+      if (!existingHere) {
+        const matchingBlocks = blocks.filter((b) =>
+          b.text.toLowerCase().includes(key)
+        );
+        for (const block of matchingBlocks) {
+          const pageId = pageIdByNumber.get(block.pageNumber);
+          if (!pageId) continue;
+          await ctx.db.insert("mentions", {
+            entityId,
+            documentId: args.documentId,
+            pageId,
+            pageNumber: block.pageNumber,
+            text: block.text,
+            confidence: 1.0,
+            blockId: block.blockId,
+            bbox: block.bbox,
+          });
+        }
+        if (matchingBlocks.length > 0) await recountEntity(ctx, entityId);
       }
       resolved.set(key, entityId);
       return entityId;
@@ -296,8 +109,8 @@ export const ingestRelationships = internalMutation({
     // Dedupe identical (source, target, type) triples within this batch
     const seen = new Set<string>();
     for (const rel of args.relationships) {
-      const sourceId = await resolveEntity(rel.sourceName, rel.sourceType);
-      const targetId = await resolveEntity(rel.targetName, rel.targetType);
+      const sourceId = await resolve(rel.sourceName, rel.sourceType);
+      const targetId = await resolve(rel.targetName, rel.targetType);
       if (sourceId === targetId) continue;
 
       const dedupKey = `${sourceId}:${targetId}:${rel.relationType}`;
@@ -311,11 +124,12 @@ export const ingestRelationships = internalMutation({
         confidence: rel.confidence,
         documentId: args.documentId,
         quote: rel.quote || undefined,
+        pageNumber: rel.pageNumber,
+        eventDate: rel.eventDate,
       });
     }
   },
 });
-
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -349,64 +163,12 @@ export const forEntity = query({
         relationType: rel.relationType,
         confidence: rel.confidence,
         quote: rel.quote,
+        pageNumber: rel.pageNumber,
+        eventDate: rel.eventDate,
         otherEntity: { _id: other._id, name: other.name, type: other.type },
         document: doc ? { _id: doc._id, name: doc.name } : null,
       });
     }
     return results;
-  },
-});
-
-/** Graph (nodes + edges) across all documents in a story. */
-export const forStory = query({
-  args: { storyId: v.id("stories") },
-  handler: async (ctx, args) => {
-    const links = await ctx.db
-      .query("storyDocuments")
-      .withIndex("by_story", (q) => q.eq("storyId", args.storyId))
-      .collect();
-
-    const docNames = new Map<Id<"documents">, string>();
-    const edges = [];
-    const nodeIds = new Set<Id<"entities">>();
-
-    for (const link of links) {
-      const doc = await ctx.db.get(link.documentId);
-      if (!doc) continue;
-      docNames.set(doc._id, doc.name);
-
-      const rels = await ctx.db
-        .query("relationships")
-        .withIndex("by_document", (q) => q.eq("documentId", link.documentId))
-        .take(500);
-
-      for (const rel of rels) {
-        nodeIds.add(rel.sourceEntityId);
-        nodeIds.add(rel.targetEntityId);
-        edges.push({
-          _id: rel._id,
-          source: rel.sourceEntityId,
-          target: rel.targetEntityId,
-          relationType: rel.relationType,
-          confidence: rel.confidence,
-          quote: rel.quote,
-          documentName: docNames.get(rel.documentId!) ?? "",
-        });
-      }
-    }
-
-    const nodes = [];
-    for (const id of nodeIds) {
-      const entity = await ctx.db.get(id);
-      if (!entity) continue;
-      nodes.push({
-        _id: entity._id,
-        name: entity.name,
-        type: entity.type,
-        mentionCount: entity.mentionCount,
-      });
-    }
-
-    return { nodes, edges };
   },
 });

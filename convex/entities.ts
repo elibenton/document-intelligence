@@ -1,4 +1,4 @@
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
 // ---------------------------------------------------------------------------
@@ -32,9 +32,26 @@ export const listByType = query({
 // ---------------------------------------------------------------------------
 
 export const listAll = query({
-  args: {},
-  handler: async (ctx) => {
-    return await ctx.db.query("entities").order("desc").take(200);
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("entities")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .order("desc")
+      .take(200);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Pin an entity in its type group
+// ---------------------------------------------------------------------------
+
+export const setStarred = mutation({
+  args: { id: v.id("entities"), starred: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { starred: args.starred });
+    return null;
   },
 });
 
@@ -82,15 +99,25 @@ export const byDocument = query({
 // Get entity by name slug (for /entity/:slug URL)
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve `/entity/:slug`. Entities are per-project — the same real-world
+ * person in two projects is two rows — so `projectId` scopes the lookup.
+ * It stays optional only so links minted before scoping existed still resolve
+ * (to an arbitrary project's match); every in-app link passes it.
+ */
 export const getBySlug = query({
-  args: { slug: v.string() },
+  args: { slug: v.string(), projectId: v.optional(v.id("projects")) },
   handler: async (ctx, args) => {
     // Reconstruct name from slug for search
     const searchTerm = args.slug.replace(/-/g, " ");
     const results = await ctx.db
       .query("entities")
-      .withSearchIndex("search_name", (q) => q.search("name", searchTerm))
-      .take(20);
+      .withSearchIndex("search_name", (q) =>
+        args.projectId
+          ? q.search("name", searchTerm).eq("projectId", args.projectId)
+          : q.search("name", searchTerm)
+      )
+      .take(50);
 
     // Match by slug: normalize entity name the same way
     const toSlug = (name: string) =>
@@ -135,5 +162,74 @@ export const documentsForEntity = query({
         name: d.name,
         mentionCount: docMentions.get(d._id) ?? 0,
       }));
+  },
+});
+
+// ---------------------------------------------------------------------------
+// All of an entity's mentions with snippets, grouped by document
+// (entity page "Appears In" detail)
+// ---------------------------------------------------------------------------
+
+export const mentionsForEntity = query({
+  args: { entityId: v.id("entities") },
+  handler: async (ctx, args) => {
+    const mentions = await ctx.db
+      .query("mentions")
+      .withIndex("by_entity", (q) => q.eq("entityId", args.entityId))
+      .take(500);
+
+    // Group mention rows by document, preserving page order
+    const byDoc = new Map<
+      (typeof mentions)[0]["documentId"],
+      (typeof mentions)[0][]
+    >();
+    for (const m of mentions) {
+      const rows = byDoc.get(m.documentId) ?? [];
+      rows.push(m);
+      byDoc.set(m.documentId, rows);
+    }
+
+    // Page dimensions per pageId (needed to scale bboxes in hover previews)
+    const pageDims = new Map<
+      string,
+      { width?: number; height?: number }
+    >();
+
+    const results = [];
+    for (const [documentId, rows] of byDoc) {
+      const doc = await ctx.db.get(documentId);
+      if (!doc) continue;
+      const fileUrl = await ctx.storage.getUrl(doc.storageId);
+
+      const mentionRows = [];
+      for (const m of [...rows].sort((a, b) => a.pageNumber - b.pageNumber)) {
+        if (!pageDims.has(m.pageId)) {
+          const page = await ctx.db.get(m.pageId);
+          pageDims.set(m.pageId, {
+            width: page?.width,
+            height: page?.height,
+          });
+        }
+        const dims = pageDims.get(m.pageId)!;
+        mentionRows.push({
+          pageNumber: m.pageNumber,
+          snippet: m.text.slice(0, 240),
+          bbox: m.bbox ?? null,
+          pageWidth: dims.width ?? null,
+          pageHeight: dims.height ?? null,
+        });
+      }
+
+      results.push({
+        document: {
+          _id: doc._id,
+          name: doc.name,
+          mediaType: doc.mediaType ?? "pdf",
+        },
+        fileUrl,
+        mentions: mentionRows,
+      });
+    }
+    return results;
   },
 });

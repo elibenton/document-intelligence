@@ -103,9 +103,12 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]) {
 export default function RelationshipGraph({
   nodes,
   edges,
+  projectId,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** Scopes the /entity/:slug links — entities are per-project. */
+  projectId?: string;
 }) {
   const navigate = useNavigate();
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
@@ -166,7 +169,7 @@ export default function RelationshipGraph({
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                stroke="#cbd5e1"
+                stroke="var(--graph-edge)"
                 strokeWidth={hoveredEdge === edge._id ? 2.5 : 1.5}
               />
               {/* invisible fat line for easier hovering */}
@@ -183,7 +186,7 @@ export default function RelationshipGraph({
                 y={my - 4}
                 textAnchor="middle"
                 fontSize={9}
-                fill="#64748b"
+                fill="var(--graph-edge-label)"
                 className="select-none pointer-events-none"
               >
                 {edge.relationType.replace(/_/g, " ")}
@@ -201,7 +204,11 @@ export default function RelationshipGraph({
               key={node._id}
               opacity={dimmed(node._id) ? 0.25 : 1}
               className="cursor-pointer"
-              onClick={() => navigate(`/entity/${toSlug(node.name)}`)}
+              onClick={() =>
+                navigate(
+                  `/entity/${toSlug(node.name)}${projectId ? `?project=${projectId}` : ""}`
+                )
+              }
               onMouseEnter={() => setHoveredNode(node._id)}
               onMouseLeave={() => setHoveredNode(null)}
             >
@@ -211,7 +218,7 @@ export default function RelationshipGraph({
                 r={r}
                 fill={TYPE_COLORS[node.type] ?? DEFAULT_COLOR}
                 fillOpacity={0.85}
-                stroke="white"
+                stroke="var(--graph-node-ring)"
                 strokeWidth={1.5}
               />
               <text

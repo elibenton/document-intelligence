@@ -2,10 +2,18 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { cn } from "@/lib/utils";
-import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import type { Id } from "../../../convex/_generated/dataModel";
+
+/** Lightweight block shape from `blocks.byDocument` (no word boxes / html). */
+interface TocBlock {
+  _id: Id<"blocks">;
+  text: string;
+  pageNumber: number;
+  blockType: string;
+}
 
 interface TableOfContentsProps {
-  blocks: Doc<"blocks">[];
+  blocks: TocBlock[];
   currentPage: number;
   totalPages: number;
   onNavigate: (page: number) => void;
@@ -196,7 +204,7 @@ export function TableOfContents({
 
   // Search bar (always rendered)
   const searchBar = (
-    <div className="px-3 pb-2 pt-3 sticky top-0 bg-muted/30 z-10">
+    <div className="px-3 pb-2 pt-3 sticky top-0 bg-background z-10">
       <div className="relative">
         <svg
           width="14"
@@ -219,7 +227,7 @@ export function TableOfContents({
           className={cn(
             "w-full text-xs h-7 pl-7 pr-7 rounded-md border bg-background focus:outline-none focus:ring-1",
             isEntitySearch && searchQuery
-              ? "ring-1 ring-purple-400 border-purple-300 focus:ring-purple-500"
+              ? "ring-1 ring-purple-400 border-purple-300 focus:ring-purple-500 dark:border-purple-700"
               : "focus:ring-primary"
           )}
         />
@@ -289,8 +297,8 @@ export function TableOfContents({
                     ? cn(
                         "font-medium text-foreground",
                         highlightColor === "purple"
-                          ? "bg-purple-50 hover:bg-purple-100 border-l-2 border-purple-400"
-                          : "bg-amber-50 hover:bg-amber-100 border-l-2 border-amber-400"
+                          ? "bg-purple-50 hover:bg-purple-100 border-l-2 border-purple-400 dark:bg-purple-950/40 dark:hover:bg-purple-900/40"
+                          : "bg-amber-50 hover:bg-amber-100 border-l-2 border-amber-400 dark:bg-amber-950/40 dark:hover:bg-amber-900/40"
                       )
                     : "font-normal text-muted-foreground/60 hover:text-muted-foreground hover:bg-accent"
                 )}
@@ -310,8 +318,8 @@ export function TableOfContents({
                     className={cn(
                       "text-xs tabular-nums font-semibold shrink-0",
                       highlightColor === "purple"
-                        ? "text-purple-600"
-                        : "text-amber-600"
+                        ? "text-purple-600 dark:text-purple-400"
+                        : "text-amber-600 dark:text-amber-400"
                     )}
                   >
                     {matchCount}
@@ -597,8 +605,8 @@ function TocAction({
         "w-5 h-5 flex items-center justify-center rounded transition-colors",
         "disabled:opacity-30 disabled:pointer-events-none",
         variant === "destructive"
-          ? "text-red-500 hover:bg-red-100 hover:text-red-700"
-          : "text-blue-500 hover:bg-blue-100 hover:text-blue-700"
+          ? "text-red-500 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-950 dark:hover:text-red-300"
+          : "text-blue-500 hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-950 dark:hover:text-blue-300"
       )}
     >
       <svg

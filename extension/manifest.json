@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Document Intelligence Clipper",
+  "version": "0.1.0",
+  "description": "Archive and parse the current page into your Document Intelligence project.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://*.convex.site/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Clip this page"
+  },
+  "options_page": "options.html"
+}
