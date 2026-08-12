@@ -15,6 +15,7 @@ import type * as entities from "../entities.js";
 import type * as extractions from "../extractions.js";
 import type * as http from "../http.js";
 import type * as ingest from "../ingest.js";
+import type * as interfaze from "../interfaze.js";
 import type * as pages from "../pages.js";
 import type * as processing from "../processing.js";
 import type * as processingJobs from "../processingJobs.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   extractions: typeof extractions;
   http: typeof http;
   ingest: typeof ingest;
+  interfaze: typeof interfaze;
   pages: typeof pages;
   processing: typeof processing;
   processingJobs: typeof processingJobs;

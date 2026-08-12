@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
 // ---------------------------------------------------------------------------
-// Structured JSON schema for Perplexity Sonar response_format
+// Structured JSON schema for the dossier response_format
 // ---------------------------------------------------------------------------
 
 const DOSSIER_SCHEMA = {
@@ -121,8 +121,44 @@ const DOSSIER_SCHEMA = {
 };
 
 // ---------------------------------------------------------------------------
-// Action: run Perplexity Sonar research on an entity
+// Action: run Interfaze web research on an entity
 // ---------------------------------------------------------------------------
+
+/** Pull web search results out of the Interfaze precontext array. */
+function extractSearchResults(
+  precontext: Array<{ name?: string; result?: unknown }>
+): { title: string; url: string; snippet: string }[] {
+  const results: { title: string; url: string; snippet: string }[] = [];
+  for (const entry of precontext) {
+    if (!entry.name || !/search|scrap|web/i.test(entry.name)) continue;
+    const raw = entry.result;
+    const items: unknown[] = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === "object"
+        ? Object.values(raw as Record<string, unknown>).find(Array.isArray) ?? []
+        : [];
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const r = item as Record<string, unknown>;
+      const url = typeof r.url === "string" ? r.url : typeof r.link === "string" ? r.link : "";
+      if (!url) continue;
+      const snippet =
+        typeof r.snippet === "string"
+          ? r.snippet
+          : typeof r.description === "string"
+            ? r.description
+            : "";
+      results.push({
+        title: (typeof r.title === "string" ? r.title : "").slice(0, 300),
+        url,
+        // Snippets can be very large; cap them so the stored research row
+        // stays well under Convex's 1MB document limit.
+        snippet: snippet.slice(0, 500),
+      });
+    }
+  }
+  return results.slice(0, 30);
+}
 
 export const runResearch = action({
   args: {
@@ -132,10 +168,10 @@ export const runResearch = action({
     documentContext: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const apiKey = process.env.PERPLEXITY_API_KEY;
-    if (!apiKey) throw new Error("PERPLEXITY_API_KEY not configured");
+    const apiKey = process.env.INTERFAZE_API_KEY;
+    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
 
-    const model = "sonar-pro";
+    const model = "interfaze-beta";
 
     const contextClause = args.documentContext
       ? `\n\nThis entity appears in a document with the following context:\n"${args.documentContext}"`
@@ -160,7 +196,7 @@ export const runResearch = action({
 
     try {
       const response = await fetch(
-        "https://api.perplexity.ai/chat/completions",
+        "https://api.interfaze.ai/v1/chat/completions",
         {
           method: "POST",
           headers: {
@@ -177,6 +213,7 @@ export const runResearch = action({
             response_format: {
               type: "json_schema",
               json_schema: {
+                name: "dossier",
                 schema: DOSSIER_SCHEMA,
               },
             },
@@ -187,24 +224,19 @@ export const runResearch = action({
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(
-          `Perplexity API error (${response.status}): ${errorText}`
+          `Interfaze API error (${response.status}): ${errorText}`
         );
       }
 
       const data = await response.json();
 
-      // Content is now structured JSON, store it as-is
+      // Content is structured JSON, store it as-is
       const content = data.choices?.[0]?.message?.content ?? "";
-      const citations: string[] = data.citations ?? [];
-      const rawSearchResults = data.search_results ?? [];
+      const precontext: Array<{ name?: string; result?: unknown }> =
+        Array.isArray(data.precontext) ? data.precontext : [];
 
-      const searchResults = rawSearchResults.map(
-        (r: { title?: string; url?: string; snippet?: string }) => ({
-          title: r.title ?? "",
-          url: r.url ?? "",
-          snippet: r.snippet ?? "",
-        })
-      );
+      const searchResults = extractSearchResults(precontext);
+      const citations: string[] = searchResults.map((r) => r.url);
 
       await ctx.runMutation(internal.researchQueries.saveResult, {
         researchId,

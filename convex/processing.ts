@@ -1,7 +1,7 @@
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { parse, extract } from "./datalab";
+import { parse, extract } from "./interfaze";
 
 // ---------------------------------------------------------------------------
 // Step 1: Parse — convert PDF to markdown + JSON blocks
@@ -16,8 +16,8 @@ export const runParse = internalAction({
     );
     if (!document) throw new Error("Document not found");
 
-    const apiKey = process.env.DATALAB_API_KEY;
-    if (!apiKey) throw new Error("DATALAB_API_KEY not configured");
+    const apiKey = process.env.INTERFAZE_API_KEY;
+    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
 
     // Get the PDF file from Convex storage
     const pdfBlob = await ctx.storage.get(document.storageId);
@@ -36,9 +36,7 @@ export const runParse = internalAction({
     });
 
     try {
-      const result = await parse(pdfBuffer, document.name, apiKey, {
-        saveCheckpoint: true,
-      });
+      const result = await parse(pdfBuffer, document.name, apiKey);
 
       // Ingest the parsed results
       await ctx.runMutation(internal.ingest.ingestParseResults, {
@@ -48,13 +46,11 @@ export const runParse = internalAction({
           blockId: block.id ?? "",
           blockType: block.block_type ?? "Text",
           text: block.text ?? "",
-          html: block.html,
           pageNumber: block.page ?? 0,
           bbox: block.bbox,
         })),
         pageDimensions: result.pageDimensions,
         pageCount: result.page_count,
-        checkpointId: result.checkpoint_id,
       });
 
       // Mark parse job complete
@@ -96,8 +92,8 @@ export const runExtract = internalAction({
     );
     if (!document) throw new Error("Document not found");
 
-    const apiKey = process.env.DATALAB_API_KEY;
-    if (!apiKey) throw new Error("DATALAB_API_KEY not configured");
+    const apiKey = process.env.INTERFAZE_API_KEY;
+    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
 
     const pdfBlob = await ctx.storage.get(document.storageId);
     if (!pdfBlob) throw new Error("PDF file not found in storage");
@@ -120,7 +116,6 @@ export const runExtract = internalAction({
     try {
       const schema = JSON.parse(args.pageSchema);
       const result = await extract(pdfBuffer, document.name, apiKey, schema, {
-        checkpointId: document.datalabCheckpointId,
         pageRange: args.pageRange,
       });
 
