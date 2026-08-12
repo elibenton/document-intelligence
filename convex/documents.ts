@@ -62,6 +62,13 @@ export const remove = mutation({
       .collect();
     for (const job of jobs) await ctx.db.delete(job._id);
 
+    // Delete relationships asserted by this document
+    const docRels = await ctx.db
+      .query("relationships")
+      .withIndex("by_document", (q) => q.eq("documentId", args.id))
+      .collect();
+    for (const rel of docRels) await ctx.db.delete(rel._id);
+
     const mentions = await ctx.db
       .query("mentions")
       .withIndex("by_document", (q) => q.eq("documentId", args.id))

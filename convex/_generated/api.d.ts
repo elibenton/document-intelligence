@@ -9,7 +9,6 @@
  */
 
 import type * as blocks from "../blocks.js";
-import type * as datalab from "../datalab.js";
 import type * as documents from "../documents.js";
 import type * as entities from "../entities.js";
 import type * as extractions from "../extractions.js";
@@ -19,6 +18,7 @@ import type * as interfaze from "../interfaze.js";
 import type * as pages from "../pages.js";
 import type * as processing from "../processing.js";
 import type * as processingJobs from "../processingJobs.js";
+import type * as relationships from "../relationships.js";
 import type * as research from "../research.js";
 import type * as researchQueries from "../researchQueries.js";
 import type * as stories from "../stories.js";
@@ -32,7 +32,6 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   blocks: typeof blocks;
-  datalab: typeof datalab;
   documents: typeof documents;
   entities: typeof entities;
   extractions: typeof extractions;
@@ -42,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   pages: typeof pages;
   processing: typeof processing;
   processingJobs: typeof processingJobs;
+  relationships: typeof relationships;
   research: typeof research;
   researchQueries: typeof researchQueries;
   stories: typeof stories;

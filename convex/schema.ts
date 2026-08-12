@@ -173,14 +173,18 @@ export default defineSchema({
     .index("by_story", ["storyId"])
     .index("by_document", ["documentId"]),
 
-  // Entity relationships
+  // Entity relationships extracted from documents
   relationships: defineTable({
     sourceEntityId: v.id("entities"),
     targetEntityId: v.id("entities"),
-    relationType: v.string(),
+    relationType: v.string(), // short verb phrase, e.g. "employed_by", "met_with", "paid"
     confidence: v.number(),
     mentionId: v.optional(v.id("mentions")),
+    // Provenance: which document asserted this, and the supporting quote
+    documentId: v.optional(v.id("documents")),
+    quote: v.optional(v.string()),
   })
     .index("by_source", ["sourceEntityId"])
-    .index("by_target", ["targetEntityId"]),
+    .index("by_target", ["targetEntityId"])
+    .index("by_document", ["documentId"]),
 });

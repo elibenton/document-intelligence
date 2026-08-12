@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Skeleton } from "@/components/ui/skeleton";
+import RelationshipGraph from "@/components/entities/RelationshipGraph";
 
 export default function StoryPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -14,7 +16,25 @@ export default function StoryPage() {
     api.stories.entitiesForStory,
     story ? { storyId: story._id } : "skip"
   );
+  const graph = useQuery(
+    api.relationships.forStory,
+    story ? { storyId: story._id } : "skip"
+  );
   const toggleStar = useMutation(api.stories.toggleStar);
+  const buildRelationships = useAction(api.relationships.runForDocument);
+  const [building, setBuilding] = useState(false);
+
+  const handleBuildGraph = async () => {
+    if (!documents || building) return;
+    setBuilding(true);
+    try {
+      for (const doc of documents) {
+        await buildRelationships({ documentId: doc._id });
+      }
+    } finally {
+      setBuilding(false);
+    }
+  };
 
   if (story === undefined) {
     return (
@@ -93,8 +113,42 @@ export default function StoryPage() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left 2/3 — Documents */}
+        {/* Left 2/3 — Graph + Documents */}
         <div className="w-2/3 border-r p-6 overflow-y-auto">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">
+              Connections
+              {graph && graph.edges.length > 0 && (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  ({graph.nodes.length} entities, {graph.edges.length}{" "}
+                  relationships)
+                </span>
+              )}
+            </h2>
+            <button
+              onClick={handleBuildGraph}
+              disabled={building || !documents || documents.length === 0}
+              className="text-xs border rounded-md px-2.5 py-1 hover:bg-accent/50 transition-colors disabled:opacity-50"
+            >
+              {building ? "Mapping relationships…" : "Rebuild graph"}
+            </button>
+          </div>
+
+          {graph === undefined ? (
+            <Skeleton className="h-48 w-full mb-6" />
+          ) : graph.edges.length === 0 ? (
+            <p className="text-sm text-muted-foreground border rounded-md py-6 text-center mb-6">
+              No relationships mapped yet.{" "}
+              {documents && documents.length > 0
+                ? "Click “Rebuild graph” to analyze this story's documents."
+                : "Add documents to this story first."}
+            </p>
+          ) : (
+            <div className="border rounded-md mb-6 p-2">
+              <RelationshipGraph nodes={graph.nodes} edges={graph.edges} />
+            </div>
+          )}
+
           <h2 className="text-lg font-semibold mb-3">
             Documents
             {documents && (

@@ -177,6 +177,11 @@ export const runFullPipeline = action({
       documentId: args.documentId,
       pageSchema: PEOPLE_SCHEMA,
     });
+
+    // Step 3: Map relationships between entities (non-fatal if it fails)
+    await ctx.runAction(internal.relationships.extract, {
+      documentId: args.documentId,
+    });
   },
 });
 
