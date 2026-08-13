@@ -368,8 +368,50 @@ export function ImagePdfViewer({
 
   const pageCount = Math.max(totalPages, 1);
 
-  // Fallback aspect ratio for pages pdf.js has not drawn yet — keeps the
-  // scroll height stable so nothing jumps as pages arrive.
+  /**
+   * Page geometry as pdf.js reports it — the authority on how tall a page is.
+   *
+   * The stored `pages` dimensions come from OCR, and OCR has been observed to
+   * report a height its own coordinates contradict: a 12-page ABC application
+   * arrived as 1224x3168 for pages that are really 612x792, so every page was
+   * laid out in a box twice as tall as the paper. pdf.js painted the true page
+   * into it stretched 2:1, and the text layer — scaled uniformly from the OCR
+   * *width*, which was right — landed in the top half, which is why selecting
+   * a page washed it blue.
+   *
+   * So the two are separated here: OCR dimensions stay the coordinate space
+   * blocks are scaled from (PageTextLayer), and the surface is sized from the
+   * PDF, which is also what PdfPageCanvas paints. Pixels and boxes are then
+   * derived from the same geometry and cannot drift apart.
+   */
+  const [pdfPageSizes, setPdfPageSizes] = useState<
+    Map<number, { width: number; height: number }>
+  >(new Map());
+
+  useEffect(() => {
+    setPdfPageSizes(new Map());
+  }, [pdf]);
+
+  const handlePageSize = useCallback(
+    (pageNumber: number, size: { width: number; height: number }) => {
+      setPdfPageSizes((prev) => {
+        const known = prev.get(pageNumber);
+        if (known?.width === size.width && known.height === size.height) {
+          return prev;
+        }
+        return new Map(prev).set(pageNumber, size);
+      });
+    },
+    []
+  );
+
+  // Pages below the proximity window have no canvas yet, so they borrow the
+  // first measured page's shape — near enough for a scroll height that does
+  // not jump, and corrected the moment the page draws itself.
+  const measuredPageSize =
+    pdfPageSizes.get(1) ?? pdfPageSizes.values().next().value;
+
+  // Last resort, for a document pdf.js has not opened at all.
   const fallbackAspect = useMemo(() => {
     const withDims = pages.find((p) => p.width && p.height);
     if (withDims && withDims.width && withDims.height) {
@@ -478,8 +520,10 @@ export function ImagePdfViewer({
           const page = pages.find(
             (candidate) => candidate.pageNumber === pageNumber - 1
           );
-          const sourceWidth = page?.width ?? PAGE_WIDTH;
-          const sourceHeight = page?.height ?? PAGE_WIDTH * fallbackAspect;
+          const pdfSize = pdfPageSizes.get(pageNumber) ?? measuredPageSize;
+          const sourceWidth = pdfSize?.width ?? page?.width ?? PAGE_WIDTH;
+          const sourceHeight =
+            pdfSize?.height ?? page?.height ?? PAGE_WIDTH * fallbackAspect;
           const rotation = ((
             documentRotation + (page?.viewerRotationAdjustment ?? 0)
           ) % 360) as 0 | 90 | 180 | 270;
@@ -520,6 +564,7 @@ export function ImagePdfViewer({
                     pageNumber={pageNumber}
                     cssWidth={surfaceWidth}
                     cssHeight={surfaceHeight}
+                    onPageSize={handlePageSize}
                   />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">

@@ -20,6 +20,7 @@ export function PdfPageCanvas({
   cssWidth,
   cssHeight,
   onPainted,
+  onPageSize,
 }: {
   pdf: PDFDocumentProxy;
   /** 1-indexed, matching pdf.js. */
@@ -27,6 +28,15 @@ export function PdfPageCanvas({
   cssWidth: number;
   cssHeight: number;
   onPainted?: (pageNumber: number) => void;
+  /**
+   * The page's intrinsic size, reported as soon as pdf.js hands over the page.
+   * The caller sizes the surface from it — see the note in ImagePdfViewer on
+   * why the stored OCR dimensions cannot be trusted for that.
+   */
+  onPageSize?: (
+    pageNumber: number,
+    size: { width: number; height: number }
+  ) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [painted, setPainted] = useState(false);
@@ -49,6 +59,7 @@ export function PdfPageCanvas({
       if (!canvas) return;
 
       const base = page.getViewport({ scale: 1 });
+      onPageSize?.(pageNumber, { width: base.width, height: base.height });
       // Cap the device pixel ratio: a 3x canvas on a retina display triples the
       // memory for a difference nobody sees at this size.
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -79,7 +90,7 @@ export function PdfPageCanvas({
       cancelled = true;
       task?.cancel();
     };
-  }, [pdf, pageNumber, cssWidth, onPainted]);
+  }, [pdf, pageNumber, cssWidth, onPainted, onPageSize]);
 
   return (
     <>
