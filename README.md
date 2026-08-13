@@ -171,10 +171,9 @@ spiked memory ~380MB/page and got the action killed. Commits are versioned
 already-done pages.
 
 DOCX takes the same path: `docxRender.ts` lays out pages to produce
-`nativeBlocks`, and needs the *layout*, not pixels. It stores no images. (The
-`pageImages` table is legacy — `commitPage` has no insert path, so no document
-ingested since the rasterizer was removed has a row. It is scheduled for
-deletion.)
+`nativeBlocks`, and needs the *layout*, not pixels. Nothing stores page images —
+the `pageImages` table and its render-resumability read are gone; resumability
+now comes from `pages.geometryVersion`, which `commitPage` already wrote.
 
 ### Search
 
@@ -220,7 +219,7 @@ viewer, plus `/entity/:slug`, `/search`, `/settings`.
 ### The data model in one paragraph
 
 `projects` contain everything. A `document` has many `pages`; a page has `blocks`
-(lines/words with boxes), `detections` (graphics), `pageImages` (derivatives) and
+(lines/words with boxes), `detections` (graphics) and
 `pageTranslations`. Extraction produces `entities`, linked to documents through
 `mentions` (which carry the page + box, so a highlight can be drawn), and
 `relationships` between entities. `processingJobs` tracks stage state,

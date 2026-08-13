@@ -254,23 +254,10 @@ export interface ImagePdfViewerRef {
   scrollToPage: (pageNumber: number) => void;
 }
 
-export interface PageImage {
-  pageNumber: number; // 0-indexed
-  width: number;
-  height: number;
-  url: string | null;
-  rendererVersion?: number;
-}
-
 interface ImagePdfViewerProps {
   documentId: Id<"documents">;
-  /**
-   * URL of the original PDF. When present the pages are drawn client-side by
-   * pdf.js and no server raster is needed; pageImages is only a fallback for
-   * documents rendered before the server rasterizer was removed.
-   */
+  /** URL of the original PDF. Pages are drawn client-side by pdf.js from it. */
   pdfUrl?: string | null;
-  pageImages: PageImage[];
   /** OCR page dimensions — the coordinate space the text layer scales from. */
   pages: PageDims[];
   totalPages: number;
@@ -295,7 +282,6 @@ interface ImagePdfViewerProps {
 export function ImagePdfViewer({
   documentId,
   pdfUrl,
-  pageImages,
   pages,
   totalPages,
   zoom = 1,
@@ -380,25 +366,17 @@ export function ImagePdfViewer({
     [onActiveAnnotationChange]
   );
 
-  const imagesByPage = useMemo(() => {
-    const map = new Map<number, PageImage>();
-    for (const img of pageImages) map.set(img.pageNumber, img);
-    return map;
-  }, [pageImages]);
+  const pageCount = Math.max(totalPages, 1);
 
-  const pageCount = Math.max(totalPages, pageImages.length, 1);
-
-  // Fallback aspect ratio for pages whose image hasn't been rendered yet —
-  // keeps the scroll height stable so nothing jumps when images arrive.
+  // Fallback aspect ratio for pages pdf.js has not drawn yet — keeps the
+  // scroll height stable so nothing jumps as pages arrive.
   const fallbackAspect = useMemo(() => {
-    const withDims =
-      pageImages.find((p) => p.width > 0) ??
-      pages.find((p) => p.width && p.height);
+    const withDims = pages.find((p) => p.width && p.height);
     if (withDims && withDims.width && withDims.height) {
       return withDims.height / withDims.width;
     }
     return 11 / 8.5;
-  }, [pageImages, pages]);
+  }, [pages]);
 
   // Not smooth: pages below the proximity window mount their text layers as
   // the animation crosses them, and the resulting reflow cancels the browser's
@@ -497,13 +475,11 @@ export function ImagePdfViewer({
     >
       <div className="flex min-w-max flex-col items-center gap-4 px-4 py-4">
         {Array.from({ length: pageCount }, (_, i) => i + 1).map((pageNumber) => {
-          const image = imagesByPage.get(pageNumber - 1);
           const page = pages.find(
             (candidate) => candidate.pageNumber === pageNumber - 1
           );
-          const sourceWidth = image?.width ?? page?.width ?? PAGE_WIDTH;
-          const sourceHeight =
-            image?.height ?? page?.height ?? PAGE_WIDTH * fallbackAspect;
+          const sourceWidth = page?.width ?? PAGE_WIDTH;
+          const sourceHeight = page?.height ?? PAGE_WIDTH * fallbackAspect;
           const rotation = ((
             documentRotation + (page?.viewerRotationAdjustment ?? 0)
           ) % 360) as 0 | 90 | 180 | 270;
@@ -544,20 +520,6 @@ export function ImagePdfViewer({
                     pageNumber={pageNumber}
                     cssWidth={surfaceWidth}
                     cssHeight={surfaceHeight}
-                  />
-                ) : image?.url && isNear ? (
-                  // Legacy path: documents rasterized before the renderer was
-                  // removed, and anything without a fetchable original.
-                  <img
-                    src={image.url}
-                    alt={`Page ${pageNumber}`}
-                    width={surfaceWidth}
-                    height={surfaceHeight}
-                    loading={pageNumber === 1 ? "eager" : "lazy"}
-                    fetchPriority={pageNumber === 1 ? "high" : "auto"}
-                    decoding="async"
-                    draggable={false}
-                    className="block h-full w-full select-none"
                   />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">

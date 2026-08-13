@@ -256,20 +256,6 @@ export const remove = mutation({
       await ctx.db.delete(page._id);
     }
 
-    // Delete pre-rendered page images (and their storage files)
-    const pageImages = await ctx.db
-      .query("pageImages")
-      .withIndex("by_document", (q) => q.eq("documentId", args.id))
-      .collect();
-    for (const img of pageImages) {
-      try {
-        await ctx.storage.delete(img.storageId);
-      } catch {
-        // already deleted
-      }
-      await ctx.db.delete(img._id);
-    }
-
     const extractions = await ctx.db
       .query("extractions")
       .withIndex("by_document", (q) => q.eq("documentId", args.id))

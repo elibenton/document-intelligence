@@ -7,7 +7,6 @@ import type { Doc } from "../../convex/_generated/dataModel";
 import {
   ImagePdfViewer,
   type ImagePdfViewerRef,
-  type PageImage,
 } from "@/components/viewer/ImagePdfViewer";
 import { ImageViewer } from "@/components/viewer/ImageViewer";
 import { WebClipViewer } from "@/components/viewer/WebClipViewer";
@@ -56,7 +55,6 @@ export default function DocumentPage() {
   const researchDossiers = useQuery(api.researchQueries.byDocument, { documentId });
   const documentEntities = useQuery(api.entities.byDocument, { documentId });
   const detections = useQuery(api.detections.byDocument, { documentId });
-  const pageImages = useQuery(api.pageImages.byDocument, { documentId });
   const translatedPages = useQuery(api.translations.pagesByDocument, {
     documentId,
   });
@@ -177,10 +175,10 @@ export default function DocumentPage() {
     document?.mimeType.startsWith("video/")
   );
   useEffect(() => {
-    if (isPdfDocument && pageImages) {
+    if (isPdfDocument) {
       void ensureRendered({ documentId });
     }
-  }, [isPdfDocument, pageImages, ensureRendered, documentId]);
+  }, [isPdfDocument, ensureRendered, documentId]);
 
   // Parse people from extraction results
   const people = useMemo(() => {
@@ -408,12 +406,10 @@ export default function DocumentPage() {
               onHoverEntity={setHoveredEntity}
               renderedWidth={renderedWidth}
             />
-            {showBlocks && detections && pageImages && (
+            {showBlocks && detections && (
               <VisualObjectOverlay
                 pageNumber={pageNumber}
                 detections={detections}
-                pages={pages}
-                pageImages={pageImages}
               />
             )}
           </>
@@ -574,7 +570,7 @@ export default function DocumentPage() {
                 onZoomChange={chooseZoom}
                 onFitWidth={fitToWidth}
                 currentPage={currentPage}
-                totalPages={document.pageCount ?? pageImages?.length ?? 0}
+                totalPages={document.pageCount ?? 0}
               />
             )
           }
@@ -611,9 +607,8 @@ export default function DocumentPage() {
                   ref={imageViewerRef}
                   documentId={documentId}
                   pdfUrl={url}
-                  pageImages={pageImages ?? []}
                   pages={pages ?? []}
-                  totalPages={document.pageCount ?? pageImages?.length ?? 1}
+                  totalPages={document.pageCount ?? 1}
                   zoom={zoom}
                   documentRotation={document.viewerRotation ?? 0}
                   onVisiblePageChange={handleVisiblePageChange}
@@ -1070,35 +1065,22 @@ function VisualEvidenceList({
 function VisualObjectOverlay({
   pageNumber,
   detections,
-  pages,
-  pageImages,
 }: {
   pageNumber: number; // 1-based
   detections: Doc<"detections">[];
-  pages: Array<{ pageNumber: number; width?: number; height?: number }>;
-  pageImages: PageImage[];
 }) {
   const pageIndex = pageNumber - 1;
-  const page = pages.find((candidate) => candidate.pageNumber === pageIndex);
-  const image = pageImages.find(
-    (candidate) => candidate.pageNumber === pageIndex
-  );
-  const expectedOcrHeight =
-    page?.width && image?.width && image.height
-      ? page.width * (image.height / image.width)
-      : undefined;
-  const yCorrection =
-    page?.height && expectedOcrHeight ? page.height / expectedOcrHeight : 1;
+  // No y-correction any more. It existed to reconcile OCR geometry against a
+  // server-rendered raster whose aspect ratio could differ from the OCR page;
+  // there is no raster, and detection boxes are already normalised 0-1 against
+  // the same page the overlay is drawn on.
 
   return detections
     .filter((detection) => detection.pageNumber === pageIndex && detection.bbox)
     .map((detection) => {
       const bbox = detection.bbox!;
-      const top = Math.min(1, Math.max(0, bbox.y * yCorrection));
-      const height = Math.min(
-        1 - top,
-        Math.max(0, bbox.height * yCorrection)
-      );
+      const top = Math.min(1, Math.max(0, bbox.y));
+      const height = Math.min(1 - top, Math.max(0, bbox.height));
       return (
         <div
           key={detection._id}

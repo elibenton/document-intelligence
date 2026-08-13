@@ -367,36 +367,6 @@ export default defineSchema({
       filterFields: ["targetLanguageCode", "status"],
     }),
 
-  // Pre-rendered page rasters (PNG in storage), one row per PDF page.
-  // The viewer shows these images instead of rendering the PDF client-side
-  // with pdf.js — deterministic pixels, no canvas/text-layer flakiness.
-  // Rendered server-side (renderPages.ts) after upload; width/height are the
-  // raster's pixel dimensions (same aspect ratio as pages.width/height).
-  pageImages: defineTable({
-    documentId: v.id("documents"),
-    pageNumber: v.number(), // 0-indexed, matching pages/blocks
-    storageId: v.id("_storage"),
-    width: v.number(),
-    height: v.number(),
-    rendererVersion: v.optional(v.number()),
-  }).index("by_document", ["documentId", "pageNumber"]),
-
-  // Singleton progress records for versioned page-derivative migrations.
-  // Keeping the cursor server-side makes a large archive restartable without
-  // asking an operator to track offsets or requeue every document.
-  rendererBackfills: defineTable({
-    key: v.string(),
-    rendererVersion: v.number(),
-    status: v.union(v.literal("running"), v.literal("complete")),
-    cursor: v.optional(v.string()),
-    scanned: v.number(),
-    scheduled: v.number(),
-    startedAt: v.number(),
-    updatedAt: v.number(),
-    completedAt: v.optional(v.number()),
-  }).index("by_key", ["key"]),
-
-  // Block-level content from OCR (one row per text line)
   blocks: defineTable({
     documentId: v.id("documents"),
     pageId: v.id("pages"),

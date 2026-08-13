@@ -152,12 +152,8 @@ export const renderDocx = internalAction({
 
       for (const [pageNumber, page] of pages.entries()) {
         if (existingVersions.get(pageNumber) === RENDERER_VERSION) continue;
-        // No raster is produced. Pages are drawn client-side by pdf.js, and
-        // commitPage only ever *deletes* a storageId handed to it — so the PNG
-        // this used to store was orphaned in storage on every first render,
-        // unreferenced and unreachable by the delete cascade. What DOCX
-        // rendering actually delivers is nativeBlocks, which needs the layout,
-        // not the pixels.
+        // No raster is produced — DOCX rendering delivers nativeBlocks, which
+        // needs the layout, not the pixels.
         await ctx.runMutation(internal.pageImages.commitPage, {
           documentId: args.documentId,
           pageNumber,

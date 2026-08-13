@@ -136,7 +136,7 @@ function CitationPage({
   active: boolean;
   cardRef: (element: HTMLDivElement | null) => void;
 }) {
-  const pageImage = useQuery(api.pageImages.byPage, {
+  const pageDims = useQuery(api.pages.dimensionsByPage, {
     documentId: result.documentId,
     pageNumber: result.pageNumber,
   });
@@ -149,9 +149,9 @@ function CitationPage({
     [blocks, result.snippet]
   );
 
-  const rotation = pageImage?.rotation ?? 0;
-  const sourceWidth = pageImage?.width ?? PAGE_WIDTH;
-  const sourceHeight = pageImage?.height ?? PAGE_WIDTH * (11 / 8.5);
+  const rotation = pageDims?.rotation ?? 0;
+  const sourceWidth = pageDims?.width ?? PAGE_WIDTH;
+  const sourceHeight = pageDims?.height ?? PAGE_WIDTH * (11 / 8.5);
   const sideways = rotation === 90 || rotation === 270;
   const scale = PAGE_WIDTH / (sideways ? sourceHeight : sourceWidth);
   const surfaceWidth = sourceWidth * scale;
@@ -209,21 +209,14 @@ function CitationPage({
               transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
             }}
           >
-            {pageImage === undefined ? (
+            {/* A white page with the citation boxed on it. Pages are drawn
+                client-side from the original file now, so there is no
+                server-rendered raster to show here — the geometry is the
+                point, and it is exact. */}
+            {pageDims === undefined ? (
               <div className="absolute inset-0 animate-pulse bg-muted" />
-            ) : pageImage?.url ? (
-              <img
-                src={pageImage.url}
-                alt={`${result.documentName}, page ${result.pageNumber + 1}`}
-                width={surfaceWidth}
-                height={surfaceHeight}
-                draggable={false}
-                className="block size-full select-none"
-              />
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center bg-white text-sm text-muted-foreground">
-                Page preview unavailable
-              </div>
+              <div className="absolute inset-0 bg-white" />
             )}
 
             {active &&

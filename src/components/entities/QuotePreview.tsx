@@ -152,8 +152,12 @@ export function QuotePreview({
           pageHeight: located.pageHeight,
         }
       : null);
-  const pageImage = useQuery(
-    api.pageImages.byPage,
+  // True page geometry, from `pages`. This used to come from pageImages.byPage
+  // alongside a signed PNG URL; no raster has been produced since server
+  // rendering was removed, so the URL was always null and the dimensions were
+  // silently falling back to a hardcoded aspect ratio.
+  const pageDims = useQuery(
+    api.pages.dimensionsByPage,
     hovered && baseTarget && baseTarget.mediaType === "pdf"
       ? {
           documentId: baseTarget.documentId,
@@ -163,13 +167,13 @@ export function QuotePreview({
   );
 
   const resolved: PreviewTarget | null =
-    baseTarget && pageImage !== undefined
+    baseTarget && pageDims !== undefined
       ? {
           ...baseTarget,
-          pageImageUrl: pageImage?.url ?? null,
-          pageImageRotation: pageImage?.rotation ?? 0,
-          pageWidth: pageImage?.width ?? baseTarget.pageWidth,
-          pageHeight: pageImage?.height ?? baseTarget.pageHeight,
+          pageImageUrl: null,
+          pageImageRotation: pageDims?.rotation ?? 0,
+          pageWidth: pageDims?.width ?? baseTarget.pageWidth,
+          pageHeight: pageDims?.height ?? baseTarget.pageHeight,
         }
       : baseTarget;
 

@@ -1,5 +1,4 @@
 import {
-  query,
   mutation,
   internalMutation,
   internalQuery,
@@ -31,8 +30,6 @@ const nativeBlockValidator = v.object({
   ),
 });
 
-const GEOMETRY_BACKFILL_KEY = "page-text-geometry";
-const BACKFILL_BATCH_SIZE = 8;
 
 // A render action can be killed by the platform (container eviction, the
 // 10-minute action limit) without its catch block ever running, which leaves
@@ -48,73 +45,21 @@ const BACKFILL_BATCH_SIZE = 8;
 const RENDER_STALE_AFTER_MS = 20 * 60 * 1000;
 const RENDER_WATCHDOG_DELAY_MS = 10 * 60 * 1000;
 
-/** Signed, versioned page derivatives ordered by PDF page number. */
-export const byDocument = query({
-  args: { documentId: v.id("documents") },
-  handler: async (ctx, args) => {
-    const rows = await ctx.db
-      .query("pageImages")
-      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .collect();
-    return await Promise.all(
-      rows.map(async (row) => ({
-        pageNumber: row.pageNumber,
-        width: row.width,
-        height: row.height,
-        rendererVersion: row.rendererVersion,
-        url: await ctx.storage.getUrl(row.storageId),
-      }))
-    );
-  },
-});
-
-/** One signed page derivative for lightweight quote/citation previews. */
-export const byPage = query({
-  args: { documentId: v.id("documents"), pageNumber: v.number() },
-  handler: async (ctx, args) => {
-    const row = await ctx.db
-      .query("pageImages")
-      .withIndex("by_document", (q) =>
-        q
-          .eq("documentId", args.documentId)
-          .eq("pageNumber", args.pageNumber)
-      )
-      .unique();
-    if (!row) return null;
-    const [document, page] = await Promise.all([
-      ctx.db.get(args.documentId),
-      ctx.db
-        .query("pages")
-        .withIndex("by_document", (q) =>
-          q
-            .eq("documentId", args.documentId)
-            .eq("pageNumber", args.pageNumber)
-        )
-        .unique(),
-    ]);
-    return {
-      url: await ctx.storage.getUrl(row.storageId),
-      width: row.width,
-      height: row.height,
-      rotation: ((
-        (document?.viewerRotation ?? 0) +
-        (page?.viewerRotationAdjustment ?? 0)
-      ) % 360) as 0 | 90 | 180 | 270,
-    };
-  },
-});
-
-/** Existing derivatives and their versions, used to make upgrades resumable. */
+/**
+ * Existing derivatives and their versions, used to make upgrades resumable.
+ * Read from `pages.geometryVersion`, which commitPage writes — this used to
+ * read the `pageImages` table, which held rasters that are no longer produced.
+ */
 export const renderedPageVersions = internalQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const rows = await ctx.db
-      .query("pageImages")
+      .query("pages")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
       .collect();
     return rows.map((row) => ({
       pageNumber: row.pageNumber,
-      rendererVersion: row.rendererVersion ?? 0,
+      rendererVersion: row.geometryVersion ?? 0,
     }));
   },
 });
@@ -214,11 +159,11 @@ export const failIfRenderStuck = internalMutation({
  * native PDF text geometry. OCR rows are retained for citation history but
  * viewer queries select only the page's canonical source.
  */
+
 export const commitPage = internalMutation({
   args: {
     documentId: v.id("documents"),
     pageNumber: v.number(),
-    storageId: v.optional(v.id("_storage")),
     width: v.number(),
     height: v.number(),
     rendererVersion: v.number(),
@@ -232,28 +177,6 @@ export const commitPage = internalMutation({
     nativeGeometryScore: v.number(),
   },
   handler: async (ctx, args) => {
-    const existingImage = await ctx.db
-      .query("pageImages")
-      .withIndex("by_document", (q) =>
-        q
-          .eq("documentId", args.documentId)
-          .eq("pageNumber", args.pageNumber)
-      )
-      .unique();
-
-    // Page images are legacy. Pages are drawn client-side by pdf.js now, so no
-    // new rasters are produced; existing rows are kept (and their dimensions
-    // refreshed) so documents rendered before the change still display from
-    // their stored PNGs until they are cleaned up.
-    if (existingImage) {
-      if (args.storageId) await ctx.storage.delete(args.storageId);
-      await ctx.db.patch(existingImage._id, {
-        width: args.width,
-        height: args.height,
-        rendererVersion: args.rendererVersion,
-      });
-    }
-
     const existingPages = await ctx.db
       .query("pages")
       .withIndex("by_document", (q) =>
@@ -496,158 +419,6 @@ async function scheduleRender(
     renderEnqueueOptions(documentId)
   );
 }
-
-/** Progress for the archive-wide renderer/geometry upgrade. */
-export const geometryBackfillStatus = query({
-  args: {},
-  returns: v.union(
-    v.null(),
-    v.object({
-      rendererVersion: v.number(),
-      status: v.union(v.literal("running"), v.literal("complete")),
-      scanned: v.number(),
-      scheduled: v.number(),
-      startedAt: v.number(),
-      updatedAt: v.number(),
-      completedAt: v.optional(v.number()),
-    })
-  ),
-  handler: async (ctx) => {
-    const row = await ctx.db
-      .query("rendererBackfills")
-      .withIndex("by_key", (q) => q.eq("key", GEOMETRY_BACKFILL_KEY))
-      .unique();
-    if (!row) return null;
-    return {
-      rendererVersion: row.rendererVersion,
-      status: row.status,
-      scanned: row.scanned,
-      scheduled: row.scheduled,
-      startedAt: row.startedAt,
-      updatedAt: row.updatedAt,
-      completedAt: row.completedAt,
-    };
-  },
-});
-
-/** Start or restart the resumable renderer backfill at the current version. */
-export const startGeometryBackfill = mutation({
-  args: {},
-  returns: v.object({ started: v.boolean() }),
-  handler: async (ctx) => {
-    const existing = await ctx.db
-      .query("rendererBackfills")
-      .withIndex("by_key", (q) => q.eq("key", GEOMETRY_BACKFILL_KEY))
-      .unique();
-    if (
-      existing?.status === "running" &&
-      existing.rendererVersion === RENDERER_VERSION
-    ) {
-      return { started: false };
-    }
-
-    const now = Date.now();
-    const value = {
-      key: GEOMETRY_BACKFILL_KEY,
-      rendererVersion: RENDERER_VERSION,
-      status: "running" as const,
-      cursor: undefined,
-      scanned: 0,
-      scheduled: 0,
-      startedAt: now,
-      updatedAt: now,
-      completedAt: undefined,
-    };
-    if (existing) await ctx.db.replace(existing._id, value);
-    else await ctx.db.insert("rendererBackfills", value);
-
-    await ctx.scheduler.runAfter(0, internal.pageImages.backfillGeometryBatch, {
-      cursor: null,
-      rendererVersion: RENDERER_VERSION,
-    });
-    return { started: true };
-  },
-});
-
-/** Scan a bounded archive slice and continue from Convex's stable cursor. */
-export const backfillGeometryBatch = internalMutation({
-  args: {
-    cursor: v.union(v.string(), v.null()),
-    rendererVersion: v.number(),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const state = await ctx.db
-      .query("rendererBackfills")
-      .withIndex("by_key", (q) => q.eq("key", GEOMETRY_BACKFILL_KEY))
-      .unique();
-    if (
-      !state ||
-      state.status !== "running" ||
-      state.rendererVersion !== args.rendererVersion ||
-      args.rendererVersion !== RENDERER_VERSION
-    ) {
-      return null;
-    }
-
-    const page = await ctx.db
-      .query("documents")
-      .withIndex("by_uploadedAt")
-      .order("asc")
-      .paginate({ numItems: BACKFILL_BATCH_SIZE, cursor: args.cursor });
-    let scheduled = 0;
-    const now = Date.now();
-    for (const doc of page.page) {
-      const isPaged =
-        doc.mimeType === "application/pdf" ||
-        doc.mediaType === "pdf" ||
-        doc.mediaType === "docx";
-      const isCurrent =
-        doc.renderStatus === "complete" &&
-        doc.rendererVersion === RENDERER_VERSION &&
-        doc.renderExpectedPages === doc.renderedPageCount;
-      const isFreshlyInFlight =
-        (doc.renderStatus === "queued" || doc.renderStatus === "rendering") &&
-        doc.rendererVersion === RENDERER_VERSION &&
-        doc.renderScheduledAt !== undefined &&
-        now - doc.renderScheduledAt < 15 * 60 * 1000;
-      if (isPaged && !isCurrent && !isFreshlyInFlight) {
-        await scheduleRender(ctx, doc._id);
-        scheduled++;
-      }
-    }
-
-    const nextScanned = state.scanned + page.page.length;
-    const nextScheduled = state.scheduled + scheduled;
-    if (page.isDone) {
-      await ctx.db.patch(state._id, {
-        status: "complete",
-        cursor: undefined,
-        scanned: nextScanned,
-        scheduled: nextScheduled,
-        updatedAt: now,
-        completedAt: now,
-      });
-      return null;
-    }
-
-    await ctx.db.patch(state._id, {
-      cursor: page.continueCursor,
-      scanned: nextScanned,
-      scheduled: nextScheduled,
-      updatedAt: now,
-    });
-    await ctx.scheduler.runAfter(
-      250,
-      internal.pageImages.backfillGeometryBatch,
-      {
-        cursor: page.continueCursor,
-        rendererVersion: args.rendererVersion,
-      }
-    );
-    return null;
-  },
-});
 
 /** Ensure missing or outdated page derivatives are scheduled exactly once. */
 export const ensureRendered = mutation({

@@ -63,3 +63,27 @@ export const openingTextByDocument = internalQuery({
     }));
   },
 });
+
+/**
+ * One page's display geometry. Replaces pageImages.byPage, which returned a
+ * signed PNG URL alongside these dimensions — no raster has been produced since
+ * server rendering was removed, so callers were falling back to a hardcoded
+ * aspect ratio while the true dimensions sat here all along.
+ */
+export const dimensionsByPage = query({
+  args: { documentId: v.id("documents"), pageNumber: v.number() },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("pages")
+      .withIndex("by_document", (q) =>
+        q.eq("documentId", args.documentId).eq("pageNumber", args.pageNumber)
+      )
+      .first();
+    if (!page) return null;
+    return {
+      width: page.width,
+      height: page.height,
+      rotation: page.viewerRotationAdjustment ?? 0,
+    };
+  },
+});

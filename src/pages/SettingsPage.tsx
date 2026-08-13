@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, CircleAlert, CircleCheck, Languages, RefreshCw } from "lucide-react";
+import { ArrowLeft, CircleAlert, CircleCheck, Languages } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import ProviderAlert from "@/components/settings/ProviderAlert";
 import { ProcessingQueueControls } from "@/components/settings/ProcessingQueueControls";
@@ -89,13 +89,10 @@ export default function SettingsPage() {
   const logs = useQuery(api.apiLogs.list);
   const health = useQuery(api.providerHealth.list);
   const settings = useQuery(api.settings.get);
-  const geometryBackfill = useQuery(api.pageImages.geometryBackfillStatus);
   const updateDefaultLanguage = useMutation(api.settings.updateDefaultLanguage);
-  const startGeometryBackfill = useMutation(api.pageImages.startGeometryBackfill);
   const geminiStatus = health?.find((h) => h.provider === "google")?.status;
   const [languageDraft, setLanguageDraft] = useState("en");
   const [savingLanguage, setSavingLanguage] = useState(false);
-  const [startingBackfill, setStartingBackfill] = useState(false);
 
   useEffect(() => {
     if (settings?.defaultLanguageCode) {
@@ -117,16 +114,6 @@ export default function SettingsPage() {
       await updateDefaultLanguage({ languageCode: languageDraft });
     } finally {
       setSavingLanguage(false);
-    }
-  }
-
-  async function runGeometryBackfill() {
-    if (startingBackfill || geometryBackfill?.status === "running") return;
-    setStartingBackfill(true);
-    try {
-      await startGeometryBackfill({});
-    } finally {
-      setStartingBackfill(false);
     }
   }
 
@@ -162,40 +149,6 @@ export default function SettingsPage() {
 
           <h2 className="text-lg font-semibold mb-3">Processing</h2>
           <ProcessingQueueControls />
-
-          <div className="mb-8 rounded-lg border bg-card p-4">
-            <div className="flex items-start gap-3">
-              <RefreshCw
-                className={`mt-0.5 h-5 w-5 shrink-0 text-muted-foreground ${geometryBackfill?.status === "running" ? "animate-spin" : ""}`}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">PDF highlight geometry</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Rebuild existing PDFs with current word boxes and hidden-text detection.
-                  The job is resumable and skips documents that are already current.
-                </p>
-                {geometryBackfill && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {geometryBackfill.status === "running" ? "Running" : "Last run complete"}
-                    {` · ${geometryBackfill.scanned.toLocaleString()} scanned · ${geometryBackfill.scheduled.toLocaleString()} queued · renderer v${geometryBackfill.rendererVersion}`}
-                  </p>
-                )}
-                <Button
-                  className="mt-3"
-                  size="sm"
-                  variant="outline"
-                  disabled={startingBackfill || geometryBackfill?.status === "running"}
-                  onClick={() => void runGeometryBackfill()}
-                >
-                  {geometryBackfill?.status === "running"
-                    ? "Backfill running…"
-                    : startingBackfill
-                      ? "Starting…"
-                      : "Backfill existing PDFs"}
-                </Button>
-              </div>
-            </div>
-          </div>
 
           <h2 className="text-lg font-semibold mb-3">Language</h2>
           <div className="rounded-lg border bg-card p-4 mb-8">
