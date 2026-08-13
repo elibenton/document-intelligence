@@ -370,46 +370,6 @@ export const ingestParseResults = internalMutation({
   },
 });
 
-/** Remove provider boxes that cannot exist in their declared page space. */
-export const sanitizeStoredGeometry = internalMutation({
-  args: { documentId: v.id("documents") },
-  returns: v.number(),
-  handler: async (ctx, args) => {
-    const pages = await ctx.db
-      .query("pages")
-      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .collect();
-    let changed = 0;
-    for (const page of pages) {
-      const blocks = await ctx.db
-        .query("blocks")
-        .withIndex("by_document", (q) =>
-          q
-            .eq("documentId", args.documentId)
-            .eq("pageNumber", page.pageNumber)
-        )
-        .collect();
-      for (const block of blocks) {
-        const normalized = geometryForPage(
-          block.bbox,
-          block.words,
-          page.width,
-          page.height
-        );
-        const bboxChanged = Boolean(block.bbox) !== Boolean(normalized.bbox);
-        const wordBoxesChanged = (block.words ?? []).some(
-          (word, index) =>
-            Boolean(word.bbox) !== Boolean(normalized.words?.[index]?.bbox)
-        );
-        if (!bboxChanged && !wordBoxesChanged) continue;
-        await ctx.db.patch(block._id, normalized);
-        changed++;
-      }
-    }
-    return changed;
-  },
-});
-
 // ---------------------------------------------------------------------------
 // Ingest template extraction results: entities resolved against the existing
 // graph (exact/alias auto-link, fuzzy → merge suggestions), contextual roles

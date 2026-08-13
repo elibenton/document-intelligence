@@ -72,13 +72,6 @@ export const updateType = mutation({
   },
 });
 
-export const remove = mutation({
-  args: { id: v.id("blocks") },
-  handler: async (ctx, args) => {
-    await ctx.db.delete(args.id);
-  },
-});
-
 // ---------------------------------------------------------------------------
 // Locate a quote inside a document: find the OCR block that best matches the
 // text and return everything a hover preview needs (page, bbox, dims, file).
@@ -149,15 +142,5 @@ export const locateText = query({
       fileUrl,
       mediaType: doc.mediaType ?? "pdf",
     };
-  },
-});
-
-export const byPage = query({
-  args: { pageId: v.id("pages") },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("blocks")
-      .withIndex("by_page", (q) => q.eq("pageId", args.pageId))
-      .collect();
   },
 });

@@ -15,16 +15,6 @@ export const list = query({
   },
 });
 
-export const getByName = query({
-  args: { name: v.string() },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("documentKinds")
-      .withIndex("by_name", (q) => q.eq("name", args.name))
-      .first();
-  },
-});
-
 /** Create a kind or update its template (used by the AI metadata pass). */
 export const upsert = internalMutation({
   args: {

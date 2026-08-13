@@ -33,7 +33,6 @@ import type * as kinds from "../kinds.js";
 import type * as mergeSuggestions from "../mergeSuggestions.js";
 import type * as metadata from "../metadata.js";
 import type * as metadataNode from "../metadataNode.js";
-import type * as migrate from "../migrate.js";
 import type * as pageImages from "../pageImages.js";
 import type * as pages from "../pages.js";
 import type * as processing from "../processing.js";
@@ -95,7 +94,6 @@ declare const fullApi: ApiFromModules<{
   mergeSuggestions: typeof mergeSuggestions;
   metadata: typeof metadata;
   metadataNode: typeof metadataNode;
-  migrate: typeof migrate;
   pageImages: typeof pageImages;
   pages: typeof pages;
   processing: typeof processing;

@@ -14,7 +14,7 @@
  * rename.ts on the default runtime.
  */
 
-import { internalAction, action } from "./_generated/server";
+import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
@@ -229,14 +229,6 @@ async function renamePass(ctx: ActionCtx, documentId: Id<"documents">) {
 
 /** Pipeline hook: scheduled once the metadata (or transcribe) pass lands. */
 export const runRenamePass = internalAction({
-  args: { documentId: v.id("documents") },
-  handler: async (ctx, args) => {
-    await renamePass(ctx, args.documentId);
-  },
-});
-
-/** Manual re-run — also the way documents uploaded before this pass get a title. */
-export const runRename = action({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     await renamePass(ctx, args.documentId);

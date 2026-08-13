@@ -7,7 +7,7 @@
  * (forEntity) stay in relationships.ts on the default runtime.
  */
 
-import { action, internalAction } from "./_generated/server";
+import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { chatCompletion } from "./interfaze";
@@ -216,15 +216,5 @@ export const extract = internalAction({
       });
       console.error(`Relationship extraction failed: ${msg}`);
     }
-  },
-});
-
-/** Public entry point: (re)build relationships for one document. */
-export const runForDocument = action({
-  args: { documentId: v.id("documents") },
-  handler: async (ctx, args) => {
-    await ctx.runAction(internal.relationshipsNode.extract, {
-      documentId: args.documentId,
-    });
   },
 });

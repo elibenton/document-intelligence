@@ -18,6 +18,28 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
 - **Non-streaming only.** Streaming hardcodes `vcache: false` (`dist/index.js:247`), so a stream can never report a cache hit. Usage is *preserved when present* but is absent in practice because the SDK never sets `stream_options.include_usage` — don't "fix" this by patching the accumulator.
 - **`vcache` invalidation is undocumented.** Several comments bank on an unchanged text-in re-run hitting cache. The docs say only "the same file or a very similar prompt" — no key composition, no TTL. It is a reasonable bet, not a guarantee. Log the hit rate rather than assuming it.
 
+## Repo conventions
+
+- **Every Convex export is public API.** A `query`/`mutation`/`action` with no
+  `api.*`/`internal.*` caller is not just dead code, it is a reachable
+  unauthenticated endpoint. Prefer `internalQuery`/`internalMutation` unless the
+  frontend actually calls it, and delete on sight when a caller goes away.
+- **Indexes are a write cost, not a free read speedup.** Every index is written
+  on every row insert. `blocks.by_blockId` had zero callers and cost an index
+  write on every OCR line the system had ever produced. Before adding one, name
+  the `withIndex` call site; when deleting a query, check whether its index is
+  now orphaned.
+- **Verify a claim about a specific line before acting on it.** Several
+  confidently-worded findings in the simplification audit — including one that
+  had been sitting in this file — were about already-fixed or unreachable code.
+  Grep the call sites yourself; `internal.x.y` and a bare symbol name are
+  different searches, and index names are shared across tables (`by_page` exists
+  on both `blocks` and `pageTranslations`, and only one of them was live).
+- **One-off scripts do not live in `scripts/`.** Anything named `tmp-*`, or any
+  backfill that has already run, is finished work — git history keeps it.
+  `scripts/` is not yet in any tsconfig `include`, so nothing there is
+  typechecked; treat imports from `convex/` there as unverified.
+
 ## Cost shape (measured, 12-page born-digital English PDF)
 
 Scan $0.0021 → Analyze $0.0308 → Rename $0.0062 → Extract $0.0271 = **$0.066/doc**.

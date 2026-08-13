@@ -33,18 +33,6 @@ export const list = query({
   },
 });
 
-export const listArchived = query({
-  args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const docs = await ctx.db
-      .query("documents")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .order("desc")
-      .collect();
-    return docs.filter((d) => d.archivedAt !== undefined);
-  },
-});
-
 /**
  * Account-level blockers affecting document processing, for the global
  * banner. Running out of API credits stops every upload from progressing, so

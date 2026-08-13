@@ -479,31 +479,6 @@ export const renderJobComplete = internalMutation({
   },
 });
 
-/** Remove all rasters. Reserved for explicit renderer repair operations. */
-export const clearRendered = internalMutation({
-  args: { documentId: v.id("documents") },
-  handler: async (ctx, args) => {
-    const rows = await ctx.db
-      .query("pageImages")
-      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .collect();
-    for (const row of rows) {
-      try {
-        await ctx.storage.delete(row.storageId);
-      } catch {
-        // The storage object was already removed.
-      }
-      await ctx.db.delete(row._id);
-    }
-    await ctx.db.patch(args.documentId, {
-      renderStatus: "queued",
-      renderedPageCount: 0,
-      renderScheduledAt: undefined,
-    });
-    return rows.length;
-  },
-});
-
 async function scheduleRender(
   ctx: MutationCtx,
   documentId: Id<"documents">

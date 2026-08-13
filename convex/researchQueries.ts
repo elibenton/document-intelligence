@@ -15,21 +15,6 @@ export const byDocument = query({
   },
 });
 
-export const byDocumentEntity = query({
-  args: {
-    documentId: v.id("documents"),
-    entityName: v.string(),
-  },
-  handler: async (ctx, args) => {
-    return ctx.db
-      .query("research")
-      .withIndex("by_document_entity", (q) =>
-        q.eq("documentId", args.documentId).eq("entityName", args.entityName)
-      )
-      .first();
-  },
-});
-
 // ---------------------------------------------------------------------------
 // Internal mutations: save research results
 // ---------------------------------------------------------------------------

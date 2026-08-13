@@ -281,7 +281,6 @@ export default defineSchema({
   })
     .index("by_entity", ["entityId"])
     .index("by_document", ["documentId"])
-    .index("by_role", ["role"])
     .index("by_entity_and_document", ["entityId", "documentId"]),
 
   // Fuzzy entity-match suggestions awaiting human confirmation.
@@ -357,7 +356,6 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_document", ["documentId"])
-    .index("by_page", ["pageId"])
     .index("by_document_and_target_and_page", [
       "documentId",
       "targetLanguageCode",
@@ -439,8 +437,7 @@ export default defineSchema({
     ),
   })
     .index("by_page", ["pageId"])
-    .index("by_document", ["documentId", "pageNumber"])
-    .index("by_blockId", ["blockId"]),
+    .index("by_document", ["documentId", "pageNumber"]),
 
   // Human markup on a page: a colored highlight over a run of selected text,
   // optionally carrying a comment.
@@ -486,8 +483,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_document", ["documentId", "pageNumber"])
-    .index("by_project", ["projectId", "createdAt"]),
+    .index("by_document", ["documentId", "pageNumber"]),
 
   // Visual evidence detected on document pages (signatures, redactions,
   // stamps, handwriting, photographs, logos). Bboxes are model-estimated
@@ -544,7 +540,6 @@ export default defineSchema({
     documentId: v.id("documents"),
     schemaUsed: v.string(), // JSON string of the schema that was used
     results: v.string(), // JSON string of extraction_schema_json
-    citations: v.optional(v.string()), // JSON string of citation mapping
     pageRange: v.optional(v.string()), // which pages were extracted
     extractedAt: v.number(),
   }).index("by_document", ["documentId"]),
@@ -605,7 +600,6 @@ export default defineSchema({
     // Queue metadata is optional for rows created before Workpool was added.
     queuedAt: v.optional(v.number()),
     workId: v.optional(v.string()),
-    progress: v.optional(v.number()),
     startedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
     errorMessage: v.optional(v.string()),

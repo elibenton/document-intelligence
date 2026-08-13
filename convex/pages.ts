@@ -1,4 +1,4 @@
-import { query, mutation, internalQuery } from "./_generated/server";
+import { query, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 
 /**
@@ -25,31 +25,6 @@ export const byDocument = query({
   },
 });
 
-const quarterTurnValidator = v.union(v.literal(90), v.literal(-90));
-
-/** Rotate one page relative to the document-wide orientation. */
-export const rotatePage = mutation({
-  args: {
-    documentId: v.id("documents"),
-    pageNumber: v.number(),
-    degrees: quarterTurnValidator,
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("pages")
-      .withIndex("by_document", (q) =>
-        q.eq("documentId", args.documentId).eq("pageNumber", args.pageNumber)
-      )
-      .unique();
-    if (!page) return null;
-    const next = ((page.viewerRotationAdjustment ?? 0) + args.degrees + 360) % 360;
-    await ctx.db.patch(page._id, {
-      viewerRotationAdjustment: next as 0 | 90 | 180 | 270,
-    });
-    return null;
-  },
-});
 
 /**
  * Full page text for backend pipelines (relationship extraction etc.) —

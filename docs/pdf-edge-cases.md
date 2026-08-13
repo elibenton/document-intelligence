@@ -153,15 +153,15 @@ is what every failure reduces to. Two repairs were considered:
    encodings fail identically. Re-encoding produces the same empty response more
    slowly.
 2. **Recover the hidden text and re-emit it visibly.** Built and tested
-   (`scripts/lib/textUnderlay.ts`): rasterize each page, extract the invisible text
-   with pdf.js, and rebuild with the text painted in mode 0 underneath the raster.
+   (formerly `scripts/lib/textUnderlay.ts`, deleted — recoverable from git
+   history): rasterize each page, extract the invisible text with pdf.js, and
+   rebuild with the text painted in mode 0 underneath the raster.
    **It failed against a real OCR call** — the page-sized raster covers the text,
    and covered text is discarded exactly as mode-3 text is.
 
-Drawing the recovered text *on top* of the raster at zero alpha is the obvious
-next attempt, and the code in `scripts/lib/textUnderlay.ts` now does that — but it
-is **untested against the provider**, so it stays in the harness and does not ship.
-One bench call would settle it.
+Drawing the recovered text *on top* of the raster at zero alpha was the obvious
+next attempt and was never tested against the provider. Since the genuine fix is
+server-side (below), the harness was retired rather than carried indefinitely.
 
 The genuine fix is not client-side at all: the per-page image path already works
 (the failing document returns 17/17 clean pages when its pages are sent as PNGs).

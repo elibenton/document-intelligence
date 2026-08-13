@@ -5,27 +5,9 @@ import { v } from "convex/values";
 // Get a single entity
 // ---------------------------------------------------------------------------
 
-export const get = query({
-  args: { id: v.id("entities") },
-  handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
-  },
-});
-
 // ---------------------------------------------------------------------------
 // List entities by type
 // ---------------------------------------------------------------------------
-
-export const listByType = query({
-  args: { type: v.string() },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("entities")
-      .withIndex("by_type", (q) => q.eq("type", args.type))
-      .order("desc")
-      .take(100);
-  },
-});
 
 // ---------------------------------------------------------------------------
 // List all entities (for homepage grouped display)

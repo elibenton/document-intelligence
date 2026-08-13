@@ -10,7 +10,6 @@ const jobValidator = v.object({
   status: v.string(),
   queuedAt: v.optional(v.number()),
   workId: v.optional(v.string()),
-  progress: v.optional(v.number()),
   startedAt: v.optional(v.number()),
   completedAt: v.optional(v.number()),
   errorMessage: v.optional(v.string()),
