@@ -137,7 +137,7 @@ From there the pipeline is a chain of **stages**, each one a job row in
 | Stage | Where | What it does |
 |---|---|---|
 | `parse` | `processingNode.runDocumentUnderstanding` | One whole-file Interfaze completion: OCR + object detection + structured analysis. Its precontext becomes `pages`, `blocks`, `detections`. |
-| `analyze` | `processingNode.runAnalyze` | Table of contents, document types, split suggestions, suggested extractions. Prompt is user-editable — see `analyzePrompt.ts`. |
+| `analyze` | `processingNode.runAnalyze` | Title, kind, category, date, table of contents, suggested extractions. Web clips take this path too — they used to have a parallel metadata pass whose schema had drifted. Prompt is user-editable — see `analyzePrompt.ts`. |
 | `rename` | *(recordings only)* `renameNode.runRenamePass` | Writes `displayName` from the transcript. Documents don't need it — Analyze returns `display_title` directly. |
 | `extract` | `processingNode.runExtract` | Pulls entities/answers per the suggested template → `extractions`, `entities`, `mentions`, `relationships`. Auto-runs: `metadata.ts` schedules it the moment the suggestions exist, because that is when they exist. There is **no** human review gate — `documents.reviewQueue` and `ReviewDialog` do not exist. Re-running with edited roles is the extract dialog in `PipelineProgress`. |
 | `transcribe` | `processingNode.runTranscribe` | The audio/video branch, taken instead of `parse` → `transcriptSegments`. |

@@ -33,7 +33,6 @@ import type * as interfazeOcr from "../interfazeOcr.js";
 import type * as kinds from "../kinds.js";
 import type * as mergeSuggestions from "../mergeSuggestions.js";
 import type * as metadata from "../metadata.js";
-import type * as metadataNode from "../metadataNode.js";
 import type * as ocrChecks from "../ocrChecks.js";
 import type * as pageImages from "../pageImages.js";
 import type * as pages from "../pages.js";
@@ -96,7 +95,6 @@ declare const fullApi: ApiFromModules<{
   kinds: typeof kinds;
   mergeSuggestions: typeof mergeSuggestions;
   metadata: typeof metadata;
-  metadataNode: typeof metadataNode;
   ocrChecks: typeof ocrChecks;
   pageImages: typeof pageImages;
   pages: typeof pages;

@@ -122,7 +122,11 @@ export const createFromClip = internalMutation({
       completedAt: Date.now(),
     });
 
-    await ctx.scheduler.runAfter(0, internal.metadataNode.runMetadataPass, {
+    // Clips take the ordinary Analyze path. They used to have their own
+    // metadata pass with a hand-maintained subset schema, which had drifted:
+    // it omitted suggested_extractions, so buildExtractionSchema returned null
+    // and runInitialExtraction bailed — no clip has ever been extracted.
+    await ctx.scheduler.runAfter(0, internal.processingNode.runAnalyze, {
       documentId,
     });
 

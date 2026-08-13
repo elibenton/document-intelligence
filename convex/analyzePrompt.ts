@@ -232,7 +232,7 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
       primary_kind: {
         type: "string",
         description:
-          'The precise, specific name of this document type, read from kind_evidence — the exact named or numbered form, statute-named instrument, or standard document type when the document has one ("irs form 211", "writ of mandate", "certificate of incorporation"), matching the last element of the first document_types path. Only a generic term ("letter", "report") when nothing more specific applies. Lowercase.',
+          'The precise, specific name of this document type, read from kind_evidence — the exact named or numbered form, statute-named instrument, or standard document type when the document has one ("irs form 211", "writ of mandate", "certificate of incorporation"). Only a generic term ("letter", "report") when nothing more specific applies. Lowercase.',
       },
       primary_category: {
         type: "string",
@@ -300,62 +300,10 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
       // A document type is a path, not a word: "Writ of Mandate" is a kind of
       // "Legal Document", and both are true of the same file. Multi-level and
       // multi-select, so the type filter can be broad or exact.
-      document_types: {
-        type: "array",
-        description:
-          "Document types, most specific first. Each is a broad-to-specific path, e.g. [\"legal document\", \"writ of mandate\"] or [\"government form\", \"abc form 211\"]. Include a second entry only when the document genuinely is two things at once.",
-        items: {
-          type: "object",
-          properties: {
-            path: {
-              type: "array",
-              items: { type: "string" },
-              description:
-                "1-3 lowercase levels, broadest first, most specific last",
-            },
-            confidence: {
-              type: "number",
-              description: "0-1 confidence in this classification",
-            },
-          },
-          required: ["path", "confidence"],
-        },
-      },
-      // Scanned batches routinely staple unrelated documents together. Analyze
+       // Scanned batches routinely staple unrelated documents together. Analyze
       // reads the whole text, so it is the only pass positioned to say where one
       // document ends. These are *suggestions*: nothing splits without the user.
-      suggested_splits: {
-        type: "array",
-        description:
-          "Page ranges where this file appears to contain more than one distinct document. Return an empty array when the file is a single document — which is the common case, so do not invent boundaries from topic changes alone. Ranges must be contiguous, non-overlapping, and cover the whole file when present.",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string", description: "Title of this sub-document" },
-            start_page: { type: "integer", description: "1-based first page" },
-            end_page: { type: "integer", description: "1-based last page, inclusive" },
-            document_type: {
-              type: "string",
-              description: "Lowercase kind of this sub-document",
-            },
-            reason: {
-              type: "string",
-              description:
-                "The evidence in the text for the boundary (new caption page, new letterhead, restarted numbering, signature block)",
-            },
-            confidence: { type: "number", description: "0-1" },
-          },
-          required: [
-            "title",
-            "start_page",
-            "end_page",
-            "document_type",
-            "reason",
-            "confidence",
-          ],
-        },
-      },
-      // The pills in the extraction review queue. `suggested_roles` above is the
+       // The pills in the extraction review queue. `suggested_roles` above is the
       // per-entity-role version this generalizes: these are whole extraction
       // prompts the user can run, edit, or discard.
       suggested_extractions: {
@@ -447,11 +395,9 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
       "primary_kind",
       "document_date",
       "primary_category",
-      "document_types",
       "tags",
       "suggested_roles",
       "suggested_extractions",
-      "suggested_splits",
       "table_of_contents",
       "additional",
     ],

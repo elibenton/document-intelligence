@@ -32,15 +32,6 @@ export const saveMetadataResult = internalMutation({
       document_date?: { value?: string; precision?: string; evidence?: string };
       tags?: string[];
       suggested_roles?: Array<{ role?: string; question?: string; entity_type?: string }>;
-      document_types?: Array<{ path?: string[]; confidence?: number }>;
-      suggested_splits?: Array<{
-        title?: string;
-        start_page?: number;
-        end_page?: number;
-        document_type?: string;
-        reason?: string;
-        confidence?: number;
-      }>;
       suggested_extractions?: Array<{
         label?: string;
         prompt?: string;
@@ -73,38 +64,6 @@ export const saveMetadataResult = internalMutation({
       parsed.table_of_contents,
       document.pageCount
     );
-
-    const documentTypes = (parsed.document_types ?? [])
-      .map((entry) => ({
-        path: (entry.path ?? [])
-          .filter((level): level is string => typeof level === "string" && !!level.trim())
-          .map((level) => level.trim().toLowerCase())
-          .slice(0, 3),
-        confidence: clamp01(entry.confidence),
-      }))
-      .filter((entry) => entry.path.length > 0);
-
-    const lastPage = document.pageCount && document.pageCount > 0 ? document.pageCount : undefined;
-    const suggestedSplits = (parsed.suggested_splits ?? [])
-      .map((split) => ({
-        title: (split.title ?? "").trim(),
-        startPage: Math.trunc(Number(split.start_page)),
-        endPage: Math.trunc(Number(split.end_page)),
-        documentType: (split.document_type ?? "").trim().toLowerCase(),
-        reason: (split.reason ?? "").trim(),
-        confidence: clamp01(split.confidence),
-      }))
-      // A boundary outside the document, or backwards, is noise rather than a
-      // suggestion worth showing — drop it instead of clamping it into shape.
-      .filter(
-        (split) =>
-          split.title &&
-          Number.isFinite(split.startPage) &&
-          Number.isFinite(split.endPage) &&
-          split.startPage >= 1 &&
-          split.endPage >= split.startPage &&
-          (lastPage === undefined || split.endPage <= lastPage)
-      );
 
     const suggestedExtractions = (parsed.suggested_extractions ?? [])
       .map((suggestion) => ({
@@ -150,13 +109,11 @@ export const saveMetadataResult = internalMutation({
       // "Analyze ran and found no sections", and the Contents tab treats it
       // the same as absent by falling back to SectionHeader blocks.
       tableOfContents: toc,
-      documentTypes,
       primaryCategory,
       // Cleared rather than left stale when a re-run can no longer date the
       // document: the previous run's answer is not evidence for this one.
       documentDate: documentDate?.documentDate,
       documentDatePrecision: documentDate?.documentDatePrecision,
-      suggestedSplits,
       suggestedExtractions,
       metadata: JSON.stringify({
         title: parsed.title,
@@ -248,12 +205,6 @@ export function sanitizeDocumentDate(
   if (parsed.getTime() > now) return null;
 
   return { documentDate: value, documentDatePrecision: shape };
-}
-
-/** Model confidences arrive as anything; the UI needs a real 0-1. */
-function clamp01(value: unknown): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
 }
 
 /** Hard ceiling on outline entries — a plausible TOC, not a re-typed document. */

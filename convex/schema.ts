@@ -122,25 +122,10 @@ export default defineSchema({
     // Broad-to-specific type paths from Analyze (["legal document",
     // "writ of mandate"]). `kinds`/`primaryKind` stay the flat handle every
     // existing consumer reads; this is the hierarchy behind them.
-    documentTypes: v.optional(
-      v.array(v.object({ path: v.array(v.string()), confidence: v.number() }))
-    ),
-    // Analyze's guess at where this file contains more than one document.
+     // Analyze's guess at where this file contains more than one document.
     // Suggestions only — splitting is a user action and would need provenance
     // (a parent document id on the pieces), which does not exist yet.
-    suggestedSplits: v.optional(
-      v.array(
-        v.object({
-          title: v.string(),
-          startPage: v.number(),
-          endPage: v.number(),
-          documentType: v.string(),
-          reason: v.string(),
-          confidence: v.number(),
-        })
-      )
-    ),
-    // Extraction pills for the review queue: label, the editable prompt behind
+     // Extraction pills for the review queue: label, the editable prompt behind
     // it, and why this document warrants it.
     suggestedExtractions: v.optional(
       v.array(
