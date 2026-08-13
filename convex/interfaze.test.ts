@@ -208,6 +208,25 @@ describe("ocrPrecontextToPages", () => {
     expect(pages.every((p) => p.height === 1584)).toBe(true);
   });
 
+  it("takes the page height from the stack, not from the sections returned", () => {
+    // Observed on a third scan of the same file: eleven sections, still
+    // declaring the twelve-page height. Dividing by the sections stretched
+    // every page to 1728 against a real 1584 — a 9% error in stored geometry
+    // that no amount of correct text would have made visible.
+    const short = stackedResult(
+      Array.from({ length: 12 }, (_, i) => `page ${i}`)
+    );
+    short.sections = short.sections.slice(0, 11);
+
+    const pages = ocrPrecontextToPages(pre(short));
+
+    expect(pages).toHaveLength(11);
+    expect(pages.every((p) => p.height === 1584)).toBe(true);
+    expect(pages.map((p) => p.text)).toEqual(
+      Array.from({ length: 11 }, (_, i) => `page ${i}`)
+    );
+  });
+
   it("keeps a sparse single page whole rather than splitting its sections", () => {
     // The false positive the split has to survive: two sections on one page
     // whose content happens to sit in its top half, so the height arithmetic

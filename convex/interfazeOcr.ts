@@ -155,47 +155,61 @@ interface PageGroup {
 }
 
 /**
- * Whether one entry's sections are whole pages stacked into it.
+ * The page height one entry's sections are stacked at, or null if they are not
+ * a stack.
  *
  * Interfaze returns a run of pages as a single entry: one section per page,
  * every section's bounds page-local, and `height` reporting the *stacked*
  * image rather than the page. The same 12-page application came back this way
- * twice, differently — once as six 2-page entries (height 3168), once as one
- * 12-page entry (height 19008) — against a real page height of 1584. Read as
- * one page each, every page of the document lands on top of page 1: 843 lines
- * with ten page headers all within y 45-130 of each other.
+ * three times, differently — six 2-page entries (height 3168), one 12-page
+ * entry (height 19008), then one 11-section entry still reporting 19008. Read
+ * as one page each, every page of the document lands on top of page 1: 843
+ * lines with ten page headers all within y 45-130 of each other.
  *
- * Two independent tells have to agree, because a wrong split silently blanks
- * pages and this function has the regression history for it:
+ * The page count comes from the geometry, not from the section count. That
+ * third payload is why: a stack can arrive with a page missing but still
+ * declare the full height, and dividing by its 11 sections stretched every
+ * page by 12/11. Flooring height by the height the coordinates occupy is the
+ * largest count that still leaves each page taller than its own content, which
+ * is the one invariant available here.
  *
- *  - The declared height is the section count times the height the coordinates
- *    actually occupy. Both observed payloads divide out to 1584, and 1224x1584
- *    is exactly the source PDF's letter aspect, which is the corroboration
- *    that this arithmetic means what it looks like it means.
- *  - Every section starts near the top. Sections that are regions of one page
- *    tile down it, so the second one begins below the middle; sections that are
- *    pages all begin at their own page's top margin. This is what separates a
- *    stack from a sparse page whose content happens to sit in its top half.
+ * Then two independent tells have to agree, because a wrong split silently
+ * blanks pages and this function has the regression history for it:
+ *
+ *  - There must be at least two slots, and no fewer than there are sections.
+ *    A page whose sections tile down it fills its own height, so it yields one
+ *    slot and is left alone.
+ *  - Every section must start near the top. Sections that are regions of a
+ *    page begin below one another; sections that are pages each begin at their
+ *    own top margin. This is what separates a stack from a sparse page whose
+ *    content happens to sit in its top half.
+ *
+ * All three observed payloads divide out to 1584, and 1224x1584 is exactly the
+ * source PDF's letter aspect — the corroboration that this arithmetic means
+ * what it looks like it means.
  */
-function sectionsArePages(entry: OcrResult, sections: OcrSection[]): boolean {
-  if (sections.length < 2 || !entry.height) return false;
+function stackedPageHeight(
+  entry: OcrResult,
+  sections: OcrSection[]
+): number | null {
+  if (sections.length < 2 || !entry.height) return null;
   const bounds = sections.map(sectionCoordinateBounds);
   const extent = Math.max(...bounds.map((b) => b.maxY));
-  if (extent <= 0) return false;
+  if (extent <= 0) return null;
 
-  const stacked = extent * sections.length;
-  if (Math.abs(entry.height - stacked) > entry.height * 0.1) return false;
+  const slots = Math.floor(entry.height / extent);
+  if (slots < 2 || slots < sections.length) return null;
 
-  const pageHeight = entry.height / sections.length;
-  return bounds.every((b) => b.minY < pageHeight / 2);
+  const pageHeight = entry.height / slots;
+  return bounds.every((b) => b.minY < pageHeight / 2) ? pageHeight : null;
 }
 
 /** One OCR entry expanded into the page or pages it actually covers. */
 function expandEntry(entry: OcrResult): PageGroup[] {
   const sections = entry.sections ?? [];
 
-  if (sectionsArePages(entry, sections)) {
-    const pageHeight = entry.height! / sections.length;
+  const pageHeight = stackedPageHeight(entry, sections);
+  if (pageHeight !== null) {
     return sections.map((section) => {
       const bounds = sectionCoordinateBounds(section);
       return {
