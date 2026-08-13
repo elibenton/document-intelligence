@@ -20,6 +20,7 @@ import {
   failureCodeOf,
 } from "./interfaze";
 import type { OcrPageResult } from "./interfaze";
+import { checkGeometry } from "./ocrChecks";
 import {
   analyzeSystemPrompt,
   buildAnalyzePrompt,
@@ -280,6 +281,22 @@ export const runDocumentUnderstanding = internalAction({
           `Scan produced ${blankPages.length}/${parsedPages.length} pages with no text ` +
             `(pages ${blankPages.map((p) => p.pageNumber + 1).join(", ")}) — ` +
             `possible pagination misread`
+        );
+      }
+
+      // Geometry is wrong by arithmetic or it is not wrong at all, so this
+      // needs no reference output and runs on every scan. A violation here is
+      // a viewer overlay that will land in the wrong place with no error
+      // anywhere — the failure mode that is otherwise invisible until someone
+      // notices a highlight over the wrong sentence.
+      const geometry = checkGeometry(parsedPages);
+      if (geometry.violations > 0) {
+        console.error(
+          `OCR geometry: ${geometry.violations} violations across ` +
+            `${geometry.checked} blocks ` +
+            `(${Object.entries(geometry.byKind)
+              .map(([kind, n]) => `${kind}=${n}`)
+              .join(", ")}) — ${geometry.examples.join("; ")}`
         );
       }
 

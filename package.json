@@ -9,10 +9,7 @@
     "deploy": "npx @convex-dev/static-hosting deploy",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview",
-    "bench": "tsx scripts/scan-bench.ts",
-    "bench:toc": "tsx scripts/toc-bench.ts",
-    "bench:sample": "tsx scripts/make-sample-pdf.ts"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
@@ -49,7 +46,6 @@
     "globals": "^17.4.0",
     "shadcn": "^4.0.8",
     "tailwindcss": "^4.2.1",
-    "tsx": "^4.23.12",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.56.1",
     "vite": "^7.3.1",

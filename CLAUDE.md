@@ -44,10 +44,13 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
   Grep the call sites yourself; `internal.x.y` and a bare symbol name are
   different searches, and index names are shared across tables (`by_page` exists
   on both `blocks` and `pageTranslations`, and only one of them was live).
-- **One-off scripts do not live in `scripts/`.** Anything named `tmp-*`, or any
-  backfill that has already run, is finished work — git history keeps it.
-  `scripts/` is not yet in any tsconfig `include`, so nothing there is
-  typechecked; treat imports from `convex/` there as unverified.
+- **There is no `scripts/` directory, and adding one back needs a reason.** It
+  held 4,122 lines of concluded PDF/OCR investigation — no CI, no committed
+  baseline, real API spend per run, and typechecked by nothing (it was in no
+  tsconfig `include`). The findings live in `docs/pdf-edge-cases.md`, the fix
+  shipped in `src/lib/pdfPreflight.ts`, and git history holds the apparatus. A
+  metric that can be computed at the Interfaze chokepoint belongs there instead;
+  only a metric needing a known-correct answer justifies an offline harness.
 
 ## Measurement: production traffic is the benchmark
 

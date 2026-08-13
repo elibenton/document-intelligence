@@ -61,7 +61,6 @@ npm test         # vitest, pure-logic unit tests only
 npm run lint
 npm run build    # tsc -b && vite build
 npm run deploy   # static hosting via @convex-dev/static-hosting
-npm run bench    # PDF/OCR benchmark harness (scripts/, spends real API money)
 ```
 
 ---
@@ -139,8 +138,7 @@ From there the pipeline is a chain of **stages**, each one a job row in
 |---|---|---|
 | `parse` | `processingNode.runDocumentUnderstanding` | One whole-file Interfaze completion: OCR + object detection + structured analysis. Its precontext becomes `pages`, `blocks`, `detections`. |
 | `analyze` | `processingNode.runAnalyze` | Table of contents, document types, split suggestions, suggested extractions. Prompt is user-editable — see `analyzePrompt.ts`. |
-| *(review)* | `documents.reviewQueue` + `ReviewDialog` | **Human gate.** Extraction does not auto-run; the user confirms or edits the suggested template, or explicitly skips (skipping is recorded, never silent). |
-| `extract` | `processingNode.runExtract` | Pulls entities/answers per the confirmed template → `extractions`, `entities`, `mentions`, `relationships`. |
+| `extract` | `processingNode.runExtract` | Pulls entities/answers per the suggested template → `extractions`, `entities`, `mentions`, `relationships`. Auto-runs: `metadata.ts` schedules it the moment the suggestions exist, because that is when they exist. There is **no** human review gate — `documents.reviewQueue` and `ReviewDialog` do not exist. Re-running with edited roles is the extract dialog in `PipelineProgress`. |
 | `transcribe` | `processingNode.runTranscribe` | The audio/video branch, taken instead of `parse` → `transcriptSegments`. |
 
 Two independent workpools (`convex/convex.config.ts`): `processingWorkpool` for
@@ -212,7 +210,6 @@ src/
   hooks/useUpload.ts
   lib/             pure helpers — preflight, geometry, types (this is what's tested)
 extension/         browser web-clipper, posts to /clip
-scripts/           benchmark + corpus tooling (make-variants, scan-bench)
 docs/              findings worth keeping: PDF edge cases, provider bug reports
 ```
 
