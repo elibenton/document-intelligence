@@ -15,7 +15,7 @@ import { internalAction, internalMutation, internalQuery, action } from "./_gene
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { UsageLogger } from "./interfaze";
+import type { UsageLogger } from "./interfazeCost";
 import { usageLogger } from "./apiLogs";
 import { healthReporter } from "./providerHealth";
 import type { HealthReporter, ProviderStatus } from "./providerHealth";

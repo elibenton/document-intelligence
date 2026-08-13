@@ -10,7 +10,7 @@ import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { ApiUsage, UsageLogger } from "./interfaze";
+import type { ApiUsage, UsageLogger } from "./interfazeCost";
 
 /** Shard count for the denormalized usage totals (see schema.apiUsageTotals). */
 const TOTALS_SHARDS = 8;
