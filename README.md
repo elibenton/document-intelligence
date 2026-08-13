@@ -112,7 +112,7 @@ re-encoding won't save it. That single fact explains most of the preflight code.
 ## 3. What happens when you drop a file in
 
 ```
-DropZone / UploadButton
+DropZone / GlobalDropOverlay
    └─ useUpload (src/hooks/useUpload.ts)
         ├─ preflight in the browser  ── pdfPreflight.ts / audioPreflight.ts
         │   (is there a text layer? too many pages? needs transcoding?)
