@@ -561,7 +561,6 @@ export default defineSchema({
   })
     .index("by_document", ["documentId", "stage"])
     .index("by_status", ["status"])
-    .index("by_status_and_queuedAt", ["status", "queuedAt"])
     .index("by_stage_and_status", ["stage", "status"]),
 
   // Operator controls for the shared Interfaze workpool. Kept outside the

@@ -31,11 +31,6 @@ import { usageLogger } from "./apiLogs";
 import type { Doc, Id } from "./_generated/dataModel";
 import Papa from "papaparse";
 
-// Watchdog: actions that hit Convex's 10-minute kill never run their catch
-// blocks, stranding documents in "parsing"/"extracting" with a "running" job
-// forever. Every stage schedules failIfStuck as a dead-man's switch; a job
-// still "running" past the action lifetime is dead by definition.
-const WATCHDOG_DELAY_MS = 12 * 60 * 1000;
 const CSV_INDEX_BYTES = 700_000;
 const CSV_INDEX_ROWS = 2_000;
 const CSV_ROWS_PER_PAGE = 100;
@@ -108,18 +103,6 @@ async function csvSearchPages(
         },
       ],
     };
-  });
-}
-
-
-async function armWatchdog(
-  ctx: ActionCtx,
-  documentId: Id<"documents">,
-  stage: string
-) {
-  await ctx.scheduler.runAfter(WATCHDOG_DELAY_MS, internal.processing.failIfStuck, {
-    documentId,
-    stage,
   });
 }
 
@@ -244,7 +227,6 @@ export const runDocumentUnderstanding = internalAction({
       stage: "parse",
       status: "running",
     });
-    await armWatchdog(ctx, args.documentId, "parse");
 
     try {
       // --- Scan -------------------------------------------------------------
@@ -470,7 +452,6 @@ export const runAnalyze = internalAction({
       stage: "analyze",
       status: "running",
     });
-    await armWatchdog(ctx, args.documentId, "analyze");
 
     try {
       const pages: { pageNumber: number; text: string }[] = await ctx.runQuery(
@@ -561,7 +542,6 @@ export const runExtract = internalAction({
       stage: "extract",
       status: "running",
     });
-    await armWatchdog(ctx, args.documentId, "extract");
 
     try {
       const schema = JSON.parse(args.pageSchema);
@@ -628,7 +608,6 @@ export const runTranscribe = internalAction({
       stage: "transcribe",
       status: "running",
     });
-    await armWatchdog(ctx, args.documentId, "transcribe");
 
     try {
       const transcript = await transcribe(
@@ -758,7 +737,6 @@ export const runTemplateExtraction = internalAction({
       stage: "extract",
       status: "running",
     });
-    await armWatchdog(ctx, args.documentId, "extract");
 
     try {
       const result = await extract(source, apiKey, pageSchema, {

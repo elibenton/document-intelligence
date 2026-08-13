@@ -10,13 +10,15 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { buildExtractionSchema } from "./extractionSchema";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
+import { vOnCompleteArgs } from "@convex-dev/workpool";
 
 // Watchdog: actions that hit Convex's 10-minute kill never run their catch
 // blocks, stranding documents in "parsing"/"extracting" with a "running" job
-// forever. armWatchdog (processingNode.ts) schedules failIfStuck as a
-// dead-man's switch; a job still "running" past the action lifetime is dead.
+// forever. The pool's onComplete (processing.jobComplete) is what notices:
+// it fires on the kill itself, so no stage needs its own timer.
 
-const STALE_AFTER_MS = 11 * 60 * 1000;
+export const CANCELED_MESSAGE =
+  "Processing was stopped before this job started.";
 
 const templateRoleValidator = v.object({
   role: v.string(),
@@ -47,7 +49,7 @@ export const runTranscription = action({
       ctx,
       internal.processingNode.runTranscribe,
       { documentId: args.documentId },
-      processingEnqueueOptions(paused)
+      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "transcribe" })
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -110,7 +112,7 @@ export const runFullPipeline = action({
           ctx,
           internal.processingNode.runTranscribe,
           { documentId: args.documentId },
-          processingEnqueueOptions(paused)
+          processingEnqueueOptions(paused, { documentId: args.documentId, stage: "parse" })
         )
       : await processingPool.enqueueAction(
           ctx,
@@ -121,7 +123,7 @@ export const runFullPipeline = action({
               ? {}
               : { bypassCache: args.bypassCache }),
           },
-          processingEnqueueOptions(paused)
+          processingEnqueueOptions(paused, { documentId: args.documentId, stage: "parse" })
         );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -158,7 +160,7 @@ export const runAnalyze = action({
       ctx,
       internal.processingNode.runAnalyze,
       args,
-      processingEnqueueOptions(paused)
+      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "analyze" })
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -221,13 +223,13 @@ export const retryBlocked = mutation({
             ctx,
             internal.processingNode.runTranscribe,
             { documentId: doc._id },
-            processingEnqueueOptions(paused)
+            processingEnqueueOptions(paused, { documentId: doc._id, stage: "parse" })
           )
         : await processingPool.enqueueAction(
             ctx,
             internal.processingNode.runDocumentUnderstanding,
             { documentId: doc._id },
-            processingEnqueueOptions(paused)
+            processingEnqueueOptions(paused, { documentId: doc._id, stage: "parse" })
           );
       if (job) {
         await ctx.db.patch(job._id, {
@@ -278,7 +280,7 @@ export const runExtraction = action({
       ctx,
       internal.processingNode.runExtract,
       args,
-      processingEnqueueOptions(paused)
+      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "extract" })
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -330,7 +332,7 @@ export const runInitialExtraction = internalAction({
       ctx,
       internal.processingNode.runExtract,
       { documentId: args.documentId, pageSchema },
-      processingEnqueueOptions(paused)
+      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "extract" })
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -359,7 +361,7 @@ export const runTemplateExtraction = action({
       ctx,
       internal.processingNode.runTemplateExtraction,
       args,
-      processingEnqueueOptions(paused)
+      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "extract" })
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -498,28 +500,84 @@ export const updateJobStatus = internalMutation({
  * failure instead of showing a spinner forever. A retry refreshes startedAt,
  * so a stale watchdog from an earlier attempt never kills a fresh run.
  */
-export const failIfStuck = internalMutation({
-  args: {
-    documentId: v.id("documents"),
-    stage: v.string(),
-  },
+/**
+ * The terminal state for a processing stage, decided in exactly one place.
+ *
+ * The workpool calls this whether the work succeeded, failed, or was canceled,
+ * and — for a pool that retries — only once retries are exhausted. That covers
+ * the two cases this layer used to hand-roll:
+ *
+ *  - A Node action killed at Convex's 10-minute limit never runs its own catch,
+ *    so nothing recorded the failure and the document sat on "parsing" forever.
+ *    Five stages each armed a `failIfStuck` timer to notice. onComplete fires
+ *    on the kill itself, so there is nothing to notice late.
+ *  - "Stop processing" cancels queued work. A 64-row self-rescheduling batch
+ *    walker used to mark those jobs canceled. A canceled work item reports
+ *    itself here instead.
+ *
+ * A stage's own catch still writes its own failure — that path has a real error
+ * message and a FailureCode. This only speaks for the cases where the action
+ * never got to speak for itself, so it takes care not to overwrite a verdict
+ * that is already terminal.
+ */
+export const jobComplete = internalMutation({
+  args: vOnCompleteArgs(
+    v.object({
+      documentId: v.id("documents"),
+      stage: v.string(),
+    })
+  ),
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (args.result.kind === "success") return null;
+    const { documentId, stage } = args.context;
+
     const job = await ctx.db
       .query("processingJobs")
       .withIndex("by_document", (q) =>
-        q.eq("documentId", args.documentId).eq("stage", args.stage)
+        q.eq("documentId", documentId).eq("stage", stage)
       )
       .first();
-    if (!job || job.status !== "running") return null;
-    if (job.startedAt && Date.now() - job.startedAt < STALE_AFTER_MS) return null;
 
-    const errorMessage = `${args.stage} timed out — the processing action was terminated before it could finish (document may be too large)`;
-    await ctx.db.patch(job._id, { status: "failed", errorMessage });
+    // The action already recorded its own outcome — leave it.
+    if (job && (job.status === "failed" || job.status === "completed")) {
+      return null;
+    }
 
-    const doc = await ctx.db.get(args.documentId);
-    if (doc && (doc.status === "parsing" || doc.status === "extracting")) {
-      await ctx.db.patch(args.documentId, { status: "failed", errorMessage });
+    const canceled = args.result.kind === "canceled";
+    const errorMessage = canceled
+      ? CANCELED_MESSAGE
+      : `${stage} stopped before it could finish — the processing action was terminated (document may be too large): ${
+          args.result.kind === "failed" ? args.result.error : "unknown"
+        }`;
+
+    if (job) {
+      await ctx.db.patch(job._id, {
+        status: canceled ? "canceled" : "failed",
+        errorMessage,
+      });
+    }
+
+    const doc = await ctx.db.get(documentId);
+    if (!doc) return null;
+    // A canceled extract leaves a document that is still fully parsed; only an
+    // interrupted parse leaves it unusable.
+    if (canceled && stage === "extract") {
+      if (doc.status === "extracting") {
+        await ctx.db.patch(documentId, {
+          status: "parsed",
+          errorMessage: undefined,
+          errorCode: undefined,
+        });
+      }
+      return null;
+    }
+    if (doc.status === "parsing" || doc.status === "extracting") {
+      await ctx.db.patch(documentId, {
+        status: "failed",
+        errorMessage,
+        ...(canceled ? { errorCode: "processing_canceled" } : {}),
+      });
     }
     return null;
   },

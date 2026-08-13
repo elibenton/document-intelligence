@@ -155,11 +155,19 @@ Pool parallelism is set per-enqueue, not in the constructor
 every enqueue, so an enqueue carrying the constructor's default would resume a
 paused queue. Threading `paused` through each enqueue is what makes pause stick.
 
-**Watchdogs.** A Convex action killed at the 10-minute limit never runs its own
-`catch`, which would strand a document in `parsing` forever. So stages arm a
-dead-man's switch (`processing.failIfStuck`, `pageImages.failIfRenderStuck`): a
-job still `running` past the maximum action lifetime is declared dead. If you add
-a stage, add its watchdog.
+**Terminal state comes from the pool, not a timer.** A Convex action killed at
+the 10-minute limit never runs its own `catch`, which would strand a document in
+`parsing` forever. Both pools pass an `onComplete` — `processing.jobComplete` and
+`pageImages.renderJobComplete` — which the workpool calls whether the work
+succeeded, failed, or was canceled, and (where the pool retries) only once
+retries are exhausted. That covers the kill, and it covers "stop processing"
+cancelling queued work.
+
+A stage's own `catch` still writes its own failure; that path has a real message
+and a `FailureCode`. `onComplete` only speaks for the cases where the action
+never got to speak for itself, and it will not overwrite an already-terminal
+verdict. **If you add a stage, pass the job context to
+`processingEnqueueOptions` — there is no watchdog to add.**
 
 ### Rendering, separately
 

@@ -74,6 +74,16 @@ never drift from what the UI shows. Do not freeze it into a constant.
 `documentTypes` (a hierarchical path) and `suggestedSplits` used to be a third
 and fourth vocabulary. Both were write-only and are gone.
 
+## Reliability
+
+Terminal state for a queued stage is written in exactly one place: the pool's
+`onComplete` (`processing.jobComplete`, `pageImages.renderJobComplete`). It fires
+on success, failure and cancellation — including the Convex 10-minute kill, which
+an action's own `catch` cannot observe. Do not add a dead-man's-switch timer
+alongside it; five of those existed and every one duplicated a verdict
+`onComplete` already had. New stages just pass `{ documentId, stage }` to
+`processingEnqueueOptions`.
+
 ## Measurement: production traffic is the benchmark
 
 Every Interfaze call is a benchmark row. `chatCompletion` (`convex/interfaze.ts`)

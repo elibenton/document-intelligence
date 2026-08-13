@@ -1,11 +1,10 @@
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { components, internal } from "./_generated/api";
+import { components } from "./_generated/api";
 import { v } from "convex/values";
 import { processingPool, PROCESSING_MAX_PARALLELISM } from "./processingPool";
 
 const CONTROL_KEY = "global";
-const CANCELED_MESSAGE = "Processing was stopped before this job started.";
 
 /** `pausedReason` for a pause the pipeline gave itself. See schema.ts. */
 export const PROVIDER_BLOCKED = "provider_blocked";
@@ -127,56 +126,16 @@ export const cancelWaiting = mutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    const before = Date.now();
     // Freeze new starts first. Workpool cancellation is cooperative: queued
     // work will not start, while actions already running are allowed to finish.
     // Stopping the queue by hand is a deliberate pause, so it carries no
     // reason and no later retry will lift it automatically.
     await writeControl(ctx, true);
+    // Each canceled work item reports itself through the pool's onComplete
+    // (processing.jobComplete), which writes its own terminal state. This used
+    // to walk processingJobs in 64-row self-rescheduling batches to do the same
+    // thing on a delay.
     await processingPool.cancelAll(ctx);
-    await ctx.scheduler.runAfter(0, internal.processingControl.markCanceledBatch, {
-      before,
-    });
-    return null;
-  },
-});
-
-export const markCanceledBatch = internalMutation({
-  args: { before: v.number() },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const pending = await ctx.db
-      .query("processingJobs")
-      .withIndex("by_status_and_queuedAt", (q) =>
-        q.eq("status", "pending").lte("queuedAt", args.before)
-      )
-      .take(64);
-    for (const job of pending) {
-      await ctx.db.patch(job._id, {
-        status: "canceled",
-        errorMessage: CANCELED_MESSAGE,
-      });
-      const document = await ctx.db.get(job.documentId);
-      if (!document) continue;
-      if (job.stage === "extract") {
-        await ctx.db.patch(job.documentId, {
-          status: "parsed",
-          errorMessage: undefined,
-          errorCode: undefined,
-        });
-      } else {
-        await ctx.db.patch(job.documentId, {
-          status: "failed",
-          errorMessage: CANCELED_MESSAGE,
-          errorCode: "processing_canceled",
-        });
-      }
-    }
-    if (pending.length === 64) {
-      await ctx.scheduler.runAfter(0, internal.processingControl.markCanceledBatch, {
-        before: args.before,
-      });
-    }
     return null;
   },
 });

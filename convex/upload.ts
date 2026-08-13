@@ -110,7 +110,10 @@ export const createDocument = mutation({
       { documentId },
       // Interfaze may have completed a request before a network failure is
       // observed, so automatic retries could duplicate a billable call.
-      processingEnqueueOptions(paused)
+      processingEnqueueOptions(paused, {
+        documentId,
+        stage: isRecording ? "transcribe" : "parse",
+      })
     );
     await ctx.db.insert("processingJobs", {
       documentId,

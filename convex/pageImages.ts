@@ -42,8 +42,6 @@ const nativeBlockValidator = v.object({
 // a document left "rendering" with no live work item at all. It only ever
 // reports; retrying belongs to the pool, so the two never form competing
 // ladders. Every commitPage refreshes renderScheduledAt as the heartbeat.
-const RENDER_STALE_AFTER_MS = 20 * 60 * 1000;
-const RENDER_WATCHDOG_DELAY_MS = 10 * 60 * 1000;
 
 /**
  * Existing derivatives and their versions, used to make upgrades resumable.
@@ -94,62 +92,10 @@ export const beginRender = internalMutation({
         ? (doc.renderAttempts ?? 0) + 1
         : doc.renderAttempts,
     });
-    // One watchdog per attempt. Continuation batches inherit the live one,
-    // which re-arms itself for as long as pages keep committing.
-    if (isNewAttempt) {
-      await ctx.scheduler.runAfter(
-        RENDER_WATCHDOG_DELAY_MS,
-        internal.pageImages.failIfRenderStuck,
-        { documentId: args.documentId, rendererVersion: args.rendererVersion }
-      );
-    }
-    return null;
-  },
-});
-
-/**
- * Dead-man's switch for the derivative renderer. A render that has not
- * committed a page within the stale window is presumed dead: rendering is
- * resumable, so retry it until the attempt budget is spent, then surface the
- * stall as a real failure instead of an endless "Preparing pages".
- */
-export const failIfRenderStuck = internalMutation({
-  args: {
-    documentId: v.id("documents"),
-    rendererVersion: v.number(),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const doc = await ctx.db.get(args.documentId);
-    if (!doc) return null;
-    if (doc.renderStatus !== "rendering" && doc.renderStatus !== "queued") {
-      return null;
-    }
-    if (doc.rendererVersion !== args.rendererVersion) return null;
-
-    const heartbeat = Math.max(
-      doc.renderScheduledAt ?? 0,
-      doc.renderStartedAt ?? 0
-    );
-    if (Date.now() - heartbeat < RENDER_STALE_AFTER_MS) {
-      await ctx.scheduler.runAfter(
-        RENDER_WATCHDOG_DELAY_MS,
-        internal.pageImages.failIfRenderStuck,
-        args
-      );
-      return null;
-    }
-
-    const rendered = doc.renderedPageCount ?? 0;
-    const expected = doc.renderExpectedPages ?? 0;
-    await markRenderFailed(
-      ctx,
-      args.documentId,
-      args.rendererVersion,
-      `Page rendering stalled at ${rendered}/${expected} pages — the render ` +
-        `action stopped making progress and the pool did not recover it. ` +
-        `Retry to resume from page ${rendered}.`
-    );
+    // No watchdog. renderPool retries a killed action and then reports the
+    // verdict once through renderJobComplete — a second timer could only ever
+    // duplicate that, and this one re-armed itself for as long as pages kept
+    // committing.
     return null;
   },
 });
