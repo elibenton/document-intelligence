@@ -29,6 +29,15 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
   write on every OCR line the system had ever produced. Before adding one, name
   the `withIndex` call site; when deleting a query, check whether its index is
   now orphaned.
+- **LSP `findReferences` is authoritative for `src/`, and blind for `convex/`.**
+  Convex functions are called through the `api.*`/`internal.*` codegen proxy,
+  which tsserver does not trace: `findReferences` on `renameNode.runRenamePass`
+  returns only its definition, though `metadata.ts:184` and
+  `processingNode.ts:656` both schedule it. **Never conclude a Convex function is
+  dead from LSP.** Use it freely on plain TS/TSX, where it beats grep (exact,
+  no substring or comment hits); use `grep -rn 'internal\.mod\.fn\|api\.mod\.fn'`
+  on the Convex layer. Neither tool can see index names, which are string
+  literals inside `withIndex("...")` — read the enclosing `query("<table>")`.
 - **Verify a claim about a specific line before acting on it.** Several
   confidently-worded findings in the simplification audit — including one that
   had been sitting in this file — were about already-fixed or unreachable code.
