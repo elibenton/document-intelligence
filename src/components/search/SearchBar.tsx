@@ -243,7 +243,7 @@ export default function SearchBar({
     suggested: "Suggested deep searches",
     history: "Recent searches",
     entity: "Entities",
-    document: "Sources",
+    document: "Library",
     page: "In documents",
   };
 

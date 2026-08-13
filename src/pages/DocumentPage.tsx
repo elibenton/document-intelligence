@@ -3,6 +3,7 @@ import { useParams, useSearchParams, Link, useNavigate } from "react-router-dom"
 import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
+import { extractionKey } from "../../convex/extractionSchema";
 import {
   ImagePdfViewer,
   type ImagePdfViewerRef,
@@ -278,8 +279,7 @@ export default function DocumentPage() {
   const suggestedExtractions = useMemo(
     () =>
       (document?.suggestedExtractions ?? []).filter(
-        (suggestion) =>
-          !extractedKeys.has(suggestion.label.toLowerCase().replace(/\s+/g, "_"))
+        (suggestion) => !extractedKeys.has(extractionKey(suggestion.label))
       ),
     [document?.suggestedExtractions, extractedKeys]
   );

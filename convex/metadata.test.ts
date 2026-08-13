@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeTableOfContents } from "./metadata";
+import { sanitizeDocumentDate, sanitizeTableOfContents } from "./metadata";
 
 describe("sanitizeTableOfContents", () => {
   it("keeps a well-formed outline as-is", () => {
@@ -59,5 +59,69 @@ describe("sanitizeTableOfContents", () => {
       undefined
     );
     expect(entry.page).toBe(40);
+  });
+});
+
+describe("sanitizeDocumentDate", () => {
+  // 2026-08-12, the reference "now" for the future-date checks below.
+  const NOW = Date.UTC(2026, 7, 12);
+
+  it("keeps a full date the document stated", () => {
+    expect(
+      sanitizeDocumentDate(
+        { value: "2026-08-08", precision: "day", evidence: "Dated August 8, 2026" },
+        NOW
+      )
+    ).toEqual({ documentDate: "2026-08-08", documentDatePrecision: "day" });
+  });
+
+  it("keeps month and year precision without padding them out", () => {
+    expect(
+      sanitizeDocumentDate({ value: "2026-08", precision: "month" }, NOW)
+    ).toEqual({ documentDate: "2026-08", documentDatePrecision: "month" });
+    expect(
+      sanitizeDocumentDate({ value: "2019", precision: "year" }, NOW)
+    ).toEqual({ documentDate: "2019", documentDatePrecision: "year" });
+  });
+
+  it("drops an explicit unknown", () => {
+    expect(
+      sanitizeDocumentDate({ value: "", precision: "unknown", evidence: "" }, NOW)
+    ).toBeNull();
+    expect(sanitizeDocumentDate(undefined, NOW)).toBeNull();
+  });
+
+  it("drops a value whose shape contradicts its stated precision", () => {
+    // Claiming day precision on a bare year is the model contradicting
+    // itself; picking a winner would be inventing the missing half.
+    expect(
+      sanitizeDocumentDate({ value: "2026", precision: "day" }, NOW)
+    ).toBeNull();
+    expect(
+      sanitizeDocumentDate({ value: "2026-08-08", precision: "year" }, NOW)
+    ).toBeNull();
+  });
+
+  it("drops anything that isn't an ISO prefix", () => {
+    for (const value of ["August 8, 2026", "08/08/2026", "2026-8-8", "unknown", "n.d."]) {
+      expect(sanitizeDocumentDate({ value, precision: "day" }, NOW)).toBeNull();
+    }
+  });
+
+  it("drops an impossible calendar date", () => {
+    expect(
+      sanitizeDocumentDate({ value: "2026-02-31", precision: "day" }, NOW)
+    ).toBeNull();
+  });
+
+  it("drops a date in the future", () => {
+    // No document states a creation date it hasn't reached — a parse error or
+    // a hallucination either way.
+    expect(
+      sanitizeDocumentDate({ value: "2027-01-01", precision: "day" }, NOW)
+    ).toBeNull();
+    expect(
+      sanitizeDocumentDate({ value: "2030", precision: "year" }, NOW)
+    ).toBeNull();
   });
 });

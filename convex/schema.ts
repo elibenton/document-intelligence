@@ -1,6 +1,38 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+/**
+ * How one list is currently being looked at: which properties show, how rows
+ * group, filter, and order. Mirrors ViewConfig in src/lib/views/types.ts —
+ * `visibleProperties`, `groupBy`, and the filter/sort property names are all
+ * PropertyDef ids from the client-side registries, which is why nothing here
+ * is an enum: the backend stores the configuration, it does not interpret it.
+ *
+ * Filter values are strings even for numbers and dates, so this stays a plain
+ * object rather than a union of every value type; the property def that owns
+ * the id parses them back.
+ */
+const viewConfigValidator = v.object({
+  visibleProperties: v.array(v.string()),
+  groupBy: v.optional(v.string()),
+  groupSort: v.optional(v.string()), // "asc" | "desc" | "count"
+  hideEmptyGroups: v.optional(v.boolean()),
+  filters: v.array(
+    v.object({
+      property: v.string(),
+      operator: v.string(),
+      value: v.optional(v.string()),
+      values: v.optional(v.array(v.string())),
+    })
+  ),
+  sorts: v.array(
+    v.object({
+      property: v.string(),
+      direction: v.string(), // "asc" | "desc"
+    })
+  ),
+});
+
 export default defineSchema({
   // Top-level workspaces. Everything (documents, entities, stories, searches)
   // lives inside exactly one project; a document copied to another project is
@@ -14,6 +46,19 @@ export default defineSchema({
     .index("by_slug", ["slug"])
     .index("by_createdAt", ["createdAt"])
     .searchIndex("search_name", { searchField: "name" }),
+
+  // How this project's two lists are currently configured, plus the width the
+  // user dragged between them. One row per project rather than one per list:
+  // the page needs all of it at once, so a single document is a single
+  // subscription and a single atomic patch. An absent row means defaults, so
+  // there is nothing to backfill.
+  projectViews: defineTable({
+    projectId: v.id("projects"),
+    /** The Library's share of the split, 0-1. Clamped by the client. */
+    splitRatio: v.optional(v.number()),
+    library: v.optional(viewConfigValidator),
+    entities: v.optional(viewConfigValidator),
+  }).index("by_project", ["projectId"]),
 
   // Uploaded sources: PDFs, CSVs, images, audio/video recordings, and web clips.
   documents: defineTable({
@@ -41,6 +86,18 @@ export default defineSchema({
     // so widening to an array didn't have to touch any of it.
     primaryKind: v.optional(v.string()),
     kindSource: v.optional(v.string()), // "ai" | "human"
+    // Analyze's one-word bucket, for the dark pill in the library:
+    // "legal" | "government" | "business" | "published" | "other". The light
+    // pill beside it is `primaryKind`, the specific type. See
+    // PRIMARY_CATEGORIES in convex/analyzePrompt.ts.
+    primaryCategory: v.optional(v.string()),
+    // When the document says it was made — not when it was uploaded. An ISO
+    // prefix whose shape matches `documentDatePrecision`: "2026-08-08",
+    // "2026-08", or "2026". Absent means Analyze could not date the document
+    // from its own text, which the library renders as "Unknown". Never
+    // inferred from content; see the dating rule in convex/analyzePrompt.ts.
+    documentDate: v.optional(v.string()),
+    documentDatePrecision: v.optional(v.string()), // "day" | "month" | "year"
     // Per-document extraction suggestions from the understanding pass. These
     // must not be inferred back from a broad shared kind such as "report":
     // two reports can require entirely different entities.
@@ -111,10 +168,10 @@ export default defineSchema({
     // FailureCode — currently "insufficient_credits" | "invalid_api_key" |
     // "rate_limited" | "timeout". Absent = uncategorized failure.
     errorCode: v.optional(v.string()),
-    // Set when the user dismisses the document from the extraction review
-    // queue without running anything. It leaves the queue but stays flagged in
-    // the library as never extracted against — skipping is allowed, silently
-    // forgetting is not.
+    // Deprecated. The extraction review queue is gone — Analyze's suggestions
+    // now run on their own and the user adds more from the document page — so
+    // nothing writes or reads this. Kept only because rows in the wild still
+    // carry it and the schema has to keep validating them.
     reviewSkippedAt: v.optional(v.number()),
     // Set when the document is archived (hidden from the main list, kept
     // queryable). Cleared on restore. Absent = active.

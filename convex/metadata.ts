@@ -1,6 +1,7 @@
 import { internalMutation, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { PRIMARY_CATEGORIES } from "./analyzePrompt";
 
 // ---------------------------------------------------------------------------
 // Metadata pass — default-runtime half.
@@ -25,6 +26,8 @@ export const saveMetadataResult = internalMutation({
       source_language_code?: string;
       is_multilingual?: boolean;
       primary_kind?: string;
+      primary_category?: string;
+      document_date?: { value?: string; precision?: string; evidence?: string };
       tags?: string[];
       suggested_roles?: Array<{ role?: string; question?: string; entity_type?: string }>;
       document_types?: Array<{ path?: string[]; confidence?: number }>;
@@ -110,6 +113,17 @@ export const saveMetadataResult = internalMutation({
       .filter((suggestion) => suggestion.label && suggestion.prompt)
       .slice(0, 8);
 
+    const documentDate = sanitizeDocumentDate(parsed.document_date, Date.now());
+    // An off-enum category is the model free-styling; "other" is the honest
+    // bucket for it, and the library shows no primary pill for it rather than
+    // coloring a word Analyze made up.
+    const category = (parsed.primary_category ?? "").trim().toLowerCase();
+    const primaryCategory = (PRIMARY_CATEGORIES as readonly string[]).includes(
+      category
+    )
+      ? category
+      : "other";
+
     // Register the kind (never overwrite an existing template)
     if (kindName) {
       await ctx.runMutation(internal.kinds.upsert, {
@@ -136,6 +150,11 @@ export const saveMetadataResult = internalMutation({
       // the same as absent by falling back to SectionHeader blocks.
       tableOfContents: toc,
       documentTypes,
+      primaryCategory,
+      // Cleared rather than left stale when a re-run can no longer date the
+      // document: the previous run's answer is not evidence for this one.
+      documentDate: documentDate?.documentDate,
+      documentDatePrecision: documentDate?.documentDatePrecision,
       suggestedSplits,
       suggestedExtractions,
       metadata: JSON.stringify({
@@ -166,8 +185,62 @@ export const saveMetadataResult = internalMutation({
     await ctx.scheduler.runAfter(0, internal.renameNode.runRenamePass, {
       documentId: args.documentId,
     });
+
+    // ...and understood well enough to extract from. This is the moment the
+    // suggestions exist, so it's where the initial extraction starts; there is
+    // no review step in between any more. Scheduled from here rather than from
+    // the pipeline so a standalone Analyze retry gets the same treatment.
+    await ctx.scheduler.runAfter(0, internal.processing.runInitialExtraction, {
+      documentId: args.documentId,
+    });
   },
 });
+
+/**
+ * The document's own creation date, or nothing.
+ *
+ * The prompt asks the model to decline rather than guess, and this is the
+ * other half of that bargain: anything that isn't a well-formed ISO prefix
+ * agreeing with its own stated precision is dropped, so a malformed or
+ * over-confident answer degrades to "Unknown" instead of misfiling the
+ * document. A date in the future is dropped for the same reason — no document
+ * states a creation date it hasn't reached yet, so it's a parse error or a
+ * hallucination either way.
+ */
+export function sanitizeDocumentDate(
+  raw: { value?: string; precision?: string; evidence?: string } | undefined,
+  now: number
+): { documentDate: string; documentDatePrecision: string } | null {
+  if (!raw) return null;
+  const value = (raw.value ?? "").trim();
+  const precision = (raw.precision ?? "").trim().toLowerCase();
+  if (!value || precision === "unknown") return null;
+
+  // The shape of the value has to be the precision it claims — a "day"
+  // precision on "2026" is the model contradicting itself, and picking a
+  // winner between the two fields would be inventing information.
+  const shape =
+    /^\d{4}$/.test(value)
+      ? "year"
+      : /^\d{4}-\d{2}$/.test(value)
+        ? "month"
+        : /^\d{4}-\d{2}-\d{2}$/.test(value)
+          ? "day"
+          : null;
+  if (shape === null || shape !== precision) return null;
+
+  // Parsed as UTC so a local timezone can't shift a bare date across a day
+  // boundary. Catches impossible dates (2026-02-31) as well as unparseable
+  // ones: Date.parse normalizes rather than rejecting, so compare it back.
+  const whole =
+    shape === "year" ? `${value}-01-01` : shape === "month" ? `${value}-01` : value;
+  const parsed = new Date(`${whole}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (shape === "day" && parsed.toISOString().slice(0, 10) !== value) return null;
+  if (parsed.getTime() > now) return null;
+
+  return { documentDate: value, documentDatePrecision: shape };
+}
 
 /** Model confidences arrive as anything; the UI needs a real 0-1. */
 function clamp01(value: unknown): number {

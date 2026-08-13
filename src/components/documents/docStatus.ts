@@ -16,6 +16,41 @@ export function isAudioVideo(doc: {
   );
 }
 
+/**
+ * The four words the library is allowed to say about a document.
+ *
+ * Everything the pipeline is doing collapses to Scanning → Analyzing →
+ * Extracting, and then the row goes quiet. A document that has finished says
+ * nothing at all: the library is a list of documents, not a progress board,
+ * and a permanent badge on every finished row is noise.
+ */
+export type LibraryStatus = "Scanning" | "Analyzing" | "Extracting" | "Failed";
+
+export function libraryStatus(doc: {
+  status: string;
+  mediaType?: string;
+  mimeType?: string;
+  metadata?: string;
+  /** The analyze job's status, from documents.list. */
+  analyzeStatus?: string | null;
+}): LibraryStatus | null {
+  if (doc.status === "failed") return "Failed";
+  if (doc.status === "extracting") return "Extracting";
+  // Queued and scanning are the same fact to a reader: the text isn't out yet.
+  if (doc.status === "uploaded" || doc.status === "parsing") return "Scanning";
+  if (doc.status !== "parsed") return null;
+
+  // "parsed" is the window between the scan landing and extraction starting,
+  // which is exactly Analyze's window — but recordings skip Analyze entirely
+  // (convex/processingNode.ts:runTranscribe), so for them it is just the end.
+  if (isAudioVideo(doc)) return null;
+  if (doc.analyzeStatus === "failed") return "Failed";
+  // Analyze's output is what marks it finished. Once it lands, extraction is
+  // already scheduled, so the row goes quiet for the moment in between rather
+  // than inventing a fifth word for it.
+  return doc.metadata === undefined ? "Analyzing" : null;
+}
+
 /** Medium-specific label for the parse stage. */
 export function parseStageLabel(
   doc: { mediaType?: string; mimeType?: string },

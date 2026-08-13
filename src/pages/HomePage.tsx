@@ -1,36 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Link, useParams } from "react-router-dom";
-import {
-  Archive,
-  ArrowLeft,
-  ArrowUpDown,
-  ChevronDown,
-  ChevronRight,
-  Filter,
-  Plus,
-  Search,
-  Star,
-  Tag,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Archive, ArrowLeft, Plus, Star, Tag, Trash2, X } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { DropZone } from "@/components/documents/DropZone";
-import { ReviewDialog } from "@/components/documents/ReviewDialog";
-import { DocStatusIndicator } from "@/components/documents/DocStatusIndicator";
-import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
-import { DocTypeIcon } from "@/components/documents/DocTypeIcon";
+import { LibraryRow } from "@/components/documents/LibraryRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SplitPane } from "@/components/ui/SplitPane";
 import {
   MergeSuggestions,
   type MergeSuggestion,
 } from "@/components/entities/MergeSuggestions";
 import SearchBar from "@/components/search/SearchBar";
-import { documentTitles } from "@/lib/documentTitle";
+import { ListGroup } from "@/components/views/ListGroup";
+import { PropertyChips } from "@/components/views/PropertyChips";
+import { ViewBar } from "@/components/views/ViewBar";
+import { applyView, type ViewGroup } from "@/lib/views/applyView";
+import {
+  DOCUMENT_PROPERTIES,
+  type LibraryDoc,
+} from "@/lib/views/documentProperties";
+import {
+  ENTITY_PROPERTIES,
+  type EntityRow as EntityRowType,
+} from "@/lib/views/entityProperties";
+import {
+  DEFAULT_SPLIT_RATIO,
+  useProjectViews,
+} from "@/lib/views/useProjectViews";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -41,210 +41,9 @@ function toSlug(name: string): string {
     .replace(/^-|-$/g, "");
 }
 
-const typeLabels: Record<string, string> = {
-  people: "People",
-  person: "People",
-  organization: "Organizations",
-  places: "Places",
-  place: "Places",
-  dates: "Dates",
-  other: "Other",
-};
-
-const sourceTypeLabels: Record<string, string> = {
-  pdf: "PDF",
-  docx: "Word",
-  csv: "CSV",
-  image: "Image",
-  audio: "Audio",
-  video: "Video",
-  webScrape: "Web clip",
-  other: "Other",
-};
-
-function entityTypeKey(type: string): string {
-  if (type === "people") return "person";
-  if (type === "places") return "place";
-  return type;
-}
-
-function sourceType(doc: Doc<"documents">): string {
-  if (doc.mediaType) return doc.mediaType;
-  if (doc.mimeType === "application/pdf") return "pdf";
-  if (doc.mimeType.includes("wordprocessingml")) return "docx";
-  if (doc.mimeType.includes("csv")) return "csv";
-  if (doc.mimeType.startsWith("image/")) return "image";
-  if (doc.mimeType.startsWith("audio/")) return "audio";
-  if (doc.mimeType.startsWith("video/")) return "video";
-  return "other";
-}
-
-type ToolbarOption = { value: string; label: string };
-
-function ToolbarSelect({
-  icon: Icon,
-  label,
-  value,
-  options,
-  onChange,
-  active = false,
-}: {
-  icon: typeof Filter;
-  label: string;
-  value: string;
-  options: ToolbarOption[];
-  onChange: (value: string) => void;
-  active?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const selectRef = useRef<HTMLSelectElement>(null);
-  const selectedLabel =
-    options.find((option) => option.value === value)?.label ?? label;
-
-  useEffect(() => {
-    if (expanded) selectRef.current?.focus();
-  }, [expanded]);
-
-  return (
-    <div
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setExpanded(false);
-        }
-      }}
-      className={cn(
-        "relative inline-flex h-7 min-w-0 items-center rounded-md text-xs transition-colors",
-        active && "bg-accent text-foreground"
-      )}
-    >
-      <button
-        type="button"
-        aria-label={`${label}: ${selectedLabel}`}
-        aria-expanded={expanded}
-        title={label}
-        onClick={() => setExpanded((current) => !current)}
-        className="relative grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        <Icon className="h-3.5 w-3.5" />
-        {active && (
-          <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
-        )}
-      </button>
-      {expanded && (
-        <label className="absolute right-0 top-full z-30 mt-1 min-w-40 rounded-lg border bg-popover p-1 text-popover-foreground shadow-md">
-          <span className="sr-only">{label}</span>
-          <select
-            ref={selectRef}
-            aria-label={label}
-            value={value}
-            onChange={(event) => {
-              onChange(event.target.value);
-              setExpanded(false);
-            }}
-            className="h-7 w-full cursor-pointer appearance-none rounded-md bg-transparent py-0 pl-2 pr-6 text-xs outline-none hover:bg-accent"
-          >
-            {options.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-        </label>
-      )}
-    </div>
-  );
-}
-
-function ToolbarSearch({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (expanded) inputRef.current?.focus();
-  }, [expanded]);
-
-  return (
-    <div
-      className={cn(
-        "flex h-7 items-center rounded-md transition-colors",
-        value && "bg-accent"
-      )}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setExpanded(false);
-        }
-      }}
-    >
-      <button
-        type="button"
-        aria-label="Search this view"
-        aria-expanded={expanded}
-        title="Search"
-        onClick={() => setExpanded((current) => !current)}
-        className="relative grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        <Search className="h-3.5 w-3.5" />
-        {value && (
-          <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
-        )}
-      </button>
-      {expanded && (
-        <input
-          ref={inputRef}
-          type="search"
-          aria-label="Search this view input"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder="Search"
-          className="absolute right-0 top-full z-30 mt-1 h-9 w-44 rounded-lg border bg-popover px-3 text-xs text-popover-foreground shadow-md outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-        />
-      )}
-    </div>
-  );
-}
-
-function ViewToolbar({
-  query,
-  onQueryChange,
-  children,
-  onClear,
-  hasActiveView,
-}: {
-  query: string;
-  onQueryChange: (value: string) => void;
-  children: React.ReactNode;
-  onClear: () => void;
-  hasActiveView: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-1 bg-background">
-      {children}
-      <ToolbarSearch value={query} onChange={onQueryChange} />
-      {hasActiveView && (
-        <button
-          type="button"
-          onClick={onClear}
-          aria-label="Clear filters and sort"
-          title="Clear filters and sort"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      )}
-    </div>
-  );
-}
-
 /**
- * The bar that replaces the Sources filter/sort toolbar while rows are
- * checked: what you can do to a selection, and nothing else.
+ * The bar that replaces the Library's view controls while rows are checked:
+ * what you can do to a selection, and nothing else.
  */
 function SelectionToolbar({
   selected,
@@ -295,9 +94,7 @@ function SelectionToolbar({
         size="sm"
         className="h-7 gap-1.5 px-2 text-xs"
         disabled={busy}
-        onClick={() =>
-          void run((id) => setArchived({ id, archived: true }))
-        }
+        onClick={() => void run((id) => setArchived({ id, archived: true }))}
       >
         <Archive className="h-3.5 w-3.5" />
         Archive
@@ -372,7 +169,7 @@ function SelectionToolbar({
         className="h-7 gap-1.5 px-2 text-xs text-destructive hover:text-destructive"
         disabled={busy}
         onClick={() => {
-          const plural = selected.length === 1 ? "source" : "sources";
+          const plural = selected.length === 1 ? "document" : "documents";
           if (
             !window.confirm(
               `Delete ${selected.length} ${plural}? This also removes their pages, extractions, and files.`
@@ -400,26 +197,20 @@ function SelectionToolbar({
   );
 }
 
-function domainOf(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return "";
-  }
-}
-
-function EntityRow({
+function EntityListRow({
   entity,
   projectId,
+  visibleProperties,
 }: {
   entity: Doc<"entities">;
   projectId: Id<"projects">;
+  visibleProperties: string[];
 }) {
   const setStarred = useMutation(api.entities.setStarred);
   const starred = entity.starred === true;
 
   return (
-    <div className="relative flex items-center gap-1 rounded py-1 pr-1 -mx-1 hover:bg-accent/50 transition-colors">
+    <div className="relative flex items-center gap-1 rounded py-1 pr-1 -mx-1 transition-colors hover:bg-accent/50">
       <button
         type="button"
         aria-label={`${starred ? "Unstar" : "Star"} ${entity.name}`}
@@ -441,67 +232,78 @@ function EntityRow({
       >
         {entity.name}
       </Link>
-      <span className="relative z-10 ml-2 shrink-0 text-xs text-muted-foreground">
-        {entity.mentionCount} mention{entity.mentionCount !== 1 && "s"}
-      </span>
+      <PropertyChips
+        row={entity}
+        defs={ENTITY_PROPERTIES}
+        visible={visibleProperties}
+        className="relative z-10 ml-2 shrink-0"
+      />
     </div>
   );
 }
 
-function EntityTypeGroup({
-  type,
-  entities,
+/**
+ * One entity group, owning its own collapse state so it can keep showing
+ * starred entities after you close it — the curation stays visible.
+ */
+function EntityGroup({
+  group,
   suggestions,
   projectId,
+  visibleProperties,
   forceOpen,
+  grouped,
 }: {
-  type: string;
-  entities: Doc<"entities">[];
+  group: ViewGroup<EntityRowType>;
   suggestions: MergeSuggestion[];
   projectId: Id<"projects">;
+  visibleProperties: string[];
   forceOpen: boolean;
+  grouped: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const starredEntities = entities.filter((entity) => entity.starred === true);
+  const starred = group.rows.filter((entity) => entity.starred === true);
+
+  const rows = (
+    <>
+      <MergeSuggestions suggestions={suggestions} />
+      {group.rows.map((entity) => (
+        <EntityListRow
+          key={entity._id}
+          entity={entity}
+          projectId={projectId}
+          visibleProperties={visibleProperties}
+        />
+      ))}
+    </>
+  );
+
+  // Ungrouped: no header to collapse, so the rows stand on their own.
+  if (!grouped) return <div className="flex flex-col">{rows}</div>;
 
   return (
-    <div>
-      <details
-        className="group"
-        open={forceOpen || undefined}
-        onToggle={(event) => setOpen(event.currentTarget.open)}
-      >
-        <summary className="flex items-center justify-between cursor-pointer py-1.5 px-1 -mx-1 rounded hover:bg-accent/50 transition-colors list-none [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center gap-1 text-sm font-medium">
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
-            {typeLabels[type] ?? type}
-          </span>
-          <span className="text-xs text-muted-foreground">{entities.length}</span>
-        </summary>
-        <div className="flex flex-col pl-4">
-          <MergeSuggestions suggestions={suggestions} />
-          {entities.map((entity) => (
-            <EntityRow
-              key={entity._id}
-              entity={entity}
-              projectId={projectId}
-            />
-          ))}
-        </div>
-      </details>
-
-      {!forceOpen && !open && starredEntities.length > 0 && (
-        <div className="flex flex-col pl-4">
-          {starredEntities.map((entity) => (
-            <EntityRow
-              key={entity._id}
-              entity={entity}
-              projectId={projectId}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+    <ListGroup
+      label={group.label}
+      count={group.rows.length}
+      forceOpen={forceOpen}
+      onToggle={setOpen}
+      footer={
+        !forceOpen && !open && starred.length > 0 ? (
+          <div className="flex flex-col pl-4">
+            {starred.map((entity) => (
+              <EntityListRow
+                key={entity._id}
+                entity={entity}
+                projectId={projectId}
+                visibleProperties={visibleProperties}
+              />
+            ))}
+          </div>
+        ) : null
+      }
+    >
+      {rows}
+    </ListGroup>
   );
 }
 
@@ -517,81 +319,60 @@ export default function HomePage() {
     projectId,
   });
 
-  // Which sources still owe a review decision. Clicking one of them in the
-  // list opens its review instead of the viewer — the queue lives in the
-  // Sources list now rather than in a panel of its own.
-  const reviewQueue = useQuery(api.documents.reviewQueue, { projectId });
-  const needsReview = useMemo(
-    () => new Set((reviewQueue ?? []).map((doc) => doc._id)),
-    [reviewQueue]
-  );
-  const [reviewingId, setReviewingId] = useState<Id<"documents"> | null>(null);
-  const reviewing =
-    (reviewQueue ?? []).find((doc) => doc._id === reviewingId) ?? null;
+  const views = useProjectViews(projectId);
+
+  // Search text is deliberately not persisted: it's a momentary "where is
+  // that one" rather than a way of looking at the list.
+  const [libraryQuery, setLibraryQuery] = useState("");
+  const [entityQuery, setEntityQuery] = useState("");
 
   const [selectedRaw, setSelected] = useState<Id<"documents">[]>([]);
-  // The last row checked on its own — the anchor a shift-click extends from.
   const selectionAnchor = useRef<number | null>(null);
-  const sourcesRef = useRef<HTMLDivElement>(null);
+  const libraryRef = useRef<HTMLDivElement>(null);
 
-  function clearSelection() {
+  const clearSelection = useCallback(() => {
     selectionAnchor.current = null;
     setSelected([]);
-  }
+  }, []);
 
-  const [sourceQuery, setSourceQuery] = useState("");
-  const [sourceTypeFilter, setSourceTypeFilter] = useState("all");
-  const [sourceSort, setSourceSort] = useState("newest");
-  const [entityQuery, setEntityQuery] = useState("");
-  const [entityTypeFilter, setEntityTypeFilter] = useState("all");
-  const [entitySort, setEntitySort] = useState("mentions-desc");
+  // True once the hero title has scrolled up under the header bar, which is
+  // when the bar stops being an empty corner and becomes a real header.
+  const heroSentinelRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const sentinel = heroSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setScrolled(!entry.isIntersecting),
+      { rootMargin: "-48px 0px 0px 0px", threshold: 0 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
 
-  const sourceTypeOptions = useMemo(() => {
-    const available = new Set((documents ?? []).map(sourceType));
-    return [
-      { value: "all", label: "All types" },
-      ...Object.entries(sourceTypeLabels)
-        .filter(([value]) => available.has(value))
-        .map(([value, label]) => ({ value, label })),
-    ];
-  }, [documents]);
+  const libraryRows = useMemo<LibraryDoc[]>(() => documents ?? [], [documents]);
+  const entityRows = useMemo<EntityRowType[]>(() => entities ?? [], [entities]);
 
-  const visibleDocuments = useMemo(() => {
-    const query = sourceQuery.trim().toLocaleLowerCase();
-    const filtered = (documents ?? []).filter((doc) => {
-      const { primary, original } = documentTitles(doc);
-      const matchesQuery =
-        !query ||
-        primary.toLocaleLowerCase().includes(query) ||
-        original?.toLocaleLowerCase().includes(query) ||
-        doc.sourceUrl?.toLocaleLowerCase().includes(query);
-      return (
-        matchesQuery &&
-        (sourceTypeFilter === "all" || sourceType(doc) === sourceTypeFilter)
-      );
-    });
-
-    return filtered.sort((a, b) => {
-      const aTitle = documentTitles(a).primary;
-      const bTitle = documentTitles(b).primary;
-      if (sourceSort === "oldest") return a.uploadedAt - b.uploadedAt;
-      if (sourceSort === "name-asc") return aTitle.localeCompare(bTitle);
-      if (sourceSort === "name-desc") return bTitle.localeCompare(aTitle);
-      return b.uploadedAt - a.uploadedAt;
-    });
-  }, [documents, sourceQuery, sourceSort, sourceTypeFilter]);
+  const libraryResult = useMemo(
+    () => applyView(libraryRows, DOCUMENT_PROPERTIES, views.library, libraryQuery),
+    [libraryRows, views.library, libraryQuery]
+  );
+  const entityResult = useMemo(
+    () => applyView(entityRows, ENTITY_PROPERTIES, views.entities, entityQuery),
+    [entityRows, views.entities, entityQuery]
+  );
 
   // Drop anything that left the list — archived, deleted, or filtered out — so
   // the toolbar never counts rows the user can no longer see. Derived rather
   // than pruned in an effect: the stale ids never reach a render this way.
   const selected = useMemo(() => {
     if (selectedRaw.length === 0) return selectedRaw;
-    const visible = new Set(visibleDocuments.map((doc) => doc._id));
+    const visible = new Set(libraryResult.flat.map((doc) => doc._id));
     if (selectedRaw.every((id) => visible.has(id))) return selectedRaw;
     return selectedRaw.filter((id) => visible.has(id));
-  }, [selectedRaw, visibleDocuments]);
+  }, [selectedRaw, libraryResult]);
 
-  // A click anywhere outside the Sources column drops the selection — the
+  // A click anywhere outside the Library column drops the selection — the
   // same way a file list does. The Tag popover is portalled to the body, so
   // it's outside the column in the DOM and has to be excused explicitly.
   useEffect(() => {
@@ -599,401 +380,262 @@ export default function HomePage() {
     function onPointerDown(event: MouseEvent) {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (sourcesRef.current?.contains(target)) return;
+      if (libraryRef.current?.contains(target)) return;
       if (target.closest("[role='dialog']")) return;
       clearSelection();
     }
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [selected.length]);
+  }, [selected.length, clearSelection]);
 
-  const entityTypeOptions = useMemo(() => {
-    const available = new Map<string, string>();
-    for (const entity of entities ?? []) {
-      const key = entityTypeKey(entity.type);
-      available.set(key, typeLabels[key] ?? key);
-    }
-    return [
-      { value: "all", label: "All types" },
-      ...[...available.entries()]
-        .sort((a, b) => a[1].localeCompare(b[1]))
-        .map(([value, label]) => ({ value, label })),
-    ];
-  }, [entities]);
+  // Ranges run over the flattened display order, so a shift-click still means
+  // "everything between these two rows" when the list is grouped.
+  const extendSelection = useCallback(
+    (index: number) => {
+      const anchor = selectionAnchor.current;
+      if (anchor === null) return false;
+      const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
+      const range = libraryResult.flat.slice(from, to + 1).map((doc) => doc._id);
+      setSelected((current) => [...new Set([...current, ...range])]);
+      return true;
+    },
+    [libraryResult]
+  );
 
-  const visibleEntities = useMemo(() => {
-    const query = entityQuery.trim().toLocaleLowerCase();
-    const filtered = (entities ?? []).filter(
-      (entity) =>
-        (!query || entity.name.toLocaleLowerCase().includes(query)) &&
-        (entityTypeFilter === "all" ||
-          entityTypeKey(entity.type) === entityTypeFilter)
-    );
+  const toggleSelection = useCallback(
+    (checked: boolean, index: number, id: Id<"documents">) => {
+      selectionAnchor.current = index;
+      setSelected((current) =>
+        checked
+          ? [...new Set([...current, id])]
+          : current.filter((other) => other !== id)
+      );
+    },
+    []
+  );
 
-    return filtered.sort((a, b) => {
-      if (entitySort === "mentions-asc") return a.mentionCount - b.mentionCount;
-      if (entitySort === "documents-desc") {
-        return b.documentCount - a.documentCount;
+  // Put each merge prompt beside the group its entity is in. Keyed on the
+  // surviving target, falling back to the source for stale query frames.
+  const suggestionsByGroup = useMemo(() => {
+    const groupOf = new Map<string, string>();
+    for (const group of entityResult.groups) {
+      for (const entity of group.rows) {
+        if (!groupOf.has(entity._id)) groupOf.set(entity._id, group.key);
       }
-      if (entitySort === "name-asc") return a.name.localeCompare(b.name);
-      if (entitySort === "name-desc") return b.name.localeCompare(a.name);
-      return b.mentionCount - a.mentionCount;
-    });
-  }, [entities, entityQuery, entitySort, entityTypeFilter]);
-
-  // Group entities by type
-  const entityGroups = new Map<string, NonNullable<typeof entities>>();
-  if (visibleEntities) {
-    for (const entity of visibleEntities) {
-      const group = entityGroups.get(entity.type) ?? [];
-      group.push(entity);
-      entityGroups.set(entity.type, group);
     }
-  }
+    const byGroup = new Map<string, MergeSuggestion[]>();
+    for (const suggestion of mergeSuggestions ?? []) {
+      const key =
+        groupOf.get(suggestion.target._id) ?? groupOf.get(suggestion.source._id);
+      if (key === undefined) continue;
+      byGroup.set(key, [...(byGroup.get(key) ?? []), suggestion]);
+    }
+    return byGroup;
+  }, [entityResult, mergeSuggestions]);
 
-  const sortedTypes = [...entityGroups.keys()].sort((a, b) => {
-    if (a === "people" || a === "person") return -1;
-    if (b === "people" || b === "person") return 1;
-    return a.localeCompare(b);
-  });
+  const libraryGrouped = !!views.library.groupBy;
+  const entitiesGrouped = !!views.entities.groupBy;
+  // Filtering already narrowed the list to what was asked for; collapsing on
+  // top of that would hide the answer.
+  const libraryNarrowed =
+    libraryQuery.trim() !== "" || views.library.filters.length > 0;
+  const entitiesNarrowed =
+    entityQuery.trim() !== "" || views.entities.filters.length > 0;
 
-  // Put each review prompt beside the list it affects. Prefer the surviving
-  // target's type; fall back to the source for stale/incomplete query frames.
-  const entityTypeById = new Map<string, string>();
-  for (const [type, group] of entityGroups) {
-    for (const entity of group) entityTypeById.set(entity._id, type);
+  function renderLibraryRows(group: ViewGroup<LibraryDoc>) {
+    return group.rows.map((doc) => {
+      const index = libraryResult.flat.indexOf(doc);
+      return (
+        <LibraryRow
+          key={`${group.key}:${doc._id}`}
+          doc={doc}
+          index={index}
+          checked={selected.includes(doc._id)}
+          anySelected={selected.length > 0}
+          visibleProperties={views.library.visibleProperties}
+          onCheckedChange={(checked, at) => toggleSelection(checked, at, doc._id)}
+          onShiftClick={extendSelection}
+        />
+      );
+    });
   }
-  const mergeSuggestionsByType = new Map<string, MergeSuggestion[]>();
-  for (const suggestion of mergeSuggestions ?? []) {
-    const type =
-      entityTypeById.get(suggestion.target._id) ??
-      entityTypeById.get(suggestion.source._id);
-    if (!type) continue;
-    const group = mergeSuggestionsByType.get(type) ?? [];
-    group.push(suggestion);
-    mergeSuggestionsByType.set(type, group);
-  }
-
-  const hasSourceView =
-    sourceQuery !== "" ||
-    sourceTypeFilter !== "all" ||
-    sourceSort !== "newest";
-  const hasEntityView =
-    entityQuery !== "" ||
-    entityTypeFilter !== "all" ||
-    entitySort !== "mentions-desc";
-  const forceEntityGroupsOpen =
-    entityQuery.trim() !== "" ||
-    entityTypeFilter !== "all";
 
   return (
     <div className="relative flex flex-col">
-      {/* Back to all projects — a quiet corner affordance, not a header bar. */}
-      <Link
-        to="/"
-        title="All projects"
-        aria-label="All projects"
-        className="absolute left-4 top-4 z-30 grid h-8 w-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      {/* Back to all projects — a quiet corner affordance at rest. Once the big
+          project name has scrolled away it earns its bar: the name joins it and
+          the strip picks up a background so the lists slide underneath. */}
+      <div
+        className={cn(
+          "sticky top-0 z-30 flex h-12 items-center gap-2 px-4 transition-colors",
+          scrolled && "bg-background"
+        )}
       >
-        <ArrowLeft className="h-4 w-4" />
-      </Link>
-
-      <div className="flex-1">
-        <div className="p-6">
-        {/* The project announces itself above the search box: name big,
-            description under it, both centered on the thing you came to do. */}
-        <div className="mx-auto mb-6 mt-10 max-w-2xl text-center">
-          <h1 className="text-4xl font-bold tracking-tight">
-            {project?.name ?? "…"}
-          </h1>
-          {/* The project's own description, falling back to the generic
-              pitch for projects that don't have one yet. */}
-          <p className="mt-2 text-base text-muted-foreground">
-            {project?.description?.trim() ||
-              "Upload anything, extract entities, uncover connections."}
-          </p>
-        </div>
-
-        {/* Search — full-text + semantic + entity-graph, Interfaze-planned */}
-        <div className="mb-8">
-          <SearchBar projectId={projectId} />
-        </div>
-
-        <div className="mb-8">
-          <DropZone projectId={projectId} />
-        </div>
-
-        {/* Three-column grid: Sources (spans 2) | Entities */}
-        <div className="grid grid-cols-3 gap-6">
-          {/* Sources — documents, recordings, and web clips in one list */}
-          <div className="col-span-2" ref={sourcesRef}>
-            <div className="sticky top-0 z-20 mb-2 bg-background">
-              <div className="flex items-center justify-between gap-3 border-b pb-2">
-                <h2 className="text-lg font-semibold">Sources</h2>
-                {selected.length > 0 ? (
-                  <SelectionToolbar
-                    selected={selected}
-                    onClear={clearSelection}
-                  />
-                ) : (
-                <ViewToolbar
-                  query={sourceQuery}
-                  onQueryChange={setSourceQuery}
-                  hasActiveView={hasSourceView}
-                  onClear={() => {
-                    setSourceQuery("");
-                    setSourceTypeFilter("all");
-                    setSourceSort("newest");
-                  }}
-                >
-                  <ToolbarSelect
-                    icon={Filter}
-                    label="Filter sources by type"
-                    value={sourceTypeFilter}
-                    onChange={setSourceTypeFilter}
-                    active={sourceTypeFilter !== "all"}
-                    options={sourceTypeOptions}
-                  />
-                  <ToolbarSelect
-                    icon={ArrowUpDown}
-                    label="Sort sources"
-                    value={sourceSort}
-                    onChange={setSourceSort}
-                    active={sourceSort !== "newest"}
-                    options={[
-                      { value: "newest", label: "Newest first" },
-                      { value: "oldest", label: "Oldest first" },
-                      { value: "name-asc", label: "Name A–Z" },
-                      { value: "name-desc", label: "Name Z–A" },
-                    ]}
-                  />
-                </ViewToolbar>
-                )}
-              </div>
-            </div>
-            {documents === undefined ? (
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-full" />
-              </div>
-            ) : documents.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">
-                No sources yet. Drop a file above to get started.
-              </p>
-            ) : visibleDocuments.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">
-                No sources match this view.
-              </p>
-            ) : (
-              <div className="flex flex-col">
-                {visibleDocuments.map((doc, index) => {
-                  const { primary, original } = documentTitles(doc);
-                  const checked = selected.includes(doc._id);
-                  return (
-                  // The row is a link, but the checkbox and identity menu
-                  // inside it are controls — so the link is the title with a
-                  // stretched hit area (::after) and the controls sit above it
-                  // on z-10, rather than buttons nested inside an anchor.
-                  <div
-                    key={doc._id}
-                    className={cn(
-                      "group/row relative flex items-center justify-between py-1.5 px-1 -mx-1 rounded transition-colors hover:bg-accent/50",
-                      checked && "bg-accent/50"
-                    )}
-                  >
-                    <span className="flex items-start gap-1.5 min-w-0">
-                      {/* The media-type icon doubles as the selection
-                          checkbox: it swaps when you hover the icon itself,
-                          and stays a checkbox for every row once a selection
-                          exists. */}
-                      <span className="group/check relative z-10 mt-0.5 grid h-5 w-5 shrink-0 place-items-center">
-                        <DocTypeIcon
-                          mediaType={doc.mediaType}
-                          mimeType={doc.mimeType}
-                          className={cn(
-                            "col-start-1 row-start-1 pointer-events-none transition-opacity",
-                            selected.length > 0
-                              ? "opacity-0"
-                              : "group-hover/check:opacity-0"
-                          )}
-                        />
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          aria-label={`Select ${primary}`}
-                          // Shift-click extends from the last row checked on
-                          // its own, the way a file list does. It's handled on
-                          // click, not change: only the click event carries
-                          // the modifier keys.
-                          onClick={(event) => {
-                            if (!event.shiftKey) return;
-                            const anchor = selectionAnchor.current;
-                            if (anchor === null) return;
-                            event.preventDefault();
-                            const [from, to] =
-                              anchor < index ? [anchor, index] : [index, anchor];
-                            const range = visibleDocuments
-                              .slice(from, to + 1)
-                              .map((d) => d._id);
-                            setSelected((current) => [
-                              ...new Set([...current, ...range]),
-                            ]);
-                          }}
-                          onChange={(event) => {
-                            selectionAnchor.current = index;
-                            setSelected((current) =>
-                              event.target.checked
-                                ? [...new Set([...current, doc._id])]
-                                : current.filter((id) => id !== doc._id)
-                            );
-                          }}
-                          className={cn(
-                            "col-start-1 row-start-1 h-3.5 w-3.5 cursor-pointer accent-primary transition-opacity",
-                            selected.length === 0 &&
-                              "opacity-0 group-hover/check:opacity-100 focus-visible:opacity-100"
-                          )}
-                        />
-                      </span>
-                      <span className="flex flex-col min-w-0">
-                        <span className="flex items-center gap-1.5 min-w-0">
-                          {/* A source still awaiting a review decision opens
-                              its review; everything else opens the viewer. */}
-                          {needsReview.has(doc._id) ? (
-                            <button
-                              type="button"
-                              onClick={() => setReviewingId(doc._id)}
-                              className="text-sm truncate text-left after:absolute after:inset-0 after:content-['']"
-                            >
-                              {primary}
-                            </button>
-                          ) : (
-                            <Link
-                              to={`/documents/${doc._id}`}
-                              className="text-sm truncate after:absolute after:inset-0 after:content-['']"
-                            >
-                              {primary}
-                            </Link>
-                          )}
-                          {doc.mediaType === "webScrape" && doc.sourceUrl && (
-                            <span className="text-xs text-muted-foreground truncate shrink-0">
-                              {domainOf(doc.sourceUrl)}
-                            </span>
-                          )}
-                        </span>
-                        {/* The upload's own name, kept visible beneath the
-                            AI-written title so the file stays recognizable. */}
-                        {original && (
-                          <span className="text-xs text-muted-foreground truncate">
-                            {original}
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                    <span className="flex items-center gap-2 shrink-0 ml-3">
-                      {/* Renaming and typing a single document used to live on
-                          the icon; the icon is the checkbox now, so the ⋮
-                          moves here and appears on row hover. */}
-                      <DocumentIdentityMenu
-                        document={doc}
-                        className="relative z-10 opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100"
-                      />
-                      <DocStatusIndicator
-                        status={doc.status}
-                        mediaType={doc.mediaType}
-                        mimeType={doc.mimeType}
-                        reviewSkippedAt={doc.reviewSkippedAt}
-                      />
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(doc.uploadedAt).toLocaleDateString()}
-                      </span>
-                    </span>
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Entities — collapsed groups by type */}
-          <div>
-            <div className="sticky top-0 z-20 mb-2 bg-background">
-              <div className="flex items-center justify-between gap-3 border-b pb-2">
-                <h2 className="text-lg font-semibold">Entities</h2>
-                <ViewToolbar
-                  query={entityQuery}
-                  onQueryChange={setEntityQuery}
-                  hasActiveView={hasEntityView}
-                  onClear={() => {
-                    setEntityQuery("");
-                    setEntityTypeFilter("all");
-                    setEntitySort("mentions-desc");
-                  }}
-                >
-                  <ToolbarSelect
-                    icon={Filter}
-                    label="Filter entities by type"
-                    value={entityTypeFilter}
-                    onChange={setEntityTypeFilter}
-                    active={entityTypeFilter !== "all"}
-                    options={entityTypeOptions}
-                  />
-                  <ToolbarSelect
-                    icon={ArrowUpDown}
-                    label="Sort entities"
-                    value={entitySort}
-                    onChange={setEntitySort}
-                    active={entitySort !== "mentions-desc"}
-                    options={[
-                      { value: "mentions-desc", label: "Most mentioned" },
-                      { value: "mentions-asc", label: "Least mentioned" },
-                      { value: "documents-desc", label: "Most sources" },
-                      { value: "name-asc", label: "Name A–Z" },
-                      { value: "name-desc", label: "Name Z–A" },
-                    ]}
-                  />
-                </ViewToolbar>
-              </div>
-            </div>
-            {entities === undefined ? (
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-full" />
-              </div>
-            ) : entities.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">
-                No entities found yet. Open a document and run an extraction.
-              </p>
-            ) : visibleEntities.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">
-                No entities match this view.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-1">
-                {sortedTypes.map((type) => (
-                  <EntityTypeGroup
-                    key={type}
-                    type={type}
-                    entities={entityGroups.get(type)!}
-                    suggestions={mergeSuggestionsByType.get(type) ?? []}
-                    projectId={projectId}
-                    forceOpen={forceEntityGroupsOpen}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        </div>
+        <Link
+          to="/"
+          title="All projects"
+          aria-label="All projects"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </Link>
+        <span
+          aria-hidden={!scrolled}
+          className={cn(
+            "min-w-0 truncate text-lg font-semibold transition-opacity",
+            scrolled ? "opacity-100" : "opacity-0"
+          )}
+        >
+          {project?.name ?? ""}
+        </span>
       </div>
 
-      {reviewing && (
-        <ReviewDialog
-          document={reviewing}
-          onClose={() => setReviewingId(null)}
-        />
-      )}
+      <div className="flex-1">
+        <div className="px-6 pb-6">
+          <div className="mx-auto mb-6 mt-4 max-w-2xl text-center">
+            <h1 className="text-4xl font-bold tracking-tight">
+              {project?.name ?? "…"}
+            </h1>
+            <p className="mt-2 text-base text-muted-foreground">
+              {project?.description?.trim() ||
+                "Upload anything, extract entities, uncover connections."}
+            </p>
+          </div>
+
+          <div ref={heroSentinelRef} aria-hidden className="h-px" />
+
+          <div className="mb-8">
+            <SearchBar projectId={projectId} />
+          </div>
+
+          <div className="mb-8">
+            <DropZone projectId={projectId} />
+          </div>
+
+          <SplitPane
+            ratio={views.splitRatio}
+            defaultRatio={DEFAULT_SPLIT_RATIO}
+            onCommit={views.setSplitRatio}
+            left={
+              <div ref={libraryRef}>
+                <div className="sticky top-12 z-20 mb-2 bg-background">
+                  <div className="flex items-center justify-between gap-3 border-b pb-2">
+                    <h2 className="shrink-0 text-lg font-semibold">Library</h2>
+                    {selected.length > 0 ? (
+                      <SelectionToolbar
+                        selected={selected}
+                        onClear={clearSelection}
+                      />
+                    ) : (
+                      <ViewBar
+                        defs={DOCUMENT_PROPERTIES}
+                        config={views.library}
+                        onChange={views.setLibrary}
+                        rows={libraryRows}
+                        query={libraryQuery}
+                        onQueryChange={setLibraryQuery}
+                        onReset={() => {
+                          setLibraryQuery("");
+                          views.resetLibrary();
+                        }}
+                        isDefault={views.libraryIsDefault}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {documents === undefined ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-4 w-full" />
+                  </div>
+                ) : documents.length === 0 ? (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    Your library is empty. Drop a file above to get started.
+                  </p>
+                ) : libraryResult.total === 0 ? (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    Nothing in your library matches this view.
+                  </p>
+                ) : (
+                  <div className="flex flex-col">
+                    {libraryResult.groups.map((group) =>
+                      libraryGrouped ? (
+                        <ListGroup
+                          key={group.key}
+                          label={group.label}
+                          count={group.rows.length}
+                          forceOpen={libraryNarrowed}
+                          defaultOpen
+                        >
+                          {renderLibraryRows(group)}
+                        </ListGroup>
+                      ) : (
+                        <div key={group.key} className="flex flex-col">
+                          {renderLibraryRows(group)}
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
+              </div>
+            }
+            right={
+              <div>
+                <div className="sticky top-12 z-20 mb-2 bg-background">
+                  <div className="flex items-center justify-between gap-3 border-b pb-2">
+                    <h2 className="shrink-0 text-lg font-semibold">Entities</h2>
+                    <ViewBar
+                      defs={ENTITY_PROPERTIES}
+                      config={views.entities}
+                      onChange={views.setEntities}
+                      rows={entityRows}
+                      query={entityQuery}
+                      onQueryChange={setEntityQuery}
+                      onReset={() => {
+                        setEntityQuery("");
+                        views.resetEntities();
+                      }}
+                      isDefault={views.entitiesIsDefault}
+                    />
+                  </div>
+                </div>
+
+                {entities === undefined ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-4 w-full" />
+                  </div>
+                ) : entities.length === 0 ? (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    No entities found yet. Open a document and run an extraction.
+                  </p>
+                ) : entityResult.total === 0 ? (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    No entities match this view.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {entityResult.groups.map((group) => (
+                      <EntityGroup
+                        key={group.key}
+                        group={group}
+                        suggestions={suggestionsByGroup.get(group.key) ?? []}
+                        projectId={projectId}
+                        visibleProperties={views.entities.visibleProperties}
+                        forceOpen={entitiesNarrowed}
+                        grouped={entitiesGrouped}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 }

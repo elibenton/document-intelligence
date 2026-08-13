@@ -10,13 +10,54 @@ import { v } from "convex/values";
  * lets a plain query hand the client the same text `runAnalyze` will send when
  * no override is given.
  */
+/**
+ * The four buckets the library colors its primary pill by. Kept here beside
+ * the prompt because the enum in the schema, the instruction that explains
+ * them, and the client's color map all have to agree; the client imports this
+ * list rather than restating it.
+ */
+export const PRIMARY_CATEGORIES = [
+  "legal",
+  "government",
+  "business",
+  "published",
+] as const;
+
+export type PrimaryCategory = (typeof PRIMARY_CATEGORIES)[number] | "other";
+
+/**
+ * How to pick one of the four, including what to do when two of them fit —
+ * which is most of the time, since a court filing is also a government record
+ * and a press release is also a business document.
+ */
+const CATEGORY_RULE =
+  'Assign exactly one primary_category. "legal": instruments with legal force or filed in a legal proceeding — pleadings, orders, contracts, deeds, subpoenas. ' +
+  '"government": records a public agency produced or received while administering something — permits, inspection reports, agency correspondence, public-records responses. ' +
+  '"business": records internal to a private organization — invoices, memos, financial statements, board minutes, personnel files. ' +
+  '"published": anything issued to a general audience — news articles, press releases, books, academic papers, web pages. ' +
+  'When more than one fits, take the first that applies in that order: legal, then government, then business, then published. Use "other" only when none of the four genuinely describes the document.';
+
+/**
+ * The date rule.
+ *
+ * This date is what the library sorts and displays, so a confident wrong
+ * answer is worse than no answer — it silently misfiles the document. The
+ * instruction is written to make "unknown" the comfortable choice, and
+ * metadata.ts drops anything that doesn't come back as a clean ISO prefix.
+ */
+const DATE_RULE =
+  "Date the document only from a date the document states about itself: a dateline, filing or received stamp, signature block, letterhead date, or revision line. " +
+  "Do not infer a date from events the document describes, from a copyright notice, from the date of a document it cites, or from period or style. " +
+  "Truncate to what the text actually establishes — a document that gives only a month is a month, not the first of that month. " +
+  'If the document does not state its own date, or you would be choosing between candidates, return precision "unknown" with an empty value. Returning unknown is correct and expected; guessing is not.';
+
 export function buildAnalyzePrompt(options: {
   csv: boolean;
   kindNames: string[];
 }): string {
   const base = options.csv
-    ? "Analyze this CSV dataset: its columns, row semantics, subject, and notable structure."
-    : "Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Classify the document type broad-to-specific, flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.";
+    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure. ${CATEGORY_RULE} ${DATE_RULE}`
+    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Classify the document type broad-to-specific, flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward. ${CATEGORY_RULE} ${DATE_RULE}`;
   return options.kindNames.length > 0
     ? `${base} Existing document kinds: ${options.kindNames.join(", ")}. Use one when it fits; otherwise propose a concise new lowercase kind.`
     : base;
@@ -81,6 +122,41 @@ export const DOCUMENT_UNDERSTANDING_SCHEMA = {
     date: {
       type: "string",
       description: "Primary date of the document (ISO if possible), or Unknown",
+    },
+    // The date the document was *made*, as opposed to `date` above (any date
+    // the document is about) and `uploadedAt` (when it reached us). This is
+    // the one the library sorts and shows, so it is deliberately structured:
+    // a precision the renderer can format against, and the evidence string,
+    // which exists to make guessing feel expensive.
+    document_date: {
+      type: "object",
+      description:
+        "When the document itself says it was created. See the dating rule in the instruction — unknown is a correct answer.",
+      properties: {
+        value: {
+          type: "string",
+          description:
+            'ISO 8601, truncated to what the document establishes: "2026-08-08", "2026-08", or "2026". Empty string when unknown.',
+        },
+        precision: {
+          type: "string",
+          enum: ["day", "month", "year", "unknown"],
+          description:
+            "How precisely the document fixes its own creation date. Must agree with the shape of value.",
+        },
+        evidence: {
+          type: "string",
+          description:
+            "The exact text the date was read from, quoted from the document. Empty when unknown.",
+        },
+      },
+      required: ["value", "precision", "evidence"],
+    },
+    primary_category: {
+      type: "string",
+      enum: [...PRIMARY_CATEGORIES, "other"],
+      description:
+        "The single broadest bucket this document belongs to. See the category rule in the instruction for precedence when several fit.",
     },
     author: {
       type: "string",
@@ -247,6 +323,8 @@ export const DOCUMENT_UNDERSTANDING_SCHEMA = {
     "source_language_code",
     "is_multilingual",
     "primary_kind",
+    "document_date",
+    "primary_category",
     "document_types",
     "tags",
     "suggested_roles",

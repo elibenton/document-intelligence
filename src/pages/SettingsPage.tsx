@@ -198,8 +198,9 @@ export default function SettingsPage() {
                   Default language
                 </label>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  New sources in another language are translated automatically.
-                  Existing sources update in the background when this changes.
+                  New documents in another language are translated
+                  automatically. Existing documents update in the background
+                  when this changes.
                 </p>
                 {settings === undefined ? (
                   <Skeleton className="mt-3 h-9 w-full max-w-sm" />

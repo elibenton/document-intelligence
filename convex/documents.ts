@@ -10,56 +10,26 @@ export const list = query({
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .order("desc")
       .collect();
-    return docs.filter((d) => d.archivedAt === undefined);
-  },
-});
+    const active = docs.filter((d) => d.archivedAt === undefined);
 
-/**
- * The extraction review queue: documents that finished Analyze and are waiting
- * for the user to confirm what to pull out of them.
- *
- * A document leaves the queue by being extracted (its status moves past
- * "parsed") or by being explicitly skipped. It is deliberately not possible to
- * leave silently — a skipped document stays flagged in the library as never
- * extracted against.
- *
- * Oldest first: the queue is work to get through, not a feed.
- */
-export const reviewQueue = query({
-  args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const docs = await ctx.db
-      .query("documents")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    return docs
-      .filter(
-        (doc) =>
-          doc.status === "parsed" &&
-          doc.archivedAt === undefined &&
-          doc.reviewSkippedAt === undefined
-      )
-      .sort((a, b) => a.uploadedAt - b.uploadedAt);
-  },
-});
-
-/** Dismiss a document from the review queue without extracting from it. */
-export const skipReview = mutation({
-  args: { documentId: v.id("documents") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await ctx.db.patch(args.documentId, { reviewSkippedAt: Date.now() });
-    return null;
-  },
-});
-
-/** Put a skipped document back in the queue — "extract this after all". */
-export const resumeReview = mutation({
-  args: { documentId: v.id("documents") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await ctx.db.patch(args.documentId, { reviewSkippedAt: undefined });
-    return null;
+    // Analyze is the one stage with no state of its own on the document: the
+    // row sits at "parsed" from the moment the scan lands until extraction
+    // starts, so "is Analyze running, or did it fail?" is only answerable from
+    // its job row. The library labels rows with that answer, so it rides along
+    // here — one indexed read, and only for the rows actually in that gap,
+    // rather than a subscription per visible row.
+    return await Promise.all(
+      active.map(async (doc) => {
+        if (doc.status !== "parsed") return { ...doc, analyzeStatus: null };
+        const job = await ctx.db
+          .query("processingJobs")
+          .withIndex("by_document", (q) =>
+            q.eq("documentId", doc._id).eq("stage", "analyze")
+          )
+          .first();
+        return { ...doc, analyzeStatus: job?.status ?? null };
+      })
+    );
   },
 });
 

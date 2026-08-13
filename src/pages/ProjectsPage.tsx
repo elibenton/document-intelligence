@@ -136,7 +136,7 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
         </p>
       )}
       <p className="text-xs text-muted-foreground mt-2">
-        {project.documentCount >= 500 ? "500+" : project.documentCount} source
+        {project.documentCount >= 500 ? "500+" : project.documentCount} document
         {project.documentCount !== 1 && "s"} ·{" "}
         {new Date(project.createdAt).toLocaleDateString()}
       </p>
