@@ -5,6 +5,11 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { QuotePreview } from "@/components/entities/QuotePreview";
+import {
+  ConnectionTimeline,
+  CounterpartyStrip,
+  GroupedConnections,
+} from "@/components/entities/EntityConnections";
 
 const toSlug = (name: string) =>
   name
@@ -122,78 +127,44 @@ export default function EntityPage() {
       </header>
 
       <div className="flex-1 p-6">
-        <h2 className="text-lg font-semibold mb-3">Connections</h2>
         {connections === undefined ? (
           <div className="space-y-2 mb-6">
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-full" />
           </div>
-        ) : connections.length === 0 ? (
+        ) : connections.connections.length === 0 ? (
           <p className="text-sm text-muted-foreground mb-6">
             No mapped relationships yet.
           </p>
         ) : (
-          <div className="flex flex-col gap-2 mb-6">
-            {connections.map((c) => (
-              <div key={c._id} className="border rounded-md px-3 py-2">
-                <div className="flex items-center gap-2 text-sm">
-                  {c.direction === "incoming" && (
-                    <>
-                      <Link
-                        to={entityLink(c.otherEntity.name)}
-                        className="font-medium hover:underline"
-                      >
-                        {c.otherEntity.name}
-                      </Link>
-                      <span className="text-muted-foreground text-xs">
-                        {c.relationType.replace(/_/g, " ")}
-                      </span>
-                      <span className="font-medium">{entity.name}</span>
-                    </>
-                  )}
-                  {c.direction === "outgoing" && (
-                    <>
-                      <span className="font-medium">{entity.name}</span>
-                      <span className="text-muted-foreground text-xs">
-                        {c.relationType.replace(/_/g, " ")}
-                      </span>
-                      <Link
-                        to={entityLink(c.otherEntity.name)}
-                        className="font-medium hover:underline"
-                      >
-                        {c.otherEntity.name}
-                      </Link>
-                    </>
-                  )}
-                  <Badge variant="outline" className="text-[10px] ml-auto capitalize shrink-0">
-                    {c.otherEntity.type}
-                  </Badge>
-                </div>
-                {c.quote && c.document && (
-                  <QuotePreview
-                    locate={{ documentId: c.document._id, text: c.quote }}
-                    highlight={entity.name}
-                  >
-                    <p className="text-xs text-muted-foreground mt-1 italic cursor-help">
-                      “{c.quote}”
-                    </p>
-                  </QuotePreview>
-                )}
-                {c.quote && !c.document && (
-                  <p className="text-xs text-muted-foreground mt-1 italic">
-                    “{c.quote}”
-                  </p>
-                )}
-                {c.document && (
-                  <Link
-                    to={`/documents/${c.document._id}`}
-                    className="text-xs text-muted-foreground hover:underline mt-0.5 inline-block"
-                  >
-                    Source: {c.document.name}
-                  </Link>
-                )}
-              </div>
-            ))}
+          <div className="mb-6 flex flex-col gap-6">
+            {connections.counterparties.length > 1 && (
+              <section>
+                <h2 className="text-lg font-semibold mb-2">Most connected</h2>
+                <CounterpartyStrip
+                  counterparties={connections.counterparties}
+                  entityLink={entityLink}
+                />
+              </section>
+            )}
+
+            <section>
+              <h2 className="text-lg font-semibold mb-3">Connections</h2>
+              <GroupedConnections
+                connections={connections.connections}
+                subjectName={entity.name}
+                entityLink={entityLink}
+              />
+            </section>
+
+            <section>
+              <h2 className="text-lg font-semibold mb-3">Timeline</h2>
+              <ConnectionTimeline
+                connections={connections.connections}
+                subjectName={entity.name}
+                entityLink={entityLink}
+              />
+            </section>
           </div>
         )}
 

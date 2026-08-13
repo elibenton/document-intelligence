@@ -2,6 +2,11 @@ import { internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { resolveEntity, recountEntity } from "./entityResolution";
 import type { Id } from "./_generated/dataModel";
+import {
+  canonicalizeRelation,
+  relationLabel,
+  relationSortIndex,
+} from "./relationTypes";
 
 // ---------------------------------------------------------------------------
 // Mutation: resolve names to entities and store relationship rows
@@ -134,7 +139,18 @@ export const ingestRelationships = internalMutation({
 // Queries
 // ---------------------------------------------------------------------------
 
-/** All relationships touching an entity, with the other endpoint hydrated. */
+/**
+ * Everything touching an entity, phrased from that entity's point of view.
+ *
+ * Relations are canonicalized on the way out (see convex/relationTypes.ts) so
+ * `paid` and `made_payment_to` group together. The raw `relationType` is
+ * returned alongside, because the document's own wording is the provenance and
+ * the canonical id is only a display and grouping decision.
+ *
+ * `counterparties` is aggregated here rather than in the client: it needs both
+ * index reads combined, and the client would otherwise re-derive it on every
+ * render.
+ */
 export const forEntity = query({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
@@ -148,18 +164,33 @@ export const forEntity = query({
       .take(200);
 
     const rows = [
-      ...asSource.map((r) => ({ rel: r, otherId: r.targetEntityId, direction: "outgoing" as const })),
-      ...asTarget.map((r) => ({ rel: r, otherId: r.sourceEntityId, direction: "incoming" as const })),
+      ...asSource.map((r) => ({ rel: r, otherId: r.targetEntityId, stored: "outgoing" as const })),
+      ...asTarget.map((r) => ({ rel: r, otherId: r.sourceEntityId, stored: "incoming" as const })),
     ];
 
-    const results = [];
-    for (const { rel, otherId, direction } of rows) {
+    const connections = [];
+    for (const { rel, otherId, stored } of rows) {
       const other = await ctx.db.get(otherId);
       if (!other) continue;
       const doc = rel.documentId ? await ctx.db.get(rel.documentId) : null;
-      results.push({
+
+      // A phrase like "employs" states the canonical relation backwards, so the
+      // endpoints swap: storing "X employs Y" and "Y works at X" must put both
+      // under one heading rather than two mirrored ones.
+      const canonical = canonicalizeRelation(rel.relationType);
+      const direction = canonical.invert
+        ? stored === "outgoing"
+          ? ("incoming" as const)
+          : ("outgoing" as const)
+        : stored;
+
+      connections.push({
         _id: rel._id,
         direction,
+        canonicalId: canonical.id,
+        canonicalKnown: canonical.known,
+        label: relationLabel(canonical.id, direction),
+        /** As the document worded it — kept for provenance, not for grouping. */
         relationType: rel.relationType,
         confidence: rel.confidence,
         quote: rel.quote,
@@ -169,6 +200,44 @@ export const forEntity = query({
         document: doc ? { _id: doc._id, name: doc.name } : null,
       });
     }
-    return results;
+
+    // Strongest relation first, then most recent — so the money and employment
+    // facts lead, and an undated assertion never outranks a dated one.
+    connections.sort((a, b) => {
+      const byRelation =
+        relationSortIndex(a.canonicalId) - relationSortIndex(b.canonicalId);
+      if (byRelation !== 0) return byRelation;
+      return (b.eventDate ?? "").localeCompare(a.eventDate ?? "");
+    });
+
+    const tally = new Map<
+      string,
+      {
+        entity: { _id: Id<"entities">; name: string; type: string };
+        count: number;
+        labels: string[];
+      }
+    >();
+    for (const connection of connections) {
+      const key = connection.otherEntity._id;
+      const existing = tally.get(key);
+      if (existing) {
+        existing.count++;
+        if (!existing.labels.includes(connection.label)) {
+          existing.labels.push(connection.label);
+        }
+      } else {
+        tally.set(key, {
+          entity: connection.otherEntity,
+          count: 1,
+          labels: [connection.label],
+        });
+      }
+    }
+    const counterparties = [...tally.values()].sort(
+      (a, b) => b.count - a.count || a.entity.name.localeCompare(b.entity.name)
+    );
+
+    return { connections, counterparties };
   },
 });
