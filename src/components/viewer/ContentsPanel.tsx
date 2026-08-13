@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   TableOfContents,
@@ -41,6 +41,22 @@ export function ContentsPanel({
     () => buildTocHeaders(blocks, outline),
     [blocks, outline]
   );
+  // Typing is local; the committed term is lifted on a 150ms debounce.
+  // `searchQuery` stays the source of truth (an entity click sets it from
+  // outside), and `draft ?? searchQuery` is the same local-over-stored pattern
+  // useProjectViews uses. Without this, every keystroke re-rendered the
+  // 1,600-line DocumentPage and re-scanned every block in the document.
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? searchQuery;
+  useEffect(() => {
+    if (draft === null) return;
+    const timer = setTimeout(() => {
+      onSearchChange(draft);
+      setDraft(null);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [draft, onSearchChange]);
+
   const outcome = useMemo(
     () => searchBlocks(blocks, searchQuery),
     [blocks, searchQuery]
@@ -61,8 +77,8 @@ export function ContentsPanel({
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <SearchBar
-        query={searchQuery}
-        onQueryChange={onSearchChange}
+        query={value}
+        onQueryChange={setDraft}
         isEntitySearch={isEntitySearch}
       />
       <div className="min-h-0 flex-1 overflow-y-auto">

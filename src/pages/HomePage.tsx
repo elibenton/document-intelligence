@@ -442,9 +442,18 @@ export default function HomePage() {
   const entitiesNarrowed =
     entityQuery.trim() !== "" || views.entities.filters.length > 0;
 
+  // Row position, by identity. This was `flat.indexOf(doc)` *inside* the map —
+  // a linear scan per row, so O(n²) per render, re-run on every keystroke in
+  // the search box because the memo above depends on the query string.
+  const libraryIndexByDoc = useMemo(() => {
+    const map = new Map<LibraryDoc, number>();
+    libraryResult.flat.forEach((doc, i) => map.set(doc, i));
+    return map;
+  }, [libraryResult.flat]);
+
   function renderLibraryRows(group: ViewGroup<LibraryDoc>) {
     return group.rows.map((doc) => {
-      const index = libraryResult.flat.indexOf(doc);
+      const index = libraryIndexByDoc.get(doc) ?? 0;
       return (
         <LibraryRow
           key={`${group.key}:${doc._id}`}

@@ -520,6 +520,10 @@ export default defineSchema({
     .index("by_type", ["type", "mentionCount"])
     .index("by_name", ["name"])
     .index("by_project", ["projectId"])
+    // The library sorts entities by mentionCount, so the 200-row cap has to
+    // cut the tail rather than an arbitrary creation-order slice — otherwise
+    // the most-mentioned entities can never reach the client.
+    .index("by_project_and_mentions", ["projectId", "mentionCount"])
     .searchIndex("search_name", {
       searchField: "name",
       filterFields: ["type", "projectId"],

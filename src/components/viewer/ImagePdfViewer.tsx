@@ -669,16 +669,24 @@ function PageTextLayer({
     const layer = layerRef.current;
     if (!layer || tokens.length === 0) return;
 
+    // Three passes, not one. Interleaving a style write with a
+    // getBoundingClientRect read forces a synchronous layout *per token* — a
+    // 1,500-word page paid ~1,500 forced reflows, twice (once immediately,
+    // once after fonts load). Batching the writes and reads apart costs two
+    // layouts total.
     const fit = () => {
-      for (const el of layer.querySelectorAll<HTMLElement>("span[data-w]")) {
+      const els = Array.from(
+        layer.querySelectorAll<HTMLElement>("span[data-w]")
+      ).filter((el) => Number(el.dataset.w));
+
+      for (const el of els) el.style.transform = "";
+      const widths = els.map((el) => el.getBoundingClientRect().width);
+      els.forEach((el, i) => {
         const target = Number(el.dataset.w);
-        if (!target) continue;
-        el.style.transform = "";
-        const actual = el.getBoundingClientRect().width;
-        if (actual > 0) {
-          el.style.transform = `scaleX(${target / actual})`;
+        if (widths[i] > 0) {
+          el.style.transform = `scaleX(${target / widths[i]})`;
         }
-      }
+      });
     };
 
     fit();

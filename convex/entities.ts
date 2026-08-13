@@ -16,9 +16,13 @@ import { v } from "convex/values";
 export const listAll = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    // Ordered by mentionCount, not creation time: the client sorts by mentions,
+    // so a creation-ordered cap silently hid the entities it most wanted.
     return await ctx.db
       .query("entities")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .withIndex("by_project_and_mentions", (q) =>
+        q.eq("projectId", args.projectId)
+      )
       .order("desc")
       .take(200);
   },

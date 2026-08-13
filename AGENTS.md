@@ -74,6 +74,16 @@ never drift from what the UI shows. Do not freeze it into a constant.
 `documentTypes` (a hierarchical path) and `suggestedSplits` used to be a third
 and fourth vocabulary. Both were write-only and are gone.
 
+## The view engine is used — do not "simplify" it
+
+`src/lib/views` + `src/components/views` (filters, multi-key sort, group-by,
+group ordering, the Properties panel) is a configurable-view system that a
+simplification audit proposed cutting by ~700 lines on the premise that its
+capabilities were reachable but unused. **That premise is false.** Live
+`projectViews` rows show customised `visibleProperties` differing per project,
+`groupBy` in use on both lists, and a filter the user had begun building.
+Decision 2026-08-13: the whole surface stays. Do not re-propose it.
+
 ## Reliability
 
 Terminal state for a queued stage is written in exactly one place: the pool's

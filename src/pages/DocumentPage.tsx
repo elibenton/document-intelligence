@@ -42,10 +42,7 @@ export default function DocumentPage() {
   const documentId = id as Id<"documents">;
   const navigate = useNavigate();
   const document = useQuery(api.documents.get, { id: documentId });
-  const url = useQuery(
-    api.documents.getUrl,
-    document ? { storageId: document.storageId } : "skip"
-  );
+  const url = document?.url ?? undefined;
   const blocks = useQuery(api.blocks.byDocument, { documentId });
   const pages = useQuery(api.pages.byDocument, { documentId });
   const extractions = useQuery(api.extractions.byDocument, { documentId });

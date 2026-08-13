@@ -82,10 +82,19 @@ export const setArchived = mutation({
   },
 });
 
+/**
+ * The document row plus its signed file URL.
+ *
+ * The URL rides along because the viewer needs both and used to fetch them in
+ * series — `getUrl` could not run until `get` had returned a storageId, so the
+ * whole time-to-first-pixel was gated on two sequential round trips.
+ */
 export const get = query({
   args: { id: v.id("documents") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    const document = await ctx.db.get(args.id);
+    if (!document) return null;
+    return { ...document, url: await ctx.storage.getUrl(document.storageId) };
   },
 });
 
