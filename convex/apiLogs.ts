@@ -49,6 +49,13 @@ export const record = internalMutation({
     cacheHit: v.optional(v.boolean()),
     error: v.optional(v.string()),
     documentId: v.optional(v.id("documents")),
+    // Measurement fields. All optional: rows written before this landed have
+    // none of them, and non-Interfaze callers (embeddings) supply none either.
+    finishReason: v.optional(v.string()),
+    promptHash: v.optional(v.string()),
+    outputHash: v.optional(v.string()),
+    errorCode: v.optional(v.string()),
+    buildSha: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await ctx.db.insert("apiLogs", {
@@ -89,17 +96,56 @@ export const record = internalMutation({
   },
 });
 
-/** Most recent API calls, newest first, with the document name joined in. */
+/**
+ * Most recent API calls, newest first, with the document name joined in.
+ *
+ * The join is deduplicated by document id: one 20-page ingest writes ~28 log
+ * rows that all point at the same document, so the naive per-row `get` did up
+ * to 100 reads to answer a question with a handful of distinct answers.
+ */
 export const list = query({
   args: {},
   handler: async (ctx) => {
     const logs = await ctx.db.query("apiLogs").order("desc").take(100);
-    return await Promise.all(
-      logs.map(async (log) => {
-        const doc = log.documentId ? await ctx.db.get(log.documentId) : null;
-        return { ...log, documentName: doc?.name };
-      })
-    );
+    const names = new Map<Id<"documents">, string | undefined>();
+    for (const id of new Set(logs.flatMap((l) => (l.documentId ? [l.documentId] : [])))) {
+      names.set(id, (await ctx.db.get(id))?.name);
+    }
+    return logs.map((log) => ({
+      ...log,
+      documentName: log.documentId ? names.get(log.documentId) : undefined,
+    }));
+  },
+});
+
+/**
+ * Retention. Nothing deleted these rows, so the log grew without bound in the
+ * same database as app data.
+ *
+ * Safe to delete detail because the lifetime ledger does not live here: the
+ * sharded `apiUsageTotals` rows carry calls/tokens/cost forever and are never
+ * pruned. What ages out is the per-call measurement detail, which answers
+ * "what changed this week", not "what have we spent".
+ */
+const LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const RETENTION_BATCH = 200;
+
+export const pruneOldLogs = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const cutoff = Date.now() - LOG_RETENTION_MS;
+    const stale = await ctx.db
+      .query("apiLogs")
+      .withIndex("by_creation_time", (q) => q.lt("_creationTime", cutoff))
+      .take(RETENTION_BATCH);
+    for (const row of stale) await ctx.db.delete(row._id);
+    // Re-arm while a backlog remains, so the first run after a long gap does
+    // not have to fit the whole history into one mutation.
+    if (stale.length === RETENTION_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.apiLogs.pruneOldLogs, {});
+    }
+    return null;
   },
 });
 

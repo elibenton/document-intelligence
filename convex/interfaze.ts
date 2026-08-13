@@ -59,6 +59,20 @@ const INTERFAZE_MODEL = "interfaze-beta";
 // caps a request at 5 minutes; this is the outer Convex-facing guard.)
 const INTERFAZE_TIMEOUT_MS = 9 * 60 * 1000;
 
+/**
+ * FNV-1a, 8 hex chars. Not a security hash — it is a cheap grouping key for
+ * the API log, where the only questions are "same prompt shape?" and "same
+ * bytes back?". Collisions cost a mis-grouped row, nothing more.
+ */
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -236,12 +250,30 @@ export async function chatCompletion(
   }
 ): Promise<ChatResult> {
   const startedAt = Date.now();
+  // Cohort key. Deliberately covers only the *shape* of the request — system
+  // prompt, schema, task — and never the document text, so every call sharing
+  // a prompt version groups together and a regression is attributable to the
+  // change that caused it.
+  const promptHash = fnv1a(
+    [
+      options.usage?.operation ?? "",
+      options.task ?? "",
+      options.systemPrompt ?? "",
+      options.responseSchema
+        ? options.responseSchema.name +
+          JSON.stringify(options.responseSchema.schema)
+        : "",
+    ].join(" ")
+  );
   const reportUsage = async (report: {
     status: "ok" | "error";
     promptTokens?: number;
     completionTokens?: number;
     cacheHit?: boolean;
     error?: string;
+    finishReason?: string;
+    outputHash?: string;
+    errorCode?: string;
   }) => {
     if (!options.usage) return;
     const promptTokens = report.promptTokens ?? 0;
@@ -262,6 +294,11 @@ export async function chatCompletion(
       durationMs: Date.now() - startedAt,
       cacheHit: report.cacheHit,
       error: report.error,
+      finishReason: report.finishReason,
+      promptHash,
+      outputHash: report.outputHash,
+      errorCode: report.errorCode,
+      buildSha: process.env.BUILD_SHA?.slice(0, 7),
     });
   };
 
@@ -296,21 +333,31 @@ export async function chatCompletion(
         : {}),
     });
 
+    const content = res.choices?.[0]?.message?.content ?? "";
     await reportUsage({
       status: "ok",
       promptTokens: res.usage?.prompt_tokens,
       completionTokens: res.usage?.completion_tokens,
       cacheHit: res.vcache,
+      // "length" means the provider stopped early. We pay for the emitted
+      // tokens either way and get unparseable JSON back, so this is the one
+      // quality signal that is free, self-evident, and currently unmeasured.
+      finishReason: res.choices?.[0]?.finish_reason ?? undefined,
+      outputHash: fnv1a(content.trim()),
     });
     return {
-      content: res.choices?.[0]?.message?.content ?? "",
+      content,
       precontext: res.precontext ?? [],
       vcache: res.vcache,
       completionTokens: res.usage?.completion_tokens ?? 0,
     };
   } catch (e) {
     const failure = classifyError(e);
-    await reportUsage({ status: "error", error: failure.message });
+    await reportUsage({
+      status: "error",
+      error: failure.message,
+      errorCode: failure.code,
+    });
     throw failure;
   }
 }

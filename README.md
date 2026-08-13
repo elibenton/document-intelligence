@@ -99,9 +99,18 @@ entity highlighting, and citation deep-links. `convex/interfaze.ts` is the only
 place that talks to it; it also owns cost logging (`apiLogs`, `apiUsageTotals`)
 and maps provider errors onto UI-facing `FailureCode`s.
 
+Because it is the only door, it is also where measurement lives: every call
+stamps `finishReason`, `promptHash`, `outputHash`, `errorCode` and `buildSha`
+onto the log row it was already writing, so production traffic doubles as the
+benchmark corpus at zero extra cost. Add new metrics there rather than in a
+bench script — see [CLAUDE.md](CLAUDE.md). `apiLogs` detail expires after 30
+days (`convex/crons.ts`); lifetime spend lives in `apiUsageTotals`, which is
+never pruned.
+
 **Read the rules before touching AI code.** [CLAUDE.md](CLAUDE.md) lists
 verified Interfaze constraints (precontext is per-invocation, *not* per-page;
-one task per call; 80MB by URL / 20MB inline; no streaming, because streaming
+one task per call; **20MB**, because we send a URL inside a *file part* and that
+is the file-object ceiling, not the 80MB URL-in-prompt one; no streaming, because streaming
 drops usage and zeroes the cost ledger). [docs/pdf-edge-cases.md](docs/pdf-edge-cases.md)
 documents the big one: **Interfaze does not OCR images embedded inside a PDF —
 it reads the text layer and nothing else.** A scanned PDF comes back empty, and

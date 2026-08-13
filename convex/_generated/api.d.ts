@@ -13,6 +13,7 @@ import type * as annotations from "../annotations.js";
 import type * as apiLogs from "../apiLogs.js";
 import type * as blocks from "../blocks.js";
 import type * as clips from "../clips.js";
+import type * as crons from "../crons.js";
 import type * as detections from "../detections.js";
 import type * as documentCategories from "../documentCategories.js";
 import type * as documents from "../documents.js";
@@ -74,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   apiLogs: typeof apiLogs;
   blocks: typeof blocks;
   clips: typeof clips;
+  crons: typeof crons;
   detections: typeof detections;
   documentCategories: typeof documentCategories;
   documents: typeof documents;

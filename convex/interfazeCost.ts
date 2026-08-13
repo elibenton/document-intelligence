@@ -25,6 +25,21 @@ export interface ApiUsage {
   durationMs: number;
   cacheHit?: boolean;
   error?: string;
+
+  // --- Measurement fields, computed at the chokepoint (see interfaze.ts) ---
+  // These exist so that every production call is a benchmark row: the offline
+  // scan bench measured 24 of its 31 columns from data available right here,
+  // and needed a paid corpus run to get them.
+  /** "stop" | "length" | ... — "length" is the provider saying it truncated. */
+  finishReason?: string;
+  /** Cohort key: identical prompt shape. Attributes a regression to a change. */
+  promptHash?: string;
+  /** Two uncached runs of one promptHash differing here = non-determinism. */
+  outputHash?: string;
+  /** Classified failure code, so errors group without parsing free text. */
+  errorCode?: string;
+  /** Which deploy produced this row. Without it a metric stream is unattributable. */
+  buildSha?: string;
 }
 
 export type UsageLogger = (usage: ApiUsage) => Promise<void>;

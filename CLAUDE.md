@@ -49,6 +49,38 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
   `scripts/` is not yet in any tsconfig `include`, so nothing there is
   typechecked; treat imports from `convex/` there as unverified.
 
+## Measurement: production traffic is the benchmark
+
+Every Interfaze call is a benchmark row. `chatCompletion` (`convex/interfaze.ts`)
+is the single chokepoint, and it stamps five fields onto the `apiLogs` row it
+already wrote — no extra API call, no extra database write, no call site
+involved:
+
+| Field | Answers |
+|---|---|
+| `finishReason` | Did the provider truncate? `"length"` means we paid in full for unparseable JSON. |
+| `promptHash` | Cohort key over prompt/schema *shape* only, never document text. Attributes a regression to the change that caused it. |
+| `outputHash` | Two uncached runs of one `promptHash` returning different bytes = non-determinism, measured on real traffic for free. |
+| `errorCode` | Classified failure, so errors group without parsing free text. |
+| `buildSha` | Which deploy produced the row. Without it a metric stream is unattributable. |
+
+**Add measurement here, not in a bench script.** An offline benchmark derived 24
+of its 31 columns from data already available at this call site and charged real
+money per run to get them. Before writing a script that measures Interfaze
+behavior, check whether the chokepoint can compute it. What genuinely cannot
+move is anything needing an oracle — OCR fidelity against a native text layer,
+TOC accuracy against labels — because production has no known-correct answer.
+
+**Free quality labels already in the database:** `displayNameSource === "human"`
+(`convex/documents.ts`) is a user rejecting a machine-generated title, joinable
+to the Analyze call that produced it. An operator retry is a human paying twice
+to say the first answer was wrong. Neither needs a labeling UI.
+
+**Retention:** `apiLogs` is a measurement stream and expires after 30 days
+(`convex/crons.ts` → `apiLogs.pruneOldLogs`). The lifetime ledger is elsewhere —
+sharded `apiUsageTotals` rows, never pruned. Don't put anything in `apiLogs`
+that must survive.
+
 ## Cost shape (measured, 12-page born-digital English PDF)
 
 Scan $0.0021 → Analyze $0.0308 → Rename $0.0062 → Extract $0.0271 = **$0.066/doc**.

@@ -737,7 +737,23 @@ export default defineSchema({
     cacheHit: v.optional(v.boolean()),
     error: v.optional(v.string()),
     documentId: v.optional(v.id("documents")),
-  }),
+
+    // Measurement fields, computed at the Interfaze chokepoint. These exist so
+    // production traffic *is* the benchmark: the offline scan bench derived 24
+    // of its 31 columns from data available at the call site, and cost real
+    // money per run to get them. All optional — rows predate them, and the
+    // embeddings caller supplies none.
+    finishReason: v.optional(v.string()), // "length" = truncated, billed in full
+    promptHash: v.optional(v.string()), // cohort key: prompt/schema shape only
+    outputHash: v.optional(v.string()), // two uncached runs differing = nondeterminism
+    errorCode: v.optional(v.string()), // classified, so errors group without parsing
+    buildSha: v.optional(v.string()), // which deploy produced this row
+  })
+    // The table had no indexes: `list` worked only by riding by_creation_time.
+    // by_operation carries _creationTime as its implicit tiebreaker, so it
+    // answers every "last N days of operation X" question on its own.
+    .index("by_operation", ["operation"])
+    .index("by_document", ["documentId"]),
 
   // Denormalized running totals (singleton) so the usage page never has to
   // scan/count the full log.
