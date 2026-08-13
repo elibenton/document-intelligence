@@ -13,7 +13,6 @@ import { WebClipViewer } from "@/components/viewer/WebClipViewer";
 import { CsvViewer } from "@/components/viewer/CsvViewer";
 import { TranslatedDocumentView } from "@/components/viewer/TranslatedDocumentView";
 import { RecordingView } from "@/components/recordings/RecordingView";
-import { ExtractionSetup } from "@/components/documents/ExtractionSetup";
 import { ViewerLayout } from "@/components/viewer/ViewerLayout";
 import { ContentsPanel } from "@/components/viewer/ContentsPanel";
 import { NotesPanel } from "@/components/viewer/NotesPanel";
@@ -648,11 +647,6 @@ export default function DocumentPage() {
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <TabsContent value="entities">
             <div className="flex flex-col gap-4">
-              {/* Upload review: confirm the extraction template before running */}
-              {document.status === "parsed" && (
-                <ExtractionSetup document={document} />
-              )}
-
               {/* Entity groups */}
               {sortedEntityGroups.map((group) => {
                 const isGroupCollapsed = collapsedGroups.has(group.id);

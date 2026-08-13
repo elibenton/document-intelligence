@@ -541,8 +541,9 @@ export function PipelineProgress({
 
 /**
  * The template a retry starts from: what this document's analysis suggested,
- * falling back to the saved template for its kind — the same precedence the
- * review panel uses (ExtractionSetup.tsx).
+ * falling back to the saved template for its kind. This is now the only place
+ * that precedence lives; the upload review panel that duplicated it is gone,
+ * along with the review step it belonged to.
  */
 function extractDefaultRoles(
   document: Doc<"documents">,

@@ -61,6 +61,19 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
   metric that can be computed at the Interfaze chokepoint belongs there instead;
   only a metric needing a known-correct answer justifies an offline harness.
 
+## Taxonomy
+
+Documents carry two type fields and they are **not** interchangeable:
+`primaryKind` is an open free-text vocabulary the model proposes from quoted
+evidence; `primaryCategory` is one of the broad buckets in the
+`documentCategories` table. The table is deliberately user-editable — the keys
+and labels in a live deployment are not the seeded defaults, and the Analyze
+prompt's category enum and instruction are built from the live rows so they can
+never drift from what the UI shows. Do not freeze it into a constant.
+
+`documentTypes` (a hierarchical path) and `suggestedSplits` used to be a third
+and fourth vocabulary. Both were write-only and are gone.
+
 ## Measurement: production traffic is the benchmark
 
 Every Interfaze call is a benchmark row. `chatCompletion` (`convex/interfaze.ts`)
