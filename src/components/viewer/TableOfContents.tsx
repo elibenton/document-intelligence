@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { cn } from "@/lib/utils";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { buildTocHeaders } from "./tocHeaders";
 
 /** Lightweight block shape from `blocks.byDocument` (no word boxes / html). */
-interface TocBlock {
+export interface TocBlock {
   _id: Id<"blocks">;
   text: string;
   pageNumber: number;
@@ -13,7 +14,7 @@ interface TocBlock {
 }
 
 /** One entry of the Analyze pass's outline (`documents.tableOfContents`). */
-interface OutlineEntry {
+export interface OutlineEntry {
   title: string;
   level: number;
   page: number;
@@ -30,16 +31,6 @@ interface TableOfContentsProps {
   currentPage: number;
   totalPages: number;
   onNavigate: (page: number) => void;
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
-  /** When true, the search was triggered by clicking an entity (use entity highlight color) */
-  isEntitySearch?: boolean;
-}
-
-interface SearchResult {
-  blockId: string;
-  pageNumber: number;
-  snippet: string;
 }
 
 export function TableOfContents({
@@ -48,40 +39,16 @@ export function TableOfContents({
   currentPage,
   totalPages,
   onNavigate,
-  searchQuery,
-  onSearchChange,
-  isEntitySearch,
 }: TableOfContentsProps) {
   const activeRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const updateBlockType = useMutation(api.blocks.updateType);
 
   const [indents, setIndents] = useState<Record<string, number>>({});
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  // Analyze's outline wins when it exists — it read the whole document and
-  // knows a subsection from a chapter. SectionHeader blocks stay as the
-  // fallback for documents scanned before Analyze ran, or that have no
-  // structure worth outlining. `pageNumber` is 0-based throughout this
-  // component (blocks are); the outline stores 1-based pages, so convert once
-  // here and everything downstream keeps working unchanged.
   const fromOutline = (outline ?? []).length > 0;
-  const headers = fromOutline
-    ? outline!.map((entry, index) => ({
-        id: `toc-${index}`,
-        text: entry.title,
-        pageNumber: entry.page - 1,
-        level: entry.level,
-      }))
-    : blocks
-        .filter((b) => b.blockType === "SectionHeader" && b.text.trim())
-        .map((b) => ({
-          id: b._id as string,
-          text: b.text.trim(),
-          pageNumber: b.pageNumber,
-          level: 1,
-        }));
+  const headers = buildTocHeaders(blocks, outline);
 
   /** Manual indent adjustments layer on top of the outline's own depth. */
   const indentOf = useCallback(
@@ -101,50 +68,8 @@ export function TableOfContents({
   }
 
   useEffect(() => {
-    if (!searchQuery) {
-      activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }
-  }, [activeIdx, searchQuery]);
-
-  // Search results
-  const searchResults = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q || q.length < 2) return [];
-
-    const results: SearchResult[] = [];
-    const seenPages = new Set<number>();
-
-    for (const block of blocks) {
-      const textLower = block.text.toLowerCase();
-      if (!textLower.includes(q)) continue;
-
-      const idx = textLower.indexOf(q);
-      const start = Math.max(0, idx - 30);
-      const end = Math.min(block.text.length, idx + q.length + 30);
-      let snippet = block.text.slice(start, end);
-      if (start > 0) snippet = "…" + snippet;
-      if (end < block.text.length) snippet += "…";
-
-      // One result per page
-      if (!seenPages.has(block.pageNumber)) {
-        seenPages.add(block.pageNumber);
-        results.push({
-          blockId: block._id,
-          pageNumber: block.pageNumber,
-          snippet,
-        });
-      }
-    }
-
-    return results.sort((a, b) => a.pageNumber - b.pageNumber);
-  }, [searchQuery, blocks]);
-
-  // Total match count across all blocks
-  const totalMatches = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q || q.length < 2) return 0;
-    return blocks.filter((b) => b.text.toLowerCase().includes(q)).length;
-  }, [searchQuery, blocks]);
+    activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeIdx]);
 
   const handleDemote = useCallback(
     (id: Id<"blocks">) => {
@@ -197,220 +122,11 @@ export function TableOfContents({
     setSelected(new Set());
   }, []);
 
-  // Compute per-section match counts for entity/search highlighting in TOC view
-  const sectionMatchData = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q || q.length < 2 || headers.length === 0) return null;
-
-    // Build page ranges for each section: [startPage, endPage)
-    const sectionRanges = headers.map((h, i) => ({
-      id: h.id,
-      startPage: h.pageNumber,
-      endPage: i + 1 < headers.length ? headers[i + 1].pageNumber : Infinity,
-    }));
-
-    // Count matches per section
-    const sectionCounts = new Map<string, number>();
-    let totalMatchCount = 0;
-
-    for (const block of blocks) {
-      const textLower = block.text.toLowerCase();
-      if (!textLower.includes(q)) continue;
-      totalMatchCount++;
-
-      // Find which section this block belongs to
-      for (let i = sectionRanges.length - 1; i >= 0; i--) {
-        if (block.pageNumber >= sectionRanges[i].startPage) {
-          sectionCounts.set(
-            sectionRanges[i].id,
-            (sectionCounts.get(sectionRanges[i].id) ?? 0) + 1
-          );
-          break;
-        }
-      }
-    }
-
-    const sectionsWithMatches = sectionRanges.filter(
-      (s) => (sectionCounts.get(s.id) ?? 0) > 0
-    ).length;
-
-    return { sectionCounts, totalMatchCount, sectionsWithMatches };
-  }, [searchQuery, blocks, headers]);
-
-  const isSearching = searchQuery.trim().length >= 2;
-
-  // Search bar (always rendered)
-  const searchBar = (
-    <div className="px-3 pb-2 pt-3 sticky top-0 bg-background z-10">
-      <div className="relative">
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-        >
-          <circle cx="7" cy="7" r="5" />
-          <path d="M11 11l3.5 3.5" />
-        </svg>
-        <input
-          ref={searchInputRef}
-          type="text"
-          placeholder="Search document..."
-          value={searchQuery}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className={cn(
-            "w-full text-xs h-7 pl-7 pr-7 rounded-md border bg-background focus:outline-none focus:ring-1",
-            isEntitySearch && searchQuery
-              ? "ring-1 ring-purple-400 border-purple-300 focus:ring-purple-500 dark:border-purple-700"
-              : "focus:ring-primary"
-          )}
-        />
-        {searchQuery && (
-          <button
-            onClick={() => onSearchChange("")}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M2 2l8 8M10 2l-8 8" />
-            </svg>
-          </button>
-        )}
-      </div>
-    </div>
-  );
-
   if (headers.length === 0 && totalPages === 0) {
     return (
-      <div>
-        {searchBar}
-        <div className="p-4 text-sm text-muted-foreground">
-          Process the document to generate a table of contents.
-        </div>
+      <div className="p-4 text-sm text-foreground">
+        Process the document to generate a table of contents.
       </div>
-    );
-  }
-
-  // When searching, show TOC with section highlighting instead of flat results
-  if (isSearching && headers.length > 0 && sectionMatchData) {
-    const highlightColor = isEntitySearch ? "purple" : "amber";
-    const { sectionCounts, totalMatchCount, sectionsWithMatches } = sectionMatchData;
-
-    return (
-      <nav className="flex flex-col">
-        {searchBar}
-        <div className="px-3 py-2 text-xs text-muted-foreground border-b flex items-center justify-between">
-          <span>
-            {totalMatchCount} match{totalMatchCount !== 1 ? "es" : ""} in{" "}
-            {sectionsWithMatches} section{sectionsWithMatches !== 1 ? "s" : ""}
-          </span>
-          {isEntitySearch && (
-            <button
-              onClick={() => onSearchChange("")}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-        <div className="flex flex-col">
-          {headers.map((header, idx) => {
-            const displayPage = header.pageNumber + 1;
-            const indent = indentOf(header);
-            const matchCount = sectionCounts.get(header.id) ?? 0;
-            const hasMatches = matchCount > 0;
-            const isActive = idx === activeIdx;
-
-            return (
-              <div
-                key={header.id}
-                ref={isActive ? activeRef : undefined}
-                className={cn(
-                  "group relative flex items-center gap-1 text-[13px] leading-snug transition-all cursor-pointer",
-                  "py-1.5 pr-3",
-                  hasMatches
-                    ? cn(
-                        "font-medium text-foreground",
-                        highlightColor === "purple"
-                          ? "bg-purple-50 hover:bg-purple-100 border-l-2 border-purple-400 dark:bg-purple-950/40 dark:hover:bg-purple-900/40"
-                          : "bg-amber-50 hover:bg-amber-100 border-l-2 border-amber-400 dark:bg-amber-950/40 dark:hover:bg-amber-900/40"
-                      )
-                    : "font-normal text-muted-foreground/60 hover:text-muted-foreground hover:bg-accent"
-                )}
-                style={{ paddingLeft: `${(hasMatches ? 14 : 16) + indent * 16}px` }}
-                onClick={() => onNavigate(displayPage)}
-              >
-                <span
-                  className={cn(
-                    "flex-1 min-w-0",
-                    hasMatches ? "line-clamp-2" : "line-clamp-1"
-                  )}
-                >
-                  {header.text}
-                </span>
-                {hasMatches ? (
-                  <span
-                    className={cn(
-                      "text-xs tabular-nums font-semibold shrink-0",
-                      highlightColor === "purple"
-                        ? "text-purple-600 dark:text-purple-400"
-                        : "text-amber-600 dark:text-amber-400"
-                    )}
-                  >
-                    {matchCount}
-                  </span>
-                ) : (
-                  <span className="tabular-nums text-xs text-muted-foreground/40 shrink-0">
-                    {displayPage}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </nav>
-    );
-  }
-
-  // Fallback: searching but no headers or no match data — show flat results
-  if (isSearching) {
-    return (
-      <nav className="flex flex-col">
-        {searchBar}
-        <div className="px-3 py-2 text-xs text-muted-foreground border-b">
-          {totalMatches} match{totalMatches !== 1 && "es"} across{" "}
-          {searchResults.length} page{searchResults.length !== 1 && "s"}
-        </div>
-        <div className="flex flex-col">
-          {searchResults.map((result) => {
-            const displayPage = result.pageNumber + 1;
-            return (
-              <button
-                key={result.blockId}
-                onClick={() => onNavigate(displayPage)}
-                className={cn(
-                  "text-left px-3 py-2 text-xs transition-colors hover:bg-accent border-b border-border/50",
-                  currentPage === displayPage && "bg-accent/60"
-                )}
-              >
-                <span className="tabular-nums font-medium text-primary">
-                  p. {displayPage}
-                </span>
-                <p className="text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">
-                  <HighlightedSnippet text={result.snippet} query={searchQuery.trim()} />
-                </p>
-              </button>
-            );
-          })}
-          {searchResults.length === 0 && (
-            <p className="px-3 py-4 text-xs text-muted-foreground text-center">
-              No results found.
-            </p>
-          )}
-        </div>
-      </nav>
     );
   }
 
@@ -418,12 +134,11 @@ export function TableOfContents({
   if (headers.length === 0 && totalPages > 0) {
     return (
       <nav className="flex flex-col">
-        {searchBar}
-        <div className="px-4 pb-3 flex items-baseline justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="px-4 pt-3 pb-3 flex items-baseline justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
             Pages
           </h3>
-          <span className="text-xs tabular-nums text-muted-foreground">
+          <span className="text-xs tabular-nums text-foreground">
             {currentPage}/{totalPages}
           </span>
         </div>
@@ -445,40 +160,30 @@ export function TableOfContents({
   }
 
   return (
-    <nav className="flex flex-col">
-      {searchBar}
-      <div className="px-4 py-2 flex items-baseline justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Contents
-        </h3>
-        <div className="flex items-center gap-2">
-          {!editing && (
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {currentPage}/{totalPages}
-            </span>
-          )}
-          {/* Editing rewrites block types, so it only applies to the
-              block-derived outline. Analyze's outline isn't backed by blocks;
-              re-running Analyze is how you change it. */}
-          {!fromOutline && (
+    <nav className="flex flex-col pt-2">
+      {/* Editing rewrites block types, so it only applies to the
+          block-derived outline. Analyze's outline isn't backed by blocks;
+          re-running Analyze is how you change it. No header/title row here —
+          the search bar above already says what this panel is. */}
+      {!fromOutline && (
+        <div className="flex justify-end px-4 pb-2">
           <button
             onClick={editing ? exitEdit : () => setEditing(true)}
             className={cn(
               "text-xs px-1.5 py-0.5 rounded transition-colors",
               editing
                 ? "text-primary font-medium hover:bg-primary/10"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                : "text-foreground hover:bg-accent"
             )}
           >
             {editing ? "Done" : "Edit"}
           </button>
-          )}
         </div>
-      </div>
+      )}
 
       {/* Floating toolbar when items are selected */}
       {editing && selected.size > 0 && (
-        <div className="sticky top-12 z-20 mx-3 mb-2 flex items-center justify-between gap-2 rounded-lg border bg-background px-3 py-1.5 shadow-md">
+        <div className="sticky top-0 z-20 mx-3 mb-2 flex items-center justify-between gap-2 rounded-lg border bg-background px-3 py-1.5 shadow-md">
           <span className="text-xs font-medium tabular-nums">
             {selected.size} selected
           </span>
@@ -528,7 +233,7 @@ export function TableOfContents({
                     : "hover:bg-accent"
                   : isActive
                     ? "font-semibold text-foreground bg-accent/50"
-                    : "font-normal text-muted-foreground hover:text-foreground hover:bg-accent"
+                    : "font-normal text-foreground hover:bg-accent"
               )}
               style={{ paddingLeft: `${16 + indent * 16}px` }}
               onClick={() =>
@@ -564,21 +269,21 @@ export function TableOfContents({
                 className={cn(
                   "flex-1 min-w-0 line-clamp-1",
                   isActive && !editing && "line-clamp-2",
-                  // Depth reads as hierarchy, not just indentation.
-                  header.level >= 3 && "text-xs text-muted-foreground",
+                  // Depth still reads as hierarchy via size, just not color.
+                  header.level >= 3 && "text-xs",
                   header.level === 1 && fromOutline && "font-medium"
                 )}
               >
                 {header.text}
               </span>
               {!editing && (
-                <span className="tabular-nums text-xs text-muted-foreground shrink-0">
+                <span className="tabular-nums text-xs text-foreground shrink-0">
                   {displayPage}
                 </span>
               )}
               {editing && (
                 <div
-                  className="flex items-center gap-0.5 shrink-0"
+                  className="flex items-center gap-1 shrink-0"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <TocAction
@@ -613,7 +318,7 @@ export function TableOfContents({
 }
 
 /** Renders text with the search query highlighted in bold */
-function HighlightedSnippet({ text, query }: { text: string; query: string }) {
+export function HighlightedSnippet({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
   const idx = text.toLowerCase().indexOf(query.toLowerCase());
   if (idx === -1) return <>{text}</>;

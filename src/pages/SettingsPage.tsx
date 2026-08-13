@@ -5,6 +5,7 @@ import { ArrowLeft, CircleAlert, CircleCheck, Languages, RefreshCw } from "lucid
 import { api } from "../../convex/_generated/api";
 import ProviderAlert from "@/components/settings/ProviderAlert";
 import { ProcessingQueueControls } from "@/components/settings/ProcessingQueueControls";
+import { DocumentCategoriesSettings } from "@/components/settings/DocumentCategoriesSettings";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
@@ -151,6 +152,13 @@ export default function SettingsPage() {
         <div className="p-6 max-w-4xl">
           {/* Provider health — loud when a provider is down or out of credits */}
           <ProviderAlert />
+
+          <h2 className="text-lg font-semibold mb-3">Document categories</h2>
+          <p className="text-sm text-muted-foreground mb-3">
+            The enforced primary categories Analyze sorts every document into.
+            Add your own, or adjust how the built-in ones are described.
+          </p>
+          <DocumentCategoriesSettings />
 
           <h2 className="text-lg font-semibold mb-3">Processing</h2>
           <ProcessingQueueControls />

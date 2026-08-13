@@ -29,4 +29,8 @@ dist-ssr
 test-corpus/**/*.pdf
 test-corpus/results/
 test-corpus/variants/manifest.json
+# Belt and braces: uploaded/ is a download cache keyed on document id, and a
+# display name with a suffix after the extension once produced "<id>.pdf [bench]"
+# filenames that slipped past the glob above.
+test-corpus/uploaded/
 public/__bench-*.pdf

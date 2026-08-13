@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { isCsvDocument } from "@/lib/uploadTypes";
 import { languageName } from "@/lib/languages";
 import { Button } from "@/components/ui/button";
+import { FLOATING_SURFACE } from "@/components/viewer/surfaces";
 import {
   AnalyzeRetryDialog,
   ExtractRetryDialog,
@@ -141,9 +142,23 @@ export function ProcessingEstimate({
 export function PipelineProgress({
   document,
   compact = false,
+  floating = false,
+  collapseWhenDone = false,
 }: {
   document: Doc<"documents">;
   compact?: boolean;
+  /**
+   * Render as a shadowed floating card (rounded-xl, shadow-md) instead of the
+   * plain bordered box this uses inline in a tab. See surfaces.ts.
+   */
+  floating?: boolean;
+  /**
+   * Once there is nothing left needing attention, collapse to a single
+   * "Processing complete" row instead of the full step list. Used where this
+   * lives as its own panel rather than inline in a tab someone already
+   * opened to check on it.
+   */
+  collapseWhenDone?: boolean;
 }) {
   const documentId = document._id as Id<"documents">;
   const retryPipeline = useAction(api.processing.runFullPipeline);
@@ -339,8 +354,37 @@ export function PipelineProgress({
   if (compact && allDone) return null;
   if (!jobs) return null;
 
+  // Something still needs the user's eyes even though the pipeline itself
+  // finished — a failed translation, a canceled run with a retry waiting.
+  // Those cases stay expanded; only a clean finish collapses.
+  const nothingToFlag =
+    allDone &&
+    document.translationStatus !== "failed" &&
+    document.errorCode !== "processing_canceled";
+
+  if (collapseWhenDone && nothingToFlag) {
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-2",
+          floating ? cn(FLOATING_SURFACE, "px-3 py-2.5") : "rounded-lg border bg-card px-3 py-2.5"
+        )}
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <Check className="h-3 w-3" strokeWidth={3} />
+        </span>
+        <span className="text-sm text-foreground">Processing complete</span>
+      </div>
+    );
+  }
+
   return (
-    <div className={cn("flex flex-col gap-2", !compact && "rounded-lg border bg-card p-3")}>
+    <div
+      className={cn(
+        "flex flex-col gap-2",
+        !compact && (floating ? cn(FLOATING_SURFACE, "p-3") : "rounded-lg border bg-card p-3")
+      )}
+    >
       {/* One status line, not four. The running step already carries a
           spinner, so the header adds only the words a spinner cannot say. */}
       {!compact && (
@@ -356,7 +400,7 @@ export function PipelineProgress({
           </h3>
           {estimate && (
             <span
-              className="text-xs text-muted-foreground shrink-0"
+              className="text-xs text-foreground shrink-0"
               title={
                 estimate.sampleSize > 0
                   ? `Estimate uses the median of ${estimate.sampleSize} recent ${estimate.stage} run${estimate.sampleSize === 1 ? "" : "s"}.`
@@ -407,20 +451,20 @@ export function PipelineProgress({
                           ? "text-foreground"
                           : step.status === "failed"
                             ? "text-red-600 dark:text-red-400"
-                            : "text-muted-foreground"
+                            : "text-foreground"
                     )}
                   >
                     {step.label}
                   </span>
                   {duration && (
-                    <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">
+                    <span className="text-[11px] tabular-nums text-foreground shrink-0">
                       {duration}
                     </span>
                   )}
                 </div>
 
                 {step.detail && (
-                  <p className="text-xs text-muted-foreground leading-snug truncate">
+                  <p className="text-xs text-foreground leading-snug truncate">
                     {step.detail}
                   </p>
                 )}
@@ -431,7 +475,7 @@ export function PipelineProgress({
                       "text-xs leading-snug truncate",
                       step.noteStatus === "failed"
                         ? "text-red-600 dark:text-red-400"
-                        : "text-muted-foreground"
+                        : "text-foreground"
                     )}
                   >
                     {step.note}

@@ -188,11 +188,14 @@ export const retryBlocked = mutation({
       .take(100);
 
     const blocked = failed.filter(
-      (d) =>
-        d.archivedAt === undefined &&
-        (d.errorCode === "insufficient_credits" ||
-          d.errorCode === "invalid_api_key")
+      (d) => d.archivedAt === undefined && BLOCKING_FAILURE_CODES.has(d.errorCode ?? "")
     );
+
+    // Retrying is the user telling us the block is cleared, so lift the pause
+    // the block caused — otherwise this re-enqueues into a pool held at zero
+    // parallelism and reads as a button that does nothing. A pause set by hand
+    // is left alone, and the enqueue below still honours it.
+    await ctx.runMutation(internal.processingControl.resumeAfterProviderBlock, {});
     const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
 
     for (const doc of blocked) {
@@ -523,6 +526,15 @@ export const failIfStuck = internalMutation({
 });
 
 
+/**
+ * Failure codes that mean *nothing* will succeed, not that this document is
+ * bad — the same two the blocker banner already speaks for.
+ */
+const BLOCKING_FAILURE_CODES = new Set([
+  "insufficient_credits",
+  "invalid_api_key",
+]);
+
 async function failDocument(
   ctx: MutationCtx,
   documentId: Id<"documents">,
@@ -534,6 +546,14 @@ async function failDocument(
     errorMessage,
     errorCode,
   });
+
+  // A provider that is refusing everything will refuse the rest of the queue
+  // too, so stop the queue rather than feed it. Every one of the 36 errors in
+  // the first ledger was the same exhausted-credits response, each one having
+  // shipped a whole document's text to earn it.
+  if (errorCode && BLOCKING_FAILURE_CODES.has(errorCode)) {
+    await ctx.runMutation(internal.processingControl.pauseForProviderBlock, {});
+  }
 
   // Mark all pending/running jobs as failed
   const jobs = await ctx.db

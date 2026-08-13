@@ -9,10 +9,12 @@
  */
 
 import type * as analyzePrompt from "../analyzePrompt.js";
+import type * as annotations from "../annotations.js";
 import type * as apiLogs from "../apiLogs.js";
 import type * as blocks from "../blocks.js";
 import type * as clips from "../clips.js";
 import type * as detections from "../detections.js";
+import type * as documentCategories from "../documentCategories.js";
 import type * as documents from "../documents.js";
 import type * as docx from "../docx.js";
 import type * as docxRender from "../docxRender.js";
@@ -42,6 +44,7 @@ import type * as processingPool from "../processingPool.js";
 import type * as projectViews from "../projectViews.js";
 import type * as projects from "../projects.js";
 import type * as providerHealth from "../providerHealth.js";
+import type * as relationTypes from "../relationTypes.js";
 import type * as relationships from "../relationships.js";
 import type * as relationshipsNode from "../relationshipsNode.js";
 import type * as rename from "../rename.js";
@@ -68,10 +71,12 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   analyzePrompt: typeof analyzePrompt;
+  annotations: typeof annotations;
   apiLogs: typeof apiLogs;
   blocks: typeof blocks;
   clips: typeof clips;
   detections: typeof detections;
+  documentCategories: typeof documentCategories;
   documents: typeof documents;
   docx: typeof docx;
   docxRender: typeof docxRender;
@@ -101,6 +106,7 @@ declare const fullApi: ApiFromModules<{
   projectViews: typeof projectViews;
   projects: typeof projects;
   providerHealth: typeof providerHealth;
+  relationTypes: typeof relationTypes;
   relationships: typeof relationships;
   relationshipsNode: typeof relationshipsNode;
   rename: typeof rename;

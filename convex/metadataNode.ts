@@ -13,9 +13,19 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { chatCompletion, fileUrlContent, inlineTextContent } from "./interfaze";
 import { usageLogger } from "./apiLogs";
+import {
+  buildCategoryRule,
+  buildKindReuseClause,
+  TYPE_RULE,
+  OTHER_CATEGORY,
+} from "./analyzePrompt";
 import type { Doc } from "./_generated/dataModel";
 
-const METADATA_SCHEMA = {
+/** A function, not a static object — `primary_category`'s enum is the live
+ *  `documentCategories` key set (see analyzePrompt.ts:buildDocumentUnderstandingSchema
+ *  for why `primary_kind` is declared before `primary_category`). */
+function buildMetadataSchema(categoryKeys: string[]) {
+  return {
   type: "object",
   properties: {
     title: { type: "string", description: "Document title as written, or a concise descriptive title" },
@@ -31,10 +41,23 @@ const METADATA_SCHEMA = {
       type: "boolean",
       description: "True when meaningful passages use more than one language",
     },
+    // Declared before primary_kind so the model locates its evidence before
+    // committing — see TYPE_RULE.
+    kind_evidence: {
+      type: "string",
+      description:
+        "The exact text — a caption, title block, form name, heading, or certification/signature line — where the document states its own type. Quoted verbatim. Empty string only if the document never states its own type and primary_kind had to be inferred.",
+    },
     primary_kind: {
       type: "string",
       description:
-        "The semantic kind of document, e.g. 'legal brief', 'tax form', 'meeting transcript'. Prefer one of the existing kinds listed in the prompt when it fits; only invent a new kind when none fit. Lowercase.",
+        "The precise, specific name of this document type, read from kind_evidence — the exact named or numbered form, statute-named instrument, or standard document type when it has one (e.g. 'irs form 211', 'writ of mandate'). Prefer one of the existing kinds listed in the prompt when it fits; only invent a new kind when none fit, and only fall back to a generic term when nothing more specific applies. Lowercase.",
+    },
+    primary_category: {
+      type: "string",
+      enum: [...categoryKeys, OTHER_CATEGORY],
+      description:
+        "The single broad bucket primary_kind belongs to. See the category rule in the prompt for precedence when several fit.",
     },
     tags: {
       type: "array",
@@ -68,8 +91,9 @@ const METADATA_SCHEMA = {
       },
     },
   },
-  required: ["title", "summary", "date", "author", "language", "source_language_code", "is_multilingual", "primary_kind", "tags", "suggested_roles", "additional"],
-};
+  required: ["title", "summary", "date", "author", "language", "source_language_code", "is_multilingual", "kind_evidence", "primary_kind", "primary_category", "tags", "suggested_roles", "additional"],
+  };
+}
 
 export const runMetadataPass = internalAction({
   args: { documentId: v.id("documents") },
@@ -95,6 +119,15 @@ export const runMetadataPass = internalAction({
 
     const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {});
     const kindNames = kinds.map((k) => k.name);
+    const categories: Doc<"documentCategories">[] = await ctx.runQuery(
+      api.documentCategories.list,
+      {}
+    );
+    const categoryDefs = categories.map((c) => ({
+      key: c.key,
+      label: c.label,
+      description: c.description,
+    }));
 
     await ctx.runMutation(internal.processing.createJob, {
       documentId: args.documentId,
@@ -118,14 +151,13 @@ export const runMetadataPass = internalAction({
           docPart,
           {
             type: "text",
-            text: `Extract detailed metadata for this document.${
-              kindNames.length > 0
-                ? ` Existing document kinds in this system: ${kindNames.join(", ")}. Use one of these as primary_kind if it fits; otherwise propose a new one.`
-                : ""
-            }`,
+            text: `Extract detailed metadata for this document. ${TYPE_RULE} ${buildKindReuseClause(kindNames)} ${buildCategoryRule(categoryDefs)}`.trim(),
           },
         ],
-        responseSchema: { name: "document_metadata", schema: METADATA_SCHEMA },
+        responseSchema: {
+          name: "document_metadata",
+          schema: buildMetadataSchema(categoryDefs.map((c) => c.key)),
+        },
         maxTokens: 2048,
       });
 

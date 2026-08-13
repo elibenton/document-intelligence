@@ -10,8 +10,18 @@ import { ocrPrecontextToPages, analyzeDocumentText } from "../convex/interfaze";
 import {
   analyzeSystemPrompt,
   buildAnalyzePrompt,
-  DOCUMENT_UNDERSTANDING_SCHEMA,
+  buildDocumentUnderstandingSchema,
+  type CategoryDef,
 } from "../convex/analyzePrompt";
+
+// Standalone script, no Convex ctx — mirrors the seeded defaults rather than
+// reading the live documentCategories table.
+const CATEGORIES: CategoryDef[] = [
+  { key: "legal", label: "Legal", description: "Instruments with legal force or filed in a legal proceeding — pleadings, orders, contracts, deeds, subpoenas." },
+  { key: "government", label: "Government", description: "Records a public agency produced or received while administering something — permits, inspection reports, agency correspondence, public-records responses." },
+  { key: "business", label: "Business", description: "Records internal to a private organization — invoices, memos, financial statements, board minutes, personnel files." },
+  { key: "published", label: "Published", description: "Anything issued to a general audience — news articles, press releases, books, academic papers, web pages." },
+];
 
 const file = process.argv[2];
 const raw = JSON.parse(readFileSync(file, "utf8"));
@@ -27,10 +37,10 @@ const apiKey =
 
 const res = await analyzeDocumentText(pageTexts, apiKey, {
   systemPrompt: analyzeSystemPrompt(false),
-  prompt: buildAnalyzePrompt({ csv: false, kindNames: ["report", "contract"] }),
+  prompt: buildAnalyzePrompt({ csv: false, kindNames: ["report", "contract"], categories: CATEGORIES }),
   responseSchema: {
     name: "document_analysis",
-    schema: DOCUMENT_UNDERSTANDING_SCHEMA,
+    schema: buildDocumentUnderstandingSchema(CATEGORIES.map((c) => c.key)),
   },
   bypassCache: true,
 });

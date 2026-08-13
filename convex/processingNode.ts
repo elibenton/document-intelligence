@@ -23,7 +23,8 @@ import type { OcrPageResult } from "./interfaze";
 import {
   analyzeSystemPrompt,
   buildAnalyzePrompt,
-  DOCUMENT_UNDERSTANDING_SCHEMA,
+  buildDocumentUnderstandingSchema,
+  type CategoryDef,
 } from "./analyzePrompt";
 import { usageLogger } from "./apiLogs";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -227,6 +228,10 @@ export const runDocumentUnderstanding = internalAction({
     const csvPages = csv ? await csvSearchPages(ctx, document) : null;
     const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {});
     const kindNames = kinds.map((kind) => kind.name);
+    const categories: Doc<"documentCategories">[] = await ctx.runQuery(
+      api.documentCategories.list,
+      {}
+    );
     const log = usageLogger(ctx, { documentId: args.documentId });
 
     await ctx.runMutation(internal.processing.updateStatus, {
@@ -314,8 +319,6 @@ export const runDocumentUnderstanding = internalAction({
         documentId: args.documentId,
         status: "parsed",
       });
-      await scheduleTranslation(ctx, args.documentId);
-
       // --- Analyze ----------------------------------------------------------
       // Text in, no file. Cheap, and an unchanged re-run hits the semantic
       // cache, which is what makes Analyze independently re-runnable.
@@ -324,15 +327,32 @@ export const runDocumentUnderstanding = internalAction({
           `${parsedPages.reduce((n, p) => n + p.blocks.length, 0)} blocks`
       );
 
-      await analyzeAndStore(ctx, {
-        documentId: args.documentId,
-        pageTexts: parsedPages.map((page) => page.text),
-        apiKey,
-        csv,
-        kindNames,
-        log,
-        bypassCache: args.bypassCache,
-      });
+      try {
+        await analyzeAndStore(ctx, {
+          documentId: args.documentId,
+          pageTexts: parsedPages.map((page) => page.text),
+          apiKey,
+          csv,
+          kindNames,
+          categories,
+          log,
+          bypassCache: args.bypassCache,
+        });
+      } finally {
+        // Translation is queued *after* Analyze, not before it.
+        //
+        // The skip gate in translationNode.ts can only recognize an
+        // already-in-the-target-language document from `sourceLanguageCode` +
+        // `sourceLanguageIsMixed`, and Analyze is what writes them. Queued
+        // first, the gate saw `undefined`, declined to skip, and translated
+        // English documents into English one page at a time: 101 of the first
+        // 106 stored page translations were en→en.
+        //
+        // It stays in a `finally` because a document whose Analyze failed must
+        // still get translated — it just gets translated without the hint, the
+        // way every document used to.
+        await scheduleTranslation(ctx, args.documentId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await ctx.runMutation(internal.processing.markFailed, {
@@ -358,21 +378,29 @@ async function analyzeAndStore(
     apiKey: string;
     csv: boolean;
     kindNames: string[];
+    categories: Doc<"documentCategories">[];
     log?: ReturnType<typeof usageLogger>;
     bypassCache?: boolean;
     promptOverride?: string;
   }
 ): Promise<void> {
+  const categoryDefs: CategoryDef[] = options.categories
+    .sort((a, b) => a.order - b.order)
+    .map((c) => ({ key: c.key, label: c.label, description: c.description }));
   const analysis = await analyzeDocumentText(options.pageTexts, options.apiKey, {
     log: options.log,
     bypassCache: options.bypassCache,
     systemPrompt: analyzeSystemPrompt(options.csv),
     prompt:
       options.promptOverride?.trim() ||
-      buildAnalyzePrompt({ csv: options.csv, kindNames: options.kindNames }),
+      buildAnalyzePrompt({
+        csv: options.csv,
+        kindNames: options.kindNames,
+        categories: categoryDefs,
+      }),
     responseSchema: {
       name: "document_analysis",
-      schema: DOCUMENT_UNDERSTANDING_SCHEMA,
+      schema: buildDocumentUnderstandingSchema(categoryDefs.map((c) => c.key)),
     },
   });
 
@@ -439,12 +467,17 @@ export const runAnalyze = internalAction({
       }
 
       const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {});
+      const categories: Doc<"documentCategories">[] = await ctx.runQuery(
+        api.documentCategories.list,
+        {}
+      );
       await analyzeAndStore(ctx, {
         documentId: args.documentId,
         pageTexts,
         apiKey,
         csv: isCsvDocument(document),
         kindNames: kinds.map((kind) => kind.name),
+        categories,
         log: usageLogger(ctx, { documentId: args.documentId }),
         // An unchanged prompt would only hit the semantic cache, which is the
         // whole reason the dialog invites an edit. Honor whatever it produced.

@@ -7,13 +7,14 @@
  * array carrying the raw specialist metadata (for documents: OCR sections →
  * lines → words with bounding boxes and confidence).
  *
- * New document uploads use one normal whole-file completion: Interfaze runs
- * OCR and object detection before producing the structured document analysis.
- * Raw OCR precontext becomes the app's stored page text, line/word blocks,
- * boxes, and confidence; detected graphics come from the structured response.
+ * New document uploads run the dedicated `ocr` task rather than a full-model
+ * completion: it is deterministic where the full model was not, and about a
+ * tenth of the cost. Its OCR precontext becomes the app's stored page text,
+ * line/word blocks, boxes, and confidence; the structured understanding is a
+ * second, text-in call (`analyzeDocumentText`) over that stored text.
  *
  * This module keeps a small set of app-facing helpers (`chatCompletion`,
- * `understandDocument`, `extract`, and `transcribe`) so the
+ * `ocrDocument`, `analyzeDocumentText`, `extract`, and `transcribe`) so the
  * cross-cutting concerns the app owns — usage/cost logging and mapping the
  * SDK's typed errors onto the UI's FailureCodes — live in one place. Everything
  * else is the SDK.
@@ -75,11 +76,6 @@ export interface ChatResult {
   /** Output tokens billed — an empty `content` alongside a non-zero count is
    *  a provider failure, not an empty document. */
   completionTokens: number;
-}
-
-export interface DocumentUnderstandingResult extends ChatResult {
-  pages: OcrPageResult[];
-  pageSource: "precontext" | "none";
 }
 
 export interface TranslationUnit {
@@ -258,7 +254,11 @@ export async function chatCompletion(
       promptTokens,
       completionTokens,
       totalTokens: promptTokens + completionTokens,
-      costUsd: interfazeCostUsd(promptTokens, completionTokens),
+      costUsd: interfazeCostUsd(
+        promptTokens,
+        completionTokens,
+        report.cacheHit
+      ),
       durationMs: Date.now() - startedAt,
       cacheHit: report.cacheHit,
       error: report.error,
@@ -501,48 +501,24 @@ export async function analyzeDocumentText(
 }
 
 /**
- * Run Interfaze's idiomatic document flow: one normal completion over the
- * original file. OCR and object detection are selected by the prompt/schema,
- * returned as precontext, and used by Interfaze before it emits the structured
- * analysis. This deliberately does not set `task`.
+ * REMOVED — `understandDocument`, one full-model completion over the original
+ * file that returned OCR precontext and structured analysis together.
+ *
+ * It was replaced by the `ocr` run-task plus a text-in Analyze, for two
+ * independent reasons, and is recorded here so it does not get reinvented as
+ * an obvious simplification:
+ *
+ *  - Correctness. The full model's OCR precontext was non-deterministic on the
+ *    same file — repeat runs returned duplicate entries, a wrong entry count,
+ *    and in production every page collapsed onto page 1. The task returns one
+ *    clean result per document, every time. See docs/scan-precontext-plan.md.
+ *  - Cost. It averaged $0.18 a call against $0.012 for the task plus $0.025
+ *    for Analyze, and it was 16% of the entire first ledger.
+ *
+ * Interfaze's own guidance is to batch capabilities into one completion; on
+ * this workload that advice is both more expensive and wrong, and the
+ * `document_understanding` rows in `apiLogs` are the evidence.
  */
-export async function understandDocument(
-  fileUrl: string,
-  filename: string,
-  apiKey: string,
-  options: {
-    systemPrompt: string;
-    prompt: string;
-    responseSchema: { name: string; schema: Record<string, unknown> };
-    log?: UsageLogger;
-    bypassCache?: boolean;
-  }
-): Promise<DocumentUnderstandingResult> {
-  const result = await chatCompletion(apiKey, {
-    systemPrompt: options.systemPrompt,
-    content: [
-      fileUrlContent(fileUrl, filename),
-      { type: "text", text: options.prompt },
-    ],
-    responseSchema: options.responseSchema,
-    maxTokens: 8_192,
-    bypassCache: options.bypassCache,
-    usage: options.log
-      ? { log: options.log, operation: "document_understanding" }
-      : undefined,
-  });
-  // OCR precontext is the only source of page text. There used to be a
-  // fallback that read page text back out of the structured response, but it
-  // produced pages with one coarse block and no word geometry — which silently
-  // breaks highlighting, citations, and click-to-locate, the whole point of the
-  // scan. A scan with no OCR precontext is a failure, and says so.
-  const pages = ocrPrecontextToPages(result.precontext);
-  return {
-    ...result,
-    pages,
-    pageSource: pages.length > 0 ? "precontext" : "none",
-  };
-}
 
 
 // ---------------------------------------------------------------------------

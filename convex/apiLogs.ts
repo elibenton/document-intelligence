@@ -13,7 +13,7 @@ import type { Id } from "./_generated/dataModel";
 import type { ApiUsage, UsageLogger } from "./interfazeCost";
 
 /** Shard count for the denormalized usage totals (see schema.apiUsageTotals). */
-const TOTALS_SHARDS = 8;
+export const TOTALS_SHARDS = 8;
 
 /**
  * Build a UsageLogger bound to an action's ctx. Logging must never break the

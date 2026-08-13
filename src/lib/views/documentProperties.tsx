@@ -1,5 +1,5 @@
 import type { Doc } from "../../../convex/_generated/dataModel";
-import { CATEGORY_STYLES } from "@/components/documents/docTypeCategories";
+import { DocTypePills } from "@/components/documents/DocTypePills";
 import { DocStatusIndicator } from "@/components/documents/DocStatusIndicator";
 import { libraryStatus } from "@/components/documents/docStatus";
 import {
@@ -155,28 +155,16 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     groupable: true,
     sortable: true,
     value: (doc) => doc.primaryCategory ?? null,
-    format: (doc) =>
-      doc.primaryCategory
-        ? (CATEGORY_STYLES[doc.primaryCategory]?.label ?? "Other")
-        : null,
-    options: () => [
-      ...Object.entries(CATEGORY_STYLES).map(([value, style]) => ({
-        value,
-        label: style.label,
-      })),
-      { value: "other", label: "Other" },
-    ],
-    render: (doc) => {
-      const style = doc.primaryCategory
-        ? CATEGORY_STYLES[doc.primaryCategory]
-        : undefined;
-      if (!style) return null;
-      return (
-        <span className={cn(CHIP, style.dark, "rounded-l-full rounded-r-full pl-2 pr-2")}>
-          {style.label}
-        </span>
-      );
-    },
+    format: (doc) => (doc.primaryCategory ? sentenceCase(doc.primaryCategory) : null),
+    // Derived from what's actually on the rows, not a live Settings read:
+    // options() runs outside a component. The pill itself (render, below)
+    // always shows the true live label — this is only the filter/group menu.
+    options: (rows) => observedOptions(rows, (doc) => doc.primaryCategory),
+    // Renders the whole two-tone pill — category and kind together — so the
+    // Library shows the exact same DocTypePills object as the document page.
+    render: (doc) => (
+      <DocTypePills primaryCategory={doc.primaryCategory} primaryKind={doc.primaryKind} />
+    ),
   },
   {
     id: "kind",
@@ -186,30 +174,12 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     groupable: true,
     sortable: true,
     searchable: true,
-    // Rendered flush against the category pill when both are visible, so the
-    // pair reads as one breadcrumb: Legal › writ of mandate.
-    joinWith: "category",
     value: (doc) => doc.primaryKind ?? null,
     format: (doc) => (doc.primaryKind ? sentenceCase(doc.primaryKind) : null),
     options: (rows) => observedOptions(rows, (doc) => doc.primaryKind),
-    render: (doc) => {
-      if (!doc.primaryKind) return null;
-      const style = doc.primaryCategory
-        ? CATEGORY_STYLES[doc.primaryCategory]
-        : undefined;
-      return (
-        <span
-          className={cn(
-            CHIP,
-            style ? style.light : "bg-muted text-muted-foreground",
-            "rounded-l-full rounded-r-full px-2"
-          )}
-          title={doc.primaryKind}
-        >
-          {sentenceCase(doc.primaryKind)}
-        </span>
-      );
-    },
+    // No chip of its own — its value already shows inside the category
+    // pill above. Filtering, grouping, and sorting by kind still work.
+    render: () => null,
   },
   {
     id: "tags",

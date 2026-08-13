@@ -228,10 +228,32 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_uploadedAt", ["uploadedAt"])
     .index("by_project", ["projectId", "uploadedAt"])
+    // Exact, bounded lookups for "is this category in use" and the Settings
+    // per-category breakdown — an unindexed field would force a full scan.
+    .index("by_primaryCategory", ["primaryCategory"])
     .searchIndex("search_name", {
       searchField: "name",
       filterFields: ["projectId"],
     }),
+
+  // The enforced primary-category taxonomy ("legal" | "government" | ...),
+  // user-managed from Settings. `documents.primaryCategory` stores `key`.
+  // "other" is a reserved sentinel for an off-taxonomy AI answer — it is
+  // never a row here, and never gets a pill. See convex/analyzePrompt.ts.
+  documentCategories: defineTable({
+    key: v.string(),
+    label: v.string(),
+    // The classification-rule clause for this bucket, folded into the
+    // Analyze/Metadata prompts so the enum and its instructions can't drift.
+    description: v.string(),
+    // Key into the fixed Tailwind color palette in
+    // src/components/documents/docTypeCategories.ts.
+    color: v.string(),
+    // Display order, and the tie-break precedence when more than one
+    // category's description plausibly fits the same document.
+    order: v.number(),
+    createdAt: v.number(),
+  }).index("by_key", ["key"]),
 
   // Semantic document kinds with their default extraction templates.
   // Grows organically: the AI proposes new kinds, humans own them.
@@ -420,6 +442,53 @@ export default defineSchema({
     .index("by_document", ["documentId", "pageNumber"])
     .index("by_blockId", ["blockId"]),
 
+  // Human markup on a page: a colored highlight over a run of selected text,
+  // optionally carrying a comment.
+  //
+  // The anchor is geometry, not DOM state. `rects` are in the page's own
+  // coordinate space — the same space as pages.width/height and blocks.bbox —
+  // so a highlight survives zoom, rotation, and re-rendering the same way the
+  // OCR overlays do, and does not depend on the text layer producing an
+  // identical set of spans twice. `blockIds` records which OCR blocks the
+  // selection crossed, so a later pass can re-anchor or cite without having to
+  // re-derive it from pixels.
+  //
+  // `sectionTitle` is denormalized at creation time on purpose: it is what the
+  // user saw the highlight sitting under, and re-deriving it later against a
+  // re-analyzed outline would silently retitle old notes.
+  annotations: defineTable({
+    documentId: v.id("documents"),
+    // Denormalized from the document so project-wide note views don't have to
+    // load every document row to filter.
+    projectId: v.optional(v.id("projects")),
+    pageNumber: v.number(), // 0-indexed, matching pages/blocks
+    color: v.union(
+      v.literal("yellow"),
+      v.literal("green"),
+      v.literal("blue"),
+      v.literal("pink"),
+      v.literal("purple")
+    ),
+    // The selected text itself, so the notes list reads without loading pages.
+    text: v.string(),
+    // Absent = a bare highlight. Empty string is never stored.
+    comment: v.optional(v.string()),
+    sectionTitle: v.optional(v.string()),
+    rects: v.array(
+      v.object({
+        x: v.number(),
+        y: v.number(),
+        width: v.number(),
+        height: v.number(),
+      })
+    ),
+    blockIds: v.array(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_document", ["documentId", "pageNumber"])
+    .index("by_project", ["projectId", "createdAt"]),
+
   // Visual evidence detected on document pages (signatures, redactions,
   // stamps, handwriting, photographs, logos). Bboxes are model-estimated
   // and normalized 0-1 (origin top-left) — approximate page regions, not
@@ -551,6 +620,11 @@ export default defineSchema({
   processingControl: defineTable({
     key: v.string(),
     paused: v.boolean(),
+    // Why the queue is paused. "provider_blocked" means the pipeline paused
+    // itself because the provider rejected every call (no credits, bad key);
+    // absent means a human pressed pause. The distinction matters on retry:
+    // the automatic pause is cleared for the user, a deliberate one is not.
+    pausedReason: v.optional(v.string()),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 

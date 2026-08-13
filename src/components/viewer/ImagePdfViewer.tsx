@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type Ref,
 } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
@@ -18,10 +18,19 @@ import {
   separatorText,
   type PageTextToken,
   type TextBlock,
+  type TextBox,
 } from "../../lib/pdfTextGeometry";
 import type { PageDims } from "./PersonHighlight";
 import { usePdfDocument } from "../../lib/pdfDocument";
 import { PdfPageCanvas } from "./PdfPageCanvas";
+import {
+  AnnotationComment,
+  AnnotationLayer,
+  type ViewerAnnotation,
+} from "./AnnotationLayer";
+import type { AnnotationColor } from "./annotationColors";
+import { mergeSelectionRects } from "./annotationGeometry";
+import { SelectionPopover, type SelectionAnchor } from "./SelectionPopover";
 
 /**
  * Paged PDF viewer: each page is a rendered surface plus a transparent text
@@ -43,9 +52,10 @@ import { PdfPageCanvas } from "./PdfPageCanvas";
  * blocks, not from the PDF.
  */
 
-/** Rendered width of a page in CSS pixels. The block overlays scale their OCR
- * coordinates against this same constant (see PageOverlays). */
-const PAGE_WIDTH = 700;
+/** The block overlays scale their OCR coordinates against the width they are
+ * handed, not against PAGE_WIDTH (see PageOverlays), so zooming carries them
+ * along. */
+import { PAGE_WIDTH } from "./zoom";
 
 const PDF_TEXT_TOKEN_SELECTOR = "[data-pdf-text-token]";
 
@@ -145,6 +155,101 @@ function serializeTokens(tokens: PageTextToken[]): string {
   return text;
 }
 
+/** A page's token with its box resolved into rendered pixels. */
+interface ScaledToken extends PageTextToken {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** One selected token, in both coordinate spaces the page cares about. */
+interface SelectedSpan {
+  id: string;
+  blockId: string;
+  /** Rendered pixels — what the live selection is drawn in. */
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  /** Page units — what a highlight is *stored* in, so it survives zoom. */
+  pageRect: TextBox;
+}
+
+/**
+ * The tokens a native selection covers, clipped to the selected characters.
+ *
+ * The browser owns caret/range semantics; the boxes are then rebuilt from
+ * validated token geometry rather than read off the DOM, so a corrupt or
+ * off-page client rect cannot leak into either the visible selection or a
+ * saved highlight. Boundary tokens are clipped proportionally — good enough
+ * for a proportional-width span that has already been scaleX'd to its OCR box.
+ */
+function selectedSpans(
+  layer: HTMLElement,
+  tokens: ScaledToken[],
+  selection: Selection
+): SelectedSpan[] {
+  if (selection.rangeCount === 0 || selection.isCollapsed) return [];
+  const range = selection.getRangeAt(0);
+  const tokenById = new Map(tokens.map((token) => [token.id, token]));
+
+  return Array.from(
+    layer.querySelectorAll<HTMLElement>(PDF_TEXT_TOKEN_SELECTOR)
+  ).flatMap((element) => {
+    const token = tokenById.get(element.dataset.pdfTextToken ?? "");
+    if (!token || !selection.containsNode(element, true)) return [];
+
+    const length = Math.max(1, element.textContent?.length ?? 0);
+    const selectedStart = textOffsetWithin(
+      element,
+      range.startContainer,
+      range.startOffset
+    );
+    const selectedEnd = textOffsetWithin(
+      element,
+      range.endContainer,
+      range.endOffset
+    );
+    const start = Math.max(0, Math.min(length, selectedStart ?? 0));
+    const end = Math.max(start, Math.min(length, selectedEnd ?? length));
+    if (end <= start) return [];
+
+    const fraction = (end - start) / length;
+    return [
+      {
+        id: token.id,
+        blockId: token.blockId,
+        left: token.left + token.width * (start / length),
+        top: token.top,
+        width: token.width * fraction,
+        height: token.height,
+        pageRect: {
+          x: token.bbox.x + token.bbox.width * (start / length),
+          y: token.bbox.y,
+          width: token.bbox.width * fraction,
+          height: token.bbox.height,
+        },
+      },
+    ];
+  });
+}
+
+/** A highlight the user has selected but not yet committed to a color. */
+interface AnnotationDraft {
+  pageNumber: number; // 1-indexed, as the viewer counts pages
+  text: string;
+  /** Page units. */
+  rects: TextBox[];
+  blockIds: string[];
+  /** Viewport box the popover hangs off. */
+  anchor: SelectionAnchor;
+}
+
+function uniqueBlockIds(spans: Array<{ blockId: string }>): string[] {
+  return [...new Set(spans.map((span) => span.blockId))];
+}
+
 export interface ImagePdfViewerRef {
   scrollToPage: (pageNumber: number) => void;
 }
@@ -169,11 +274,21 @@ interface ImagePdfViewerProps {
   /** OCR page dimensions — the coordinate space the text layer scales from. */
   pages: PageDims[];
   totalPages: number;
+  /** Page-width multiplier: 1 renders a page at PAGE_WIDTH CSS pixels. */
+  zoom?: number;
   documentRotation?: 0 | 90 | 180 | 270;
   onVisiblePageChange?: (pageNumber: number) => void;
-  onRotatePage?: (pageNumber: number) => void;
   /** Overlay layer for a 1-indexed page (block boxes, entity highlights). */
   renderOverlay?: (pageNumber: number, renderedWidth: number) => React.ReactNode;
+  /**
+   * The section a 0-indexed page sits under, stamped onto new highlights so a
+   * note keeps the heading the user saw it under. See the schema comment on
+   * `annotations.sectionTitle`.
+   */
+  sectionTitleForPage?: (pageNumber: number) => string | undefined;
+  /** The highlight whose comment box is open. Shared with the notes panel. */
+  activeAnnotationId?: string | null;
+  onActiveAnnotationChange?: (id: string | null) => void;
   ref?: Ref<ImagePdfViewerRef>;
 }
 
@@ -183,10 +298,13 @@ export function ImagePdfViewer({
   pageImages,
   pages,
   totalPages,
+  zoom = 1,
   documentRotation = 0,
   onVisiblePageChange,
-  onRotatePage,
   renderOverlay,
+  sectionTitleForPage,
+  activeAnnotationId = null,
+  onActiveAnnotationChange,
   ref,
 }: ImagePdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -195,6 +313,73 @@ export function ImagePdfViewer({
   const [nearPages, setNearPages] = useState<Set<number>>(new Set([1]));
   const [marqueeSelection, setMarqueeSelection] =
     useState<MarqueeSelection | null>(null);
+  const [draft, setDraft] = useState<AnnotationDraft | null>(null);
+
+  // One document-wide subscription rather than one per mounted page: the rows
+  // are small, and the notes panel needs all of them anyway.
+  const annotations = useQuery(api.annotations.byDocument, { documentId });
+  const createAnnotation = useMutation(api.annotations.create);
+  const updateAnnotation = useMutation(api.annotations.update);
+  const removeAnnotation = useMutation(api.annotations.remove);
+
+  const annotationsByPage = useMemo(() => {
+    const map = new Map<number, ViewerAnnotation[]>();
+    for (const annotation of annotations ?? []) {
+      const list = map.get(annotation.pageNumber);
+      if (list) list.push(annotation);
+      else map.set(annotation.pageNumber, [annotation]);
+    }
+    return map;
+  }, [annotations]);
+
+  const activeAnnotation =
+    annotations?.find((a) => a._id === activeAnnotationId) ?? null;
+
+  const clearSelection = useCallback(() => {
+    setDraft(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
+  const commitDraft = useCallback(
+    async (color: AnnotationColor, comment?: string) => {
+      if (!draft) return;
+      const pageNumber = draft.pageNumber - 1;
+      clearSelection();
+      // Deliberately does not open the comment box afterwards: picking a color
+      // is the whole gesture for a bare highlight, and a box that pops up
+      // uninvited after every one of them is in the way.
+      await createAnnotation({
+        documentId,
+        pageNumber,
+        color,
+        text: draft.text,
+        comment,
+        sectionTitle: sectionTitleForPage?.(pageNumber),
+        rects: draft.rects,
+        blockIds: draft.blockIds,
+      });
+    },
+    [clearSelection, createAnnotation, documentId, draft, sectionTitleForPage]
+  );
+
+  const handleActivate = useCallback(
+    (id: string | null) => {
+      setDraft(null);
+      onActiveAnnotationChange?.(id);
+    },
+    [onActiveAnnotationChange]
+  );
+
+  // The popover and the comment card are two dialogs over the same page, so
+  // only one is ever up: starting a new selection puts away the open note.
+  const handleDraftChange = useCallback(
+    (next: AnnotationDraft | null) => {
+      setDraft(next);
+      if (next) onActiveAnnotationChange?.(null);
+    },
+    [onActiveAnnotationChange]
+  );
+
   const imagesByPage = useMemo(() => {
     const map = new Map<number, PageImage>();
     for (const img of pageImages) map.set(img.pageNumber, img);
@@ -300,13 +485,17 @@ export function ImagePdfViewer({
     };
   }, [pageCount, onVisiblePageChange]);
 
+  // Zoomed past the viewport, pages need somewhere to go: `min-w-max` on the
+  // column lets the container scroll horizontally instead of clipping them.
+  const renderWidth = Math.round(PAGE_WIDTH * zoom);
+
   return (
     <div
       ref={containerRef}
-      className="overflow-y-auto h-full"
+      className="h-full w-full overflow-auto"
       onCopy={handleCopy}
     >
-      <div className="flex flex-col items-center gap-4 py-4">
+      <div className="flex min-w-max flex-col items-center gap-4 px-4 py-4">
         {Array.from({ length: pageCount }, (_, i) => i + 1).map((pageNumber) => {
           const image = imagesByPage.get(pageNumber - 1);
           const page = pages.find(
@@ -320,7 +509,7 @@ export function ImagePdfViewer({
           ) % 360) as 0 | 90 | 180 | 270;
           const sideways = rotation === 90 || rotation === 270;
           const fitScale =
-            PAGE_WIDTH / (sideways ? sourceHeight : sourceWidth);
+            renderWidth / (sideways ? sourceHeight : sourceWidth);
           // The surface stays in the source coordinate orientation. Rotating
           // this one element moves pixels, text, and every overlay together.
           const surfaceWidth = Math.round(sourceWidth * fitScale);
@@ -336,8 +525,10 @@ export function ImagePdfViewer({
                 else pageRefs.current.delete(pageNumber);
               }}
               data-page-number={pageNumber}
-              className="relative border rounded-lg bg-white shadow-sm overflow-hidden"
-              style={{ width: PAGE_WIDTH, height }}
+              // Square corners and a light shadow, deliberately: the page is
+              // paper, not another floating panel (see surfaces.ts).
+              className="relative shrink-0 border bg-white shadow-sm overflow-hidden"
+              style={{ width: renderWidth, height }}
             >
               <div
                 className="absolute left-1/2 top-1/2"
@@ -391,6 +582,10 @@ export function ImagePdfViewer({
                         : null
                     }
                     onMarqueeSelectionChange={setMarqueeSelection}
+                    annotations={annotationsByPage.get(pageNumber - 1) ?? []}
+                    activeAnnotationId={activeAnnotationId}
+                    onActivateAnnotation={handleActivate}
+                    onDraftChange={handleDraftChange}
                   />
                 ) : null}
 
@@ -400,25 +595,45 @@ export function ImagePdfViewer({
                   </div>
                 )}
               </div>
-
-              <div className="absolute bottom-2 right-3 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full z-20 pointer-events-none">
-                {pageNumber}
-              </div>
-              {onRotatePage && (
-                <button
-                  type="button"
-                  onClick={() => onRotatePage(pageNumber)}
-                  className="absolute bottom-2 left-3 z-20 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white hover:bg-black/70"
-                  title={`Rotate page ${pageNumber} clockwise`}
-                  aria-label={`Rotate page ${pageNumber} clockwise`}
-                >
-                  ↻
-                </button>
-              )}
             </div>
           );
         })}
       </div>
+
+      {/* Both of these are `position: fixed`, so they are only nested here for
+          lifecycle — they escape the page surface's zoom and rotation. */}
+      {draft && (
+        <SelectionPopover
+          anchor={draft.anchor}
+          onHighlight={(color) => void commitDraft(color)}
+          onComment={(color, comment) => void commitDraft(color, comment)}
+          onDismiss={clearSelection}
+        />
+      )}
+      {activeAnnotation && (
+        <AnnotationComment
+          // Remount per highlight: the comment draft is seeded from the row.
+          key={activeAnnotation._id}
+          annotation={activeAnnotation}
+          onChangeComment={(comment) => {
+            void updateAnnotation({ id: activeAnnotation._id as Id<"annotations">, comment });
+            onActiveAnnotationChange?.(null);
+          }}
+          onChangeColor={(color) =>
+            void updateAnnotation({
+              id: activeAnnotation._id as Id<"annotations">,
+              color,
+            })
+          }
+          onDelete={() => {
+            void removeAnnotation({
+              id: activeAnnotation._id as Id<"annotations">,
+            });
+            onActiveAnnotationChange?.(null);
+          }}
+          onDismiss={() => onActiveAnnotationChange?.(null)}
+        />
+      )}
     </div>
   );
 }
@@ -437,6 +652,10 @@ function PageTextLayer({
   rotation,
   marqueeSelection,
   onMarqueeSelectionChange,
+  annotations,
+  activeAnnotationId,
+  onActivateAnnotation,
+  onDraftChange,
 }: {
   documentId: Id<"documents">;
   pageNumber: number; // 1-indexed
@@ -445,6 +664,10 @@ function PageTextLayer({
   rotation: 0 | 90 | 180 | 270;
   marqueeSelection: MarqueeSelection | null;
   onMarqueeSelectionChange: (selection: MarqueeSelection | null) => void;
+  annotations: ViewerAnnotation[];
+  activeAnnotationId: string | null;
+  onActivateAnnotation: (id: string | null) => void;
+  onDraftChange: (draft: AnnotationDraft | null) => void;
 }) {
   const layerRef = useRef<HTMLDivElement>(null);
   const selectionSignatureRef = useRef("");
@@ -535,6 +758,9 @@ function PageTextLayer({
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
+      // Any new gesture retires the previous one's popover — the selection it
+      // was offering to highlight is about to be replaced.
+      onDraftChange(null);
       const target = event.target as HTMLElement;
       if (target.closest(PDF_TEXT_TOKEN_SELECTOR)) {
         if (marqueeSelection) onMarqueeSelectionChange(null);
@@ -555,7 +781,7 @@ function PageTextLayer({
       setDragRect({ left: point.x, top: point.y, width: 0, height: 0 });
       onMarqueeSelectionChange(null);
     },
-    [localPoint, marqueeSelection, onMarqueeSelectionChange]
+    [localPoint, marqueeSelection, onDraftChange, onMarqueeSelectionChange]
   );
 
   const handlePointerMove = useCallback(
@@ -587,11 +813,14 @@ function PageTextLayer({
       };
       dragOriginRef.current = null;
       setDragRect(null);
+      onDraftChange(null);
       if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
       if (rect.width < 3 || rect.height < 3) {
+        // A click on bare page, not a drag: dismiss whatever was open.
         onMarqueeSelectionChange(null);
+        onActivateAnnotation(null);
         return;
       }
 
@@ -603,66 +832,54 @@ function PageTextLayer({
           token.top + token.height > rect.top
       );
       if (selected.length === 0) {
+        // Dragged across bare page — the same dismissal a click gets.
         onMarqueeSelectionChange(null);
+        onActivateAnnotation(null);
         return;
       }
+      const text = serializeTokens(selected);
       onMarqueeSelectionChange({
         pageNumber,
         tokenIds: new Set(selected.map((token) => token.id)),
-        text: serializeTokens(selected),
+        text,
+      });
+      // A marquee is a text selection too, so it gets the same offer to
+      // highlight. Its anchor is the pointer rather than a range rect: the
+      // marquee's own box is in the page's rotated local space, and turning
+      // that back into viewport pixels would re-derive the transform by hand.
+      onDraftChange({
+        pageNumber,
+        text,
+        rects: mergeSelectionRects(selected.map((token) => token.bbox)),
+        blockIds: uniqueBlockIds(selected),
+        anchor: {
+          left: event.clientX,
+          right: event.clientX,
+          top: event.clientY,
+          bottom: event.clientY,
+        },
       });
     },
-    [localPoint, onMarqueeSelectionChange, pageNumber, tokens]
+    [
+      localPoint,
+      onActivateAnnotation,
+      onDraftChange,
+      onMarqueeSelectionChange,
+      pageNumber,
+      tokens,
+    ]
   );
 
-  // The browser owns caret/range semantics; the visible selection is drawn
-  // from validated token geometry so corrupt/off-page DOM boxes cannot leak
-  // into the highlight. Boundary words are clipped to the selected characters.
+  // The live blue selection, redrawn from validated token geometry as the
+  // browser's range moves. See selectedSpans for why the DOM's own rects are
+  // not trusted here.
   useEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
     const ownerDocument = layer.ownerDocument;
     const updateSelection = () => {
       const selection = ownerDocument.defaultView?.getSelection();
-      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-        if (selectionSignatureRef.current) {
-          selectionSignatureRef.current = "";
-          setSelectionBoxes([]);
-        }
-        return;
-      }
-
-      const range = selection.getRangeAt(0);
-      const tokenById = new Map(tokens.map((token) => [token.id, token]));
-      const next = Array.from(
-        layer.querySelectorAll<HTMLElement>(PDF_TEXT_TOKEN_SELECTOR)
-      ).flatMap((element) => {
-        const token = tokenById.get(element.dataset.pdfTextToken ?? "");
-        if (!token || !selection.containsNode(element, true)) return [];
-
-        const length = Math.max(1, element.textContent?.length ?? 0);
-        const selectedStart = textOffsetWithin(
-          element,
-          range.startContainer,
-          range.startOffset
-        );
-        const selectedEnd = textOffsetWithin(
-          element,
-          range.endContainer,
-          range.endOffset
-        );
-        const start = Math.max(0, Math.min(length, selectedStart ?? 0));
-        const end = Math.max(start, Math.min(length, selectedEnd ?? length));
-        if (end <= start) return [];
-        const left = token.left + token.width * (start / length);
-        return [{
-          id: token.id,
-          left,
-          top: token.top,
-          width: token.width * ((end - start) / length),
-          height: token.height,
-        }];
-      });
+      const next = selection ? selectedSpans(layer, tokens, selection) : [];
       const signature = next
         .map((box) => `${box.id}:${box.left}:${box.width}`)
         .join("|");
@@ -676,20 +893,112 @@ function PageTextLayer({
     return () => ownerDocument.removeEventListener("selectionchange", updateSelection);
   }, [tokens]);
 
-  if (tokens.length === 0) return null;
+  /**
+   * Mouse-up over a live text selection: offer to highlight it.
+   *
+   * A selection dragged across a page boundary only yields the part that lives
+   * on the page the pointer came up over — each page owns its own text layer
+   * and its own coordinate space, and one row cannot span two of them.
+   */
+  const captureSelectionDraft = useCallback(() => {
+    const layer = layerRef.current;
+    if (!layer) return false;
+    const selection = layer.ownerDocument.defaultView?.getSelection();
+    if (!selection) return false;
+    const spans = selectedSpans(layer, tokens, selection);
+    if (spans.length === 0) return false;
+    const text = selectedPdfText(layer, selection);
+    if (!text?.trim()) return false;
+
+    const anchor = selection.getRangeAt(0).getBoundingClientRect();
+    onDraftChange({
+      pageNumber,
+      text,
+      rects: mergeSelectionRects(spans.map((span) => span.pageRect)),
+      blockIds: uniqueBlockIds(spans),
+      anchor: {
+        left: anchor.left,
+        right: anchor.right,
+        top: anchor.top,
+        bottom: anchor.bottom,
+      },
+    });
+    return true;
+  }, [onDraftChange, pageNumber, tokens]);
+
+  /** The highlight under a point, in page units. Topmost (newest) wins. */
+  const annotationAt = useCallback(
+    (point: { x: number; y: number }) => {
+      if (!scale) return null;
+      const x = point.x / scale;
+      const y = point.y / scale;
+      for (let index = annotations.length - 1; index >= 0; index--) {
+        const annotation = annotations[index];
+        const hit = annotation.rects.some(
+          (rect) =>
+            x >= rect.x &&
+            x <= rect.x + rect.width &&
+            y >= rect.y &&
+            y <= rect.y + rect.height
+        );
+        if (hit) return annotation;
+      }
+      return null;
+    },
+    [annotations, scale]
+  );
+
+  const handlePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (dragOriginRef.current) {
+        finishMarquee(event);
+        return;
+      }
+      if (captureSelectionDraft()) return;
+      // A plain click, with nothing selected: open the highlight under it, or
+      // dismiss whatever was open.
+      const hit = annotationAt(localPoint(event));
+      onActivateAnnotation(hit ? hit._id : null);
+    },
+    [
+      annotationAt,
+      captureSelectionDraft,
+      finishMarquee,
+      localPoint,
+      onActivateAnnotation,
+    ]
+  );
+
+  // No text geometry yet (or none at all) — saved highlights still draw, since
+  // their anchor is page geometry rather than anything in the text layer.
+  if (tokens.length === 0) {
+    return (
+      <AnnotationLayer
+        annotations={annotations}
+        scale={scale}
+        activeId={activeAnnotationId}
+      />
+    );
+  }
 
   return (
-    <div
-      ref={layerRef}
-      className="pdf-text-layer absolute inset-0 z-[5]"
-      style={{ lineHeight: 1, cursor: "pointer" }}
-      tabIndex={0}
-      aria-label={`Selectable text for page ${pageNumber}`}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={finishMarquee}
-      onPointerCancel={finishMarquee}
-    >
+    <>
+      <AnnotationLayer
+        annotations={annotations}
+        scale={scale}
+        activeId={activeAnnotationId}
+      />
+      <div
+        ref={layerRef}
+        className="pdf-text-layer absolute inset-0 z-[5]"
+        style={{ lineHeight: 1, cursor: "pointer" }}
+        tabIndex={0}
+        aria-label={`Selectable text for page ${pageNumber}`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={finishMarquee}
+      >
       {[
         ...selectionBoxes,
         ...tokens
@@ -744,6 +1053,7 @@ function PageTextLayer({
           {token.text}
         </span>
       ))}
-    </div>
+      </div>
+    </>
   );
 }

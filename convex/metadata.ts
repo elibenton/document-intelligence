@@ -1,7 +1,7 @@
 import { internalMutation, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { PRIMARY_CATEGORIES } from "./analyzePrompt";
+import { OTHER_CATEGORY } from "./analyzePrompt";
 
 // ---------------------------------------------------------------------------
 // Metadata pass — default-runtime half.
@@ -114,15 +114,14 @@ export const saveMetadataResult = internalMutation({
       .slice(0, 8);
 
     const documentDate = sanitizeDocumentDate(parsed.document_date, Date.now());
-    // An off-enum category is the model free-styling; "other" is the honest
-    // bucket for it, and the library shows no primary pill for it rather than
-    // coloring a word Analyze made up.
+    // An off-enum category is the model free-styling (or a category since
+    // deleted); "other" is the honest bucket for it, and the library shows no
+    // primary pill for it rather than coloring a word Analyze made up.
     const category = (parsed.primary_category ?? "").trim().toLowerCase();
-    const primaryCategory = (PRIMARY_CATEGORIES as readonly string[]).includes(
-      category
-    )
-      ? category
-      : "other";
+    const validCategories = new Set(
+      (await ctx.db.query("documentCategories").collect()).map((c) => c.key)
+    );
+    const primaryCategory = validCategories.has(category) ? category : OTHER_CATEGORY;
 
     // Register the kind (never overwrite an existing template)
     if (kindName) {

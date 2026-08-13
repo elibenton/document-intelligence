@@ -1,7 +1,10 @@
+import { useQuery } from "convex/react";
+import { api } from "../../../convex/_generated/api";
 import { cn } from "@/lib/utils";
-import { CATEGORY_STYLES } from "./docTypeCategories";
+import { styleForColor } from "./docTypeCategories";
 
-/** Neutral tint for the kind when Analyze landed on "other" — or on nothing yet. */
+/** Neutral tint for the kind when there's no matching category — "other",
+ *  a deleted category, or nothing yet. */
 const NEUTRAL_LIGHT = "bg-muted text-muted-foreground";
 
 const PILL = "px-1.5 py-0.5 text-[10px] font-medium leading-none truncate";
@@ -13,10 +16,14 @@ function sentenceCase(value: string): string {
 }
 
 /**
- * A document's type, as a joined pair of pills: the broad category on the left
- * in its full colour, the specific kind on the right in a tint of the same
- * hue. Reading left to right gives you the breadcrumb — Legal › writ of
- * mandate — without spending a separator or a second line on it.
+ * A document's type, as one bordered pill in two tones: the broad category on
+ * the left in its full color, the specific kind on the right in a tint of the
+ * same hue. Reading left to right gives you the breadcrumb — Legal › writ of
+ * mandate — as a single object, not two chips sitting next to each other.
+ *
+ * The category list is fetched here (not passed in) so every caller —
+ * document rows, the document page header — renders from the same live
+ * Settings-managed taxonomy without threading it through props.
  */
 export function DocTypePills({
   primaryCategory,
@@ -27,26 +34,28 @@ export function DocTypePills({
   primaryKind?: string;
   className?: string;
 }) {
-  const style = primaryCategory ? CATEGORY_STYLES[primaryCategory] : undefined;
+  const categories = useQuery(api.documentCategories.list);
+  const category = primaryCategory
+    ? categories?.find((c) => c.key === primaryCategory)
+    : undefined;
+  const style = category ? styleForColor(category.color) : undefined;
   const kind = primaryKind?.trim();
 
-  // Nothing to say yet — the document hasn't been analyzed, or Analyze
-  // declined to place it and never learned a kind for it either.
-  if (!style && !kind) return null;
+  // Nothing to say yet — the document hasn't been analyzed, or landed on a
+  // category this workspace no longer has (deleted, or "other") with no kind
+  // to fall back on either.
+  if (!category && !kind) return null;
 
   return (
     <span
-      className={cn("inline-flex max-w-[14rem] items-stretch shrink-0", className)}
+      className={cn(
+        "inline-flex max-w-[14rem] items-stretch shrink-0 overflow-hidden rounded-full border",
+        className
+      )}
     >
-      {style && (
-        <span
-          className={cn(
-            PILL,
-            style.dark,
-            kind ? "rounded-l-full pl-2" : "rounded-full px-2"
-          )}
-        >
-          {style.label}
+      {category && (
+        <span className={cn(PILL, style!.dark, "pl-2", !kind && "pr-2")}>
+          {category.label}
         </span>
       )}
       {kind && (
@@ -54,7 +63,8 @@ export function DocTypePills({
           className={cn(
             PILL,
             style ? style.light : NEUTRAL_LIGHT,
-            style ? "rounded-r-full pr-2" : "rounded-full px-2"
+            "pr-2",
+            !category && "pl-2"
           )}
           title={kind}
         >

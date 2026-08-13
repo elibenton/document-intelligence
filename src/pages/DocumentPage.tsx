@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useParams, useSearchParams, Link, useNavigate } from "react-router-dom";
+import { Folder } from "lucide-react";
 import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
-import { extractionKey } from "../../convex/extractionSchema";
 import {
   ImagePdfViewer,
   type ImagePdfViewerRef,
@@ -16,13 +16,19 @@ import { TranslatedDocumentView } from "@/components/viewer/TranslatedDocumentVi
 import { RecordingView } from "@/components/recordings/RecordingView";
 import { ExtractionSetup } from "@/components/documents/ExtractionSetup";
 import { ViewerLayout } from "@/components/viewer/ViewerLayout";
-import { TableOfContents } from "@/components/viewer/TableOfContents";
+import { ContentsPanel } from "@/components/viewer/ContentsPanel";
+import { NotesPanel } from "@/components/viewer/NotesPanel";
+import { buildTocHeaders, sectionForPage } from "@/components/viewer/tocHeaders";
+import { ZoomControl } from "@/components/viewer/ZoomControl";
+import { useViewerZoom } from "@/components/viewer/useViewerZoom";
+import { FLOATING_SURFACE } from "@/components/viewer/surfaces";
 import { PageOverlays } from "@/components/viewer/PageOverlays";
 import { findPersonMentions } from "@/components/viewer/personMentions";
 import type { EntityHover } from "@/components/viewer/EntityHighlights";
 import { PipelineProgress } from "@/components/documents/PipelineProgress";
 import { DocumentActions } from "@/components/documents/DocumentActions";
 import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
+import { DocTypePills } from "@/components/documents/DocTypePills";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,7 +63,6 @@ export default function DocumentPage() {
   const ensureRendered = useMutation(api.pageImages.ensureRendered);
   const retryRender = useMutation(api.pageImages.retryRender);
   const retryTranslation = useMutation(api.translations.retry);
-  const rotatePage = useMutation(api.pages.rotatePage);
   const rotateDocument = useMutation(api.documents.rotateDocument);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -67,14 +72,34 @@ export default function DocumentPage() {
   const [customTitle, setCustomTitle] = useState("");
   const [customDescription, setCustomDescription] = useState("");
   const [customExtracting, setCustomExtracting] = useState(false);
-  const [presetExtracting, setPresetExtracting] = useState<Set<string>>(new Set());
+  const [showNewEntityForm, setShowNewEntityForm] = useState(false);
   const [researching, setResearching] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
-  const [showReextract, setShowReextract] = useState(false);
   const [languageView, setLanguageView] = useState<"translated" | "original">(
     "translated"
   );
   const [hoveredEntity, setHoveredEntity] = useState<EntityHover | null>(null);
+  // Which highlight has its comment box open. Lives here because both the page
+  // and the notes list drive it — clicking a note opens the box on the page.
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(
+    null
+  );
+  // How much room the layout gave the viewer, and the zoom floor that keeps
+  // the page from shrinking before the panels do (see panelLayout).
+  const [viewerMetrics, setViewerMetrics] = useState({ width: 0, zoomFloor: 1 });
+  const handleViewerMetrics = useCallback(
+    (width: number, zoomFloor: number) =>
+      setViewerMetrics((prev) =>
+        prev.width === width && prev.zoomFloor === zoomFloor
+          ? prev
+          : { width, zoomFloor }
+      ),
+    []
+  );
+  const { zoom, chooseZoom, fitToWidth } = useViewerZoom(
+    viewerMetrics.width,
+    viewerMetrics.zoomFloor
+  );
   const imageViewerRef = useRef<ImagePdfViewerRef | null>(null);
 
   const handleVisiblePageChange = useCallback((page: number) => {
@@ -84,6 +109,17 @@ export default function DocumentPage() {
   const scrollToPage = useCallback((page: number) => {
     imageViewerRef.current?.scrollToPage(page);
   }, []);
+
+  // The same section list the Contents panel shows, so a new note is filed
+  // under exactly the heading the user can see it sitting beneath.
+  const tocHeaders = useMemo(
+    () => buildTocHeaders(blocks ?? [], document?.tableOfContents),
+    [blocks, document?.tableOfContents]
+  );
+  const sectionTitleForPage = useCallback(
+    (pageNumber: number) => sectionForPage(tocHeaders, pageNumber)?.text,
+    [tocHeaders]
+  );
 
   // Deep link support (?page=N&highlight=text): arm the highlight search and
   // scroll to the page once the viewer has rendered it.
@@ -258,32 +294,6 @@ export default function DocumentPage() {
     return map;
   }, [researchDossiers]);
 
-  // Which presets have already been extracted
-  const extractedKeys = useMemo(() => {
-    const keys = new Set<string>();
-    if (!extractions) return keys;
-    for (const e of extractions) {
-      try {
-        const schema = JSON.parse(e.schemaUsed);
-        const schemaKeys = Object.keys(schema?.properties ?? {});
-        for (const k of schemaKeys) keys.add(k);
-      } catch { /* ignore */ }
-    }
-    return keys;
-  }, [extractions]);
-
-  // Analyze's per-document extraction suggestions. Ones the user has already
-  // run are noise, so match on the same key the custom form derives and drop
-  // a pill once its results exist. Declared above the loading early-return —
-  // every hook on this page has to run on every render.
-  const suggestedExtractions = useMemo(
-    () =>
-      (document?.suggestedExtractions ?? []).filter(
-        (suggestion) => !extractedKeys.has(extractionKey(suggestion.label))
-      ),
-    [document?.suggestedExtractions, extractedKeys]
-  );
-
   if (document === undefined) {
     return (
       <div className="p-8">
@@ -329,44 +339,11 @@ export default function DocumentPage() {
       await runExtraction({ documentId, pageSchema: schema });
       setCustomTitle("");
       setCustomDescription("");
+      setShowNewEntityForm(false);
     } catch (err) {
       console.error("Custom extraction failed:", err);
     } finally {
       setCustomExtracting(false);
-    }
-  }
-
-  const PRESET_ENTITIES = [
-    { key: "places", label: "Places", description: "Geographic locations, cities, countries, addresses, and named places" },
-    { key: "dates", label: "Dates", description: "Specific dates, date ranges, and time references" },
-    { key: "telephone_numbers", label: "Phone Numbers", description: "Telephone numbers, fax numbers, and phone contacts" },
-    { key: "emails", label: "Emails", description: "Email addresses" },
-  ];
-
-  async function handlePresetExtract(key: string, description: string) {
-    const schema = JSON.stringify({
-      type: "object",
-      properties: {
-        [key]: {
-          type: "array",
-          items: { type: "string" },
-          description,
-        },
-      },
-      required: [key],
-    });
-
-    setPresetExtracting((prev) => new Set(prev).add(key));
-    try {
-      await runExtraction({ documentId, pageSchema: schema });
-    } catch (err) {
-      console.error(`Preset extraction (${key}) failed:`, err);
-    } finally {
-      setPresetExtracting((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
     }
   }
 
@@ -444,44 +421,65 @@ export default function DocumentPage() {
       : undefined;
 
   return (
-    <div className="flex flex-col h-screen">
-      <header className="border-b px-6 py-3 flex items-center gap-4 shrink-0">
-        <Link to={document.projectId ? `/p/${document.projectId}` : "/"}>
-          <Button variant="ghost" size="sm">
-            &larr; Back
-          </Button>
-        </Link>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-semibold truncate flex items-center gap-1.5">
-            <DocumentIdentityMenu document={document} />
-            <span className="truncate">{titles.primary}</span>
-          </h1>
-          {/* Original upload name under the AI-written title, indented past
-              the icon so it lines up with the title text above it. */}
-          {titles.original && (
-            <p className="text-xs text-muted-foreground truncate ml-5">
-              {titles.original}
-            </p>
+    // Everything on this page floats above the canvas: the chrome is a row of
+    // separate cards rather than a header bar, so the document reads as the
+    // thing on the desk and the panels as what is laid over it.
+    <div className="flex h-screen flex-col gap-2 bg-viewer-canvas p-2">
+      {/* Every item in this row shares one height (h-14) so the row reads as
+          a single strip — the back button and toolbar chips stretch to match
+          the title card via items-stretch, rather than each picking its own
+          size. */}
+      <header className="flex h-14 shrink-0 items-stretch gap-2">
+        <Link
+          to={document.projectId ? `/p/${document.projectId}` : "/"}
+          title="Back to project"
+          aria-label="Back to project"
+          className={cn(
+            FLOATING_SURFACE,
+            "flex w-14 items-center justify-center text-foreground transition-colors hover:bg-accent"
           )}
+        >
+          <Folder className="h-4.5 w-4.5" />
+        </Link>
+        <div
+          className={cn(
+            FLOATING_SURFACE,
+            "group/title flex min-w-0 flex-1 items-center gap-3 px-4"
+          )}
+        >
+          {/* Renaming and re-typing the document lives behind the ⋮ menu next
+              to the type pills — the title itself is just a title. The menu
+              stays out of sight until you're over the title, so the type
+              pills aren't fighting a third element for room at rest. */}
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-base font-semibold leading-tight text-foreground">
+              {titles.primary}
+            </h1>
+            {titles.original && (
+              <p className="truncate text-xs text-foreground">
+                {titles.original}
+              </p>
+            )}
+          </div>
+          <DocTypePills
+            primaryCategory={document.primaryCategory}
+            primaryKind={document.primaryKind}
+            className="shrink-0"
+          />
+          <DocumentIdentityMenu
+            document={document}
+            className="shrink-0 opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100"
+          />
         </div>
 
-        <div className="flex items-center gap-2">
-          {isPdfDocument && (
-            <div className="inline-flex rounded-md border" aria-label="Rotate document">
-              <button
-                type="button"
-                className="px-2 py-1.5 text-xs hover:bg-accent"
-                title="Rotate every page clockwise"
-                onClick={() =>
-                  void rotateDocument({ id: documentId, degrees: 90 })
-                }
-              >
-                ↻ All
-              </button>
-            </div>
-          )}
+        <div className="flex items-stretch gap-2">
           {translationInProgress && (
-            <span className="text-xs text-muted-foreground">
+            <span
+              className={cn(
+                FLOATING_SURFACE,
+                "flex items-center px-3 text-xs text-foreground"
+              )}
+            >
               Translating…
             </span>
           )}
@@ -489,6 +487,7 @@ export default function DocumentPage() {
             <Button
               variant="outline"
               size="sm"
+              className="h-full shadow-md"
               title={document.translationError}
               onClick={() => void retryTranslation({ documentId })}
             >
@@ -497,17 +496,17 @@ export default function DocumentPage() {
           )}
           {hasTranslatedContent && (
             <div
-              className="inline-flex rounded-md border bg-muted/30 p-0.5"
+              className={cn(FLOATING_SURFACE, "flex items-center p-0.5")}
               aria-label="Document language view"
             >
               <button
                 type="button"
                 onClick={() => setLanguageView("translated")}
                 className={cn(
-                  "rounded px-2 py-1 text-xs transition-colors",
+                  "flex h-full items-center rounded px-3 text-xs text-foreground transition-colors",
                   languageView === "translated"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
+                    ? "bg-background shadow-sm"
+                    : "hover:bg-accent"
                 )}
               >
                 Translated
@@ -516,10 +515,10 @@ export default function DocumentPage() {
                 type="button"
                 onClick={() => setLanguageView("original")}
                 className={cn(
-                  "rounded px-2 py-1 text-xs transition-colors",
+                  "flex h-full items-center rounded px-3 text-xs text-foreground transition-colors",
                   languageView === "original"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
+                    ? "bg-background shadow-sm"
+                    : "hover:bg-accent"
                 )}
               >
                 Original
@@ -533,37 +532,55 @@ export default function DocumentPage() {
             <Button
               variant="outline"
               size="sm"
+              className="h-full shadow-md"
               onClick={() => void retryRender({ documentId })}
               title={document.renderLastError ?? undefined}
             >
               Retry text layer
             </Button>
           )}
-          {hasBlocks && (
-            <Button
-              variant={showBlocks ? "default" : "outline"}
-              size="sm"
-              onClick={() => setShowBlocks((v) => !v)}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                className="mr-1.5"
-              >
-                <rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
-                <rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
-                <rect x="1" y="9" width="14" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
-              </svg>
-              Blocks
-            </Button>
-          )}
         </div>
       </header>
 
-      <div className="flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <ViewerLayout
+          leftLabel="Contents"
+          sidebarLabel="Details"
+          onViewerMetrics={handleViewerMetrics}
+          left={
+            showContentsTab ? (
+              <div className={cn(FLOATING_SURFACE, "h-full overflow-hidden")}>
+              <ContentsPanel
+                blocks={blocks ?? []}
+                outline={document.tableOfContents}
+                currentPage={currentPage}
+                totalPages={document.pageCount ?? 0}
+                onNavigate={scrollToPage}
+                searchQuery={searchQuery}
+                onSearchChange={(q) => {
+                  setSearchQuery(q);
+                  // Clear entity selection if the user edits the search
+                  if (q !== selectedItem) setSelectedItem(null);
+                }}
+                isEntitySearch={!!selectedItem}
+              />
+              </div>
+            ) : undefined
+          }
+          bottomLeft={
+            isPdfDocument && (
+              <ZoomControl
+                zoom={zoom}
+                onZoomChange={chooseZoom}
+                onFitWidth={fitToWidth}
+                currentPage={currentPage}
+                totalPages={document.pageCount ?? pageImages?.length ?? 0}
+              />
+            )
+          }
+          bottomRight={
+            <PipelineProgress document={document} floating collapseWhenDone />
+          }
           viewer={
             isRecording ? (
               <RecordingView
@@ -597,16 +614,13 @@ export default function DocumentPage() {
                   pageImages={pageImages ?? []}
                   pages={pages ?? []}
                   totalPages={document.pageCount ?? pageImages?.length ?? 1}
+                  zoom={zoom}
                   documentRotation={document.viewerRotation ?? 0}
                   onVisiblePageChange={handleVisiblePageChange}
-                  onRotatePage={(pageNumber) =>
-                    void rotatePage({
-                      documentId,
-                      pageNumber: pageNumber - 1,
-                      degrees: 90,
-                    })
-                  }
                   renderOverlay={renderOverlay}
+                  sectionTitleForPage={sectionTitleForPage}
+                  activeAnnotationId={activeAnnotationId}
+                  onActiveAnnotationChange={setActiveAnnotationId}
                 />
               ) : null
             ) : (
@@ -617,162 +631,31 @@ export default function DocumentPage() {
             )
           }
           sidebar={
-            <Tabs defaultValue="entities" className="h-full">
-              <TabsList className="w-full">
-                <TabsTrigger value="entities">Entities</TabsTrigger>
-                <TabsTrigger value="notes">Notes</TabsTrigger>
-                <TabsTrigger value="info">Info</TabsTrigger>
-                {showContentsTab && (
-                  <TabsTrigger value="contents">Contents</TabsTrigger>
-                )}
-              </TabsList>
-              {showContentsTab && (
-                <TabsContent value="contents">
-                  {/* Full-bleed inside the padded sidebar so rows and their
-                      hover state span the panel edge to edge */}
-                  <div className="-mx-4 -mt-4">
-                    <TableOfContents
-                      blocks={blocks ?? []}
-                      outline={document.tableOfContents}
-                      currentPage={currentPage}
-                      totalPages={document.pageCount ?? 0}
-                      onNavigate={scrollToPage}
-                      searchQuery={searchQuery}
-                      onSearchChange={(q) => {
-                        setSearchQuery(q);
-                        // Clear entity selection if the user edits the search
-                        if (q !== selectedItem) setSelectedItem(null);
-                      }}
-                      isEntitySearch={!!selectedItem}
-                    />
-                  </div>
-                </TabsContent>
-              )}
+            <div className="flex h-full flex-col overflow-hidden">
+              {/* The description is the only thing pinned above the tabs now —
+                  identity (name, kind) moved to the title bar's pill + ⋮ menu,
+                  and tags/extracted-metadata detail moved into the Info tab.
+                  DocumentSummary owns its own border/padding and renders
+                  nothing at all once there's no summary to show. */}
+              <DocumentSummary document={document} />
+
+              <Tabs
+                defaultValue="entities"
+                className="flex min-h-0 flex-1 flex-col gap-0"
+              >
+                <div className="shrink-0 px-4 pt-3">
+                  <TabsList className="w-full">
+                    <TabsTrigger value="entities">Entities</TabsTrigger>
+                    <TabsTrigger value="notes">Notes</TabsTrigger>
+                    <TabsTrigger value="info">Info</TabsTrigger>
+                  </TabsList>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <TabsContent value="entities">
             <div className="flex flex-col gap-4">
-              <PipelineProgress document={document} />
-
               {/* Upload review: confirm the extraction template before running */}
-              {(document.status === "parsed" || showReextract) && (
-                <ExtractionSetup
-                  document={document}
-                  onDone={() => setShowReextract(false)}
-                />
-              )}
-              {document.status === "completed" && !showReextract && (
-                <button
-                  onClick={() => setShowReextract(true)}
-                  className="text-xs text-muted-foreground hover:text-foreground text-left"
-                >
-                  ↻ Re-run extraction with template…
-                </button>
-              )}
-
-              {/* New Entity */}
-              {isParsed && (
-                <div className="flex flex-col gap-3">
-                  <h3 className="text-sm font-medium">New Entity</h3>
-
-                  {/* Analyze's per-document suggestions. Unlike the presets
-                      below — which are the same four for every document —
-                      these come from what this document actually contains, so
-                      they load into the custom form for editing rather than
-                      firing a fixed schema. */}
-                  {suggestedExtractions.length > 0 && (
-                    <div className="flex flex-col gap-1.5">
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        Suggested
-                      </h4>
-                      <div className="flex flex-wrap gap-1.5">
-                        {suggestedExtractions.map((suggestion) => (
-                          <button
-                            key={suggestion.label}
-                            title={suggestion.rationale || suggestion.prompt}
-                            onClick={() => {
-                              setCustomTitle(suggestion.label);
-                              setCustomDescription(suggestion.prompt);
-                            }}
-                            disabled={document.status === "extracting"}
-                            className="text-xs px-2 py-1 rounded-md border border-dashed bg-background hover:bg-accent text-foreground transition-colors"
-                          >
-                            {suggestion.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Preset buttons */}
-                  {PRESET_ENTITIES.some((p) => !extractedKeys.has(p.key)) && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {PRESET_ENTITIES.filter((p) => !extractedKeys.has(p.key)).map((preset) => {
-                        const isRunning = presetExtracting.has(preset.key);
-                        return (
-                          <button
-                            key={preset.key}
-                            onClick={() => handlePresetExtract(preset.key, preset.description)}
-                            disabled={isRunning || document.status === "extracting"}
-                            className={cn(
-                              "text-xs px-2 py-1 rounded-md border transition-colors",
-                              isRunning
-                                ? "bg-muted text-muted-foreground cursor-wait"
-                                : "bg-background hover:bg-accent text-foreground"
-                            )}
-                          >
-                            {isRunning ? (
-                              <span className="flex items-center gap-1">
-                                <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                </svg>
-                                {preset.label}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-1">
-                                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M5 1v8M1 5h8" />
-                                </svg>
-                                {preset.label}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Custom extraction form */}
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Custom
-                  </h4>
-                  <div className="flex flex-col gap-2">
-                    <Input
-                      placeholder="Title (e.g. Organizations)"
-                      value={customTitle}
-                      onChange={(e) => setCustomTitle(e.target.value)}
-                      className="text-xs h-8"
-                    />
-                    <Input
-                      placeholder="Description (e.g. Company names mentioned)"
-                      value={customDescription}
-                      onChange={(e) => setCustomDescription(e.target.value)}
-                      className="text-xs h-8"
-                    />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleCustomExtract}
-                      disabled={
-                        !customTitle.trim() ||
-                        customExtracting ||
-                        document.status === "extracting"
-                      }
-                      className="w-full"
-                    >
-                      {customExtracting ? "Extracting..." : "Extract"}
-                    </Button>
-                  </div>
-                </div>
+              {document.status === "parsed" && (
+                <ExtractionSetup document={document} />
               )}
 
               {/* Entity groups */}
@@ -925,13 +808,75 @@ export default function DocumentPage() {
                 );
               })}
 
+              {/* New Entity: a single button at the bottom of the list, not a
+                  form competing with the entities themselves for attention. */}
+              {isParsed && (
+                <div className="border-t pt-3">
+                  {showNewEntityForm ? (
+                    <div className="flex flex-col gap-2">
+                      <Input
+                        placeholder="Title (e.g. Organizations)"
+                        value={customTitle}
+                        onChange={(e) => setCustomTitle(e.target.value)}
+                        autoFocus
+                        className="text-xs h-8"
+                      />
+                      <Input
+                        placeholder="Description (e.g. Company names mentioned)"
+                        value={customDescription}
+                        onChange={(e) => setCustomDescription(e.target.value)}
+                        className="text-xs h-8"
+                      />
+                      <div className="flex gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleCustomExtract}
+                          disabled={
+                            !customTitle.trim() ||
+                            customExtracting ||
+                            document.status === "extracting"
+                          }
+                          className="flex-1"
+                        >
+                          {customExtracting ? "Extracting…" : "Extract"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setShowNewEntityForm(false);
+                            setCustomTitle("");
+                            setCustomDescription("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setShowNewEntityForm(true)}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                        <path d="M5 1v8M1 5h8" />
+                      </svg>
+                      New Entity
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
               </TabsContent>
               <TabsContent value="notes">
                 <div className="flex flex-col gap-4">
-                  <p className="text-sm text-muted-foreground py-8 text-center">
-                    Notes for this document will appear here.
-                  </p>
+                  <NotesPanel
+                    documentId={documentId}
+                    activeId={activeAnnotationId}
+                    onActivate={setActiveAnnotationId}
+                    onNavigate={scrollToPage}
+                  />
                 </div>
               </TabsContent>
               <TabsContent value="info">
@@ -957,7 +902,7 @@ export default function DocumentPage() {
                       />
                     </div>
                   )}
-                  {document && <DocumentMetaEditor document={document} />}
+                  {document && <DocumentTagsAndMetadata document={document} />}
                   {detections && detections.length > 0 && (
                     <VisualEvidenceList
                       detections={detections}
@@ -999,9 +944,52 @@ export default function DocumentPage() {
                       )}
                     </div>
                   )}
+
+                  {/* Page-level view controls: not document properties, so
+                      they sit at the bottom rather than beside Name/Media. */}
+                  {isPdfDocument && (
+                    <div className="flex flex-col gap-1.5 border-t pt-3">
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        View
+                      </h4>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            void rotateDocument({ id: documentId, degrees: 90 })
+                          }
+                        >
+                          ↻ Rotate all pages
+                        </Button>
+                        {hasBlocks && (
+                          <Button
+                            variant={showBlocks ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setShowBlocks((v) => !v)}
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 16 16"
+                              fill="none"
+                              className="mr-1.5"
+                            >
+                              <rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
+                              <rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
+                              <rect x="1" y="9" width="14" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
+                            </svg>
+                            Blocks
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </TabsContent>
-            </Tabs>
+                </div>
+              </Tabs>
+            </div>
           }
         />
       </div>
@@ -1132,7 +1120,9 @@ function VisualObjectOverlay({
 }
 
 // ---------------------------------------------------------------------------
-// Document meta editor: kind + tags (human-owned) and extracted metadata
+// Document description (top of the details panel) and metadata detail
+// (Kind/type identity now lives in the title bar's pill + ⋮ menu; only tags
+// and the extracted-metadata table stay editable here, in the Info tab.)
 // ---------------------------------------------------------------------------
 
 interface ExtractedMetadata {
@@ -1144,13 +1134,8 @@ interface ExtractedMetadata {
   additional?: { key: string; value: string }[];
 }
 
-function DocumentMetaEditor({ document }: { document: Doc<"documents"> }) {
-  const updateDocumentMeta = useMutation(api.metadata.updateDocumentMeta);
-  const kinds = useQuery(api.kinds.list);
-  const [kindDraft, setKindDraft] = useState<string | null>(null);
-  const [tagsDraft, setTagsDraft] = useState<string | null>(null);
-
-  const meta = useMemo<ExtractedMetadata | null>(() => {
+function useExtractedMetadata(document: Doc<"documents">) {
+  return useMemo<ExtractedMetadata | null>(() => {
     if (!document.metadata) return null;
     try {
       return JSON.parse(document.metadata) as ExtractedMetadata;
@@ -1158,76 +1143,52 @@ function DocumentMetaEditor({ document }: { document: Doc<"documents"> }) {
       return null;
     }
   }, [document.metadata]);
+}
 
-  const kind = kindDraft ?? document.primaryKind ?? "";
+/**
+ * The only thing pinned above the tabs: Analyze's own description of the
+ * document. Renders nothing — not even its border — until there is one, so a
+ * document still being analyzed doesn't show an empty strip.
+ */
+function DocumentSummary({ document }: { document: Doc<"documents"> }) {
+  const meta = useExtractedMetadata(document);
+  if (!meta?.summary) return null;
+  return (
+    // pr-9 leaves room for the panel's minimize button (see ViewerLayout).
+    <div className="max-h-[35%] shrink-0 overflow-y-auto border-b px-4 pt-3 pb-3 pr-9">
+      <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-foreground">
+        Document Description
+      </h2>
+      <p className="text-sm leading-relaxed text-foreground">
+        {meta.summary}
+      </p>
+    </div>
+  );
+}
+
+/** Tag editing and the extracted-metadata table, for the Info tab. */
+function DocumentTagsAndMetadata({ document }: { document: Doc<"documents"> }) {
+  const updateDocumentMeta = useMutation(api.metadata.updateDocumentMeta);
+  const [tagsDraft, setTagsDraft] = useState<string | null>(null);
+  const meta = useExtractedMetadata(document);
+
   const tags = tagsDraft ?? (document.tags ?? []).join(", ");
-  const dirty =
-    (kindDraft !== null && kindDraft !== (document.primaryKind ?? "")) ||
-    (tagsDraft !== null && tagsDraft !== (document.tags ?? []).join(", "));
+  const dirty = tagsDraft !== null && tagsDraft !== (document.tags ?? []).join(", ");
 
   async function save() {
+    if (tagsDraft === null) return;
     await updateDocumentMeta({
       documentId: document._id,
-      ...(kindDraft !== null ? { primaryKind: kindDraft } : {}),
-      ...(tagsDraft !== null
-        ? {
-            tags: tagsDraft
-              .split(",")
-              .map((t) => t.trim().toLowerCase())
-              .filter(Boolean),
-          }
-        : {}),
+      tags: tagsDraft
+        .split(",")
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean),
     });
-    setKindDraft(null);
     setTagsDraft(null);
   }
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-muted-foreground">
-          Kind{" "}
-          {document.kindSource === "ai" && (
-            <span className="text-[10px] uppercase tracking-wide text-purple-500">
-              ai guess
-            </span>
-          )}
-        </label>
-        <Input
-          list="info-document-kinds"
-          value={kind}
-          placeholder="e.g. legal brief"
-          onChange={(e) => setKindDraft(e.target.value.toLowerCase())}
-          className="text-xs h-8"
-        />
-        <datalist id="info-document-kinds">
-          {(kinds ?? []).map((k) => (
-            <option key={k._id} value={k.name} />
-          ))}
-        </datalist>
-      </div>
-
-      {/* The hierarchy behind the flat kind above: "writ of mandate" is also a
-          "legal document", and both are worth showing (and filtering on). */}
-      {(document.documentTypes ?? []).length > 0 && (
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-muted-foreground">
-            Document type
-          </label>
-          <div className="flex flex-wrap gap-1.5">
-            {document.documentTypes!.map((type) => (
-              <span
-                key={type.path.join("/")}
-                title={`${Math.round(type.confidence * 100)}% confidence`}
-                className="text-xs px-2 py-0.5 rounded-md border bg-muted/40"
-              >
-                {type.path.join(" › ")}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-col gap-1">
         <label className="text-xs font-medium text-muted-foreground">
           Tags (comma-separated)
@@ -1241,7 +1202,7 @@ function DocumentMetaEditor({ document }: { document: Doc<"documents"> }) {
       </div>
 
       {dirty && (
-        <Button size="sm" variant="outline" onClick={save}>
+        <Button size="sm" variant="outline" onClick={save} className="self-start">
           Save
         </Button>
       )}
@@ -1251,9 +1212,6 @@ function DocumentMetaEditor({ document }: { document: Doc<"documents"> }) {
           <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Extracted metadata
           </h4>
-          {meta.summary && (
-            <p className="text-xs text-muted-foreground">{meta.summary}</p>
-          )}
           {[
             ["Title", meta.title],
             ["Date", meta.date],

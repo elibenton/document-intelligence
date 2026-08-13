@@ -11,6 +11,7 @@
     "test": "vitest run",
     "preview": "vite preview",
     "bench": "tsx scripts/scan-bench.ts",
+    "bench:toc": "tsx scripts/toc-bench.ts",
     "bench:sample": "tsx scripts/make-sample-pdf.ts"
   },
   "dependencies": {
