@@ -60,8 +60,13 @@ bundle — never put a provider key there.
 npm test         # vitest, pure-logic unit tests only
 npm run lint
 npm run build    # tsc -b && vite build
-npm run deploy   # static hosting via @convex-dev/static-hosting
+npm run deploy   # publish the frontend to Convex static hosting
 ```
+
+**Deploying is not git.** `npm run deploy` publishes the built frontend;
+`npx convex dev` pushes backend functions and schema. Pushing a commit deploys
+nothing. Commits are atomic and go straight to `main` — no feature branches, no
+PRs.
 
 ---
 
@@ -107,10 +112,8 @@ days (`convex/crons.ts`); lifetime spend lives in `apiUsageTotals`, which is
 never pruned.
 
 **Read the rules before touching AI code.** [CLAUDE.md](CLAUDE.md) lists
-verified Interfaze constraints (precontext is per-invocation, *not* per-page;
-one task per call; **20MB**, because we send a URL inside a *file part* and that
-is the file-object ceiling, not the 80MB URL-in-prompt one; no streaming, because streaming
-drops usage and zeroes the cost ledger). [docs/pdf-edge-cases.md](docs/pdf-edge-cases.md)
+verified Interfaze constraints (extra calls are a last resort; design for the
+cache; size ceilings are per *transport*, and ours is the 20MB one). [docs/pdf-edge-cases.md](docs/pdf-edge-cases.md)
 documents the big one: **Interfaze does not OCR images embedded inside a PDF —
 it reads the text layer and nothing else.** A scanned PDF comes back empty, and
 re-encoding won't save it. That single fact explains most of the preflight code.
@@ -120,8 +123,8 @@ re-encoding won't save it. That single fact explains most of the preflight code.
 ## 3. What happens when you drop a file in
 
 ```
-DropZone / GlobalDropOverlay
-   └─ useUpload (src/hooks/useUpload.ts)
+GlobalDropOverlay (drag, paste) / AddFilesButton (file picker)
+   └─ UploadProvider (src/components/upload/UploadProvider.tsx)
         ├─ preflight in the browser  ── pdfPreflight.ts / audioPreflight.ts
         │   (is there a text layer? too many pages? needs transcoding?)
         │   Problems that only degrade the result become warnings, not blockers —
@@ -131,43 +134,39 @@ DropZone / GlobalDropOverlay
                 └─ processing.runFullPipeline
 ```
 
+The overlay keeps holding the file after `createDocument`: it watches
+`documents.ingestStates` and only releases the card when the document reaches
+`completed` or `failed`. Until then the library filters that document out
+(`heldDocumentIds`), so a file is in exactly one place at a time.
+
 From there the pipeline is a chain of **stages**, each one a job row in
 `processingJobs` and a workpool task:
 
 | Stage | Where | What it does |
 |---|---|---|
 | `parse` | `processingNode.runDocumentUnderstanding` | One whole-file Interfaze completion: OCR + object detection + structured analysis. Its precontext becomes `pages`, `blocks`, `detections`. |
-| `analyze` | `processingNode.runAnalyze` | Title, kind, category, date, table of contents, suggested extractions. Web clips take this path too — they used to have a parallel metadata pass whose schema had drifted. Prompt is user-editable — see `analyzePrompt.ts`. |
+| `analyze` | `processingNode.runAnalyze` | Title, kind, category, date, table of contents, suggested extractions. Web clips take this path too. Prompt is user-editable — see `analyzePrompt.ts`. |
 | `rename` | *(recordings only)* `renameNode.runRenamePass` | Writes `displayName` from the transcript. Documents don't need it — Analyze returns `display_title` directly. |
-| `extract` | `processingNode.runExtract` | Pulls entities/answers per the suggested template → `extractions`, `entities`, `mentions`, `relationships`. Auto-runs: `metadata.ts` schedules it the moment the suggestions exist, because that is when they exist. There is **no** human review gate — `documents.reviewQueue` and `ReviewDialog` do not exist. Re-running with edited roles is the extract dialog in `PipelineProgress`. |
+| `extract` | `processingNode.runExtract` | Pulls entities/answers per the suggested template → `extractions`, `entities`, `mentions`, `relationships`. Auto-runs once Analyze lands; there is no review gate. Re-run with edited roles from the extract dialog in `PipelineProgress`. |
 | `transcribe` | `processingNode.runTranscribe` | The audio/video branch, taken instead of `parse` → `transcriptSegments`. |
 
 Two independent workpools (`convex/convex.config.ts`): `processingWorkpool` for
-AI stages, `renderWorkpool` for page derivatives. They're separate for two
-reasons, and retry policy is *not* one of them (retry is a per-enqueue option, so
-one pool could serve both): page rendering must never queue behind an Interfaze
-backlog, and pausing processing drives `maxParallelism` to 0 **pool-wide** — a
-shared pool would mean "pause processing" silently froze the viewer's rendering.
+AI stages, `renderWorkpool` for page derivatives. Keeping them apart means page
+rendering never queues behind an Interfaze backlog, and "pause processing" —
+which drives `maxParallelism` to 0 pool-wide — doesn't freeze the viewer too.
 
-Pool parallelism is set per-enqueue, not in the constructor
-(`processingEnqueueOptions`). This looks redundant with `writeControl`'s
-`config.update` but is not: workpool config is global and last-write-wins on
-every enqueue, so an enqueue carrying the constructor's default would resume a
-paused queue. Threading `paused` through each enqueue is what makes pause stick.
+Pool parallelism is threaded through each enqueue rather than set on the
+constructor. Workpool config is global and last-write-wins per enqueue, so an
+enqueue carrying a constructor default would silently resume a paused queue.
 
 **Terminal state comes from the pool, not a timer.** A Convex action killed at
-the 10-minute limit never runs its own `catch`, which would strand a document in
-`parsing` forever. Both pools pass an `onComplete` — `processing.jobComplete` and
-`pageImages.renderJobComplete` — which the workpool calls whether the work
-succeeded, failed, or was canceled, and (where the pool retries) only once
-retries are exhausted. That covers the kill, and it covers "stop processing"
-cancelling queued work.
-
-A stage's own `catch` still writes its own failure; that path has a real message
-and a `FailureCode`. `onComplete` only speaks for the cases where the action
-never got to speak for itself, and it will not overwrite an already-terminal
-verdict. **If you add a stage, pass the job context to
-`processingEnqueueOptions` — there is no watchdog to add.**
+the 10-minute limit never runs its own `catch`, which would otherwise strand a
+document in `parsing`. Both pools pass an `onComplete`
+(`processing.jobComplete`, `pageImages.renderJobComplete`), called on success,
+failure and cancellation. A stage's own `catch` still writes its own failure —
+that path has a real message and a `FailureCode` — and `onComplete` won't
+overwrite an already-terminal verdict. A new stage passes
+`{ documentId, stage }` to `processingEnqueueOptions`.
 
 ### Rendering, separately
 
@@ -179,9 +178,8 @@ spiked memory ~380MB/page and got the action killed. Commits are versioned
 already-done pages.
 
 DOCX takes the same path: `docxRender.ts` lays out pages to produce
-`nativeBlocks`, and needs the *layout*, not pixels. Nothing stores page images —
-the `pageImages` table and its render-resumability read are gone; resumability
-now comes from `pages.geometryVersion`, which `commitPage` already wrote.
+`nativeBlocks`, and needs the *layout*, not pixels. Nothing stores page images;
+render resumability comes from `pages.geometryVersion`.
 
 ### Search
 
