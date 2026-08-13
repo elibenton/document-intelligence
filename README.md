@@ -135,9 +135,17 @@ From there the pipeline is a chain of **stages**, each one a job row in
 | `transcribe` | `processingNode.runTranscribe` | The audio/video branch, taken instead of `parse` → `transcriptSegments`. |
 
 Two independent workpools (`convex/convex.config.ts`): `processingWorkpool` for
-AI stages, `renderWorkpool` for page derivatives. They're separate on purpose —
-rasterization must never queue behind an Interfaze backlog, and unlike a paid
-Interfaze call, a render retry is free and idempotent.
+AI stages, `renderWorkpool` for page derivatives. They're separate for two
+reasons, and retry policy is *not* one of them (retry is a per-enqueue option, so
+one pool could serve both): page rendering must never queue behind an Interfaze
+backlog, and pausing processing drives `maxParallelism` to 0 **pool-wide** — a
+shared pool would mean "pause processing" silently froze the viewer's rendering.
+
+Pool parallelism is set per-enqueue, not in the constructor
+(`processingEnqueueOptions`). This looks redundant with `writeControl`'s
+`config.update` but is not: workpool config is global and last-write-wins on
+every enqueue, so an enqueue carrying the constructor's default would resume a
+paused queue. Threading `paused` through each enqueue is what makes pause stick.
 
 **Watchdogs.** A Convex action killed at the 10-minute limit never runs its own
 `catch`, which would strand a document in `parsing` forever. So stages arm a
@@ -153,6 +161,12 @@ pdf.js (`PdfPageCanvas.tsx`) from the original file, because server-side canvas
 spiked memory ~380MB/page and got the action killed. Commits are versioned
 (`rendererConfig.RENDERER_VERSION`) so an upgrade is resumable and a retry skips
 already-done pages.
+
+DOCX takes the same path: `docxRender.ts` lays out pages to produce
+`nativeBlocks`, and needs the *layout*, not pixels. It stores no images. (The
+`pageImages` table is legacy — `commitPage` has no insert path, so no document
+ingested since the rasterizer was removed has a row. It is scheduled for
+deletion.)
 
 ### Search
 
@@ -194,8 +208,7 @@ docs/              findings worth keeping: PDF edge cases, provider bug reports
 ```
 
 Routes (`src/App.tsx`): `/` projects → `/p/:projectId` library → `/documents/:id`
-viewer, plus `/entity/:slug`, `/search`, `/settings`. `/prototype/viewer/:id` is
-an unlinked prototype and will be deleted with the viewer decision.
+viewer, plus `/entity/:slug`, `/search`, `/settings`.
 
 ### The data model in one paragraph
 

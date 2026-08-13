@@ -23,7 +23,6 @@ import { RENDERER_VERSION } from "./rendererConfig";
 import {
   layoutDocument,
   parseDocumentXml,
-  type LayoutPage,
   type MeasureText,
 } from "./docx";
 
@@ -100,20 +99,6 @@ export function readZipEntry(data: Uint8Array, name: string): Uint8Array {
   throw new Error(`.docx is missing ${name}`);
 }
 
-function drawPage(page: LayoutPage) {
-  const canvas = createCanvas(page.width, page.height);
-  const context = canvas.getContext("2d");
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, page.width, page.height);
-  context.fillStyle = "#111111";
-  context.textBaseline = "top";
-  for (const line of page.lines) {
-    context.font = fontSpec(line.fontPx, line.bold);
-    context.fillText(line.text, line.x, line.y);
-  }
-  return canvas.toBuffer("image/png");
-}
-
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -167,17 +152,15 @@ export const renderDocx = internalAction({
 
       for (const [pageNumber, page] of pages.entries()) {
         if (existingVersions.get(pageNumber) === RENDERER_VERSION) continue;
-        let storageId;
-        if (!existingVersions.has(pageNumber)) {
-          const png = drawPage(page);
-          storageId = await ctx.storage.store(
-            new Blob([new Uint8Array(png)], { type: "image/png" })
-          );
-        }
+        // No raster is produced. Pages are drawn client-side by pdf.js, and
+        // commitPage only ever *deletes* a storageId handed to it — so the PNG
+        // this used to store was orphaned in storage on every first render,
+        // unreferenced and unreachable by the delete cascade. What DOCX
+        // rendering actually delivers is nativeBlocks, which needs the layout,
+        // not the pixels.
         await ctx.runMutation(internal.pageImages.commitPage, {
           documentId: args.documentId,
           pageNumber,
-          storageId,
           width: page.width,
           height: page.height,
           rendererVersion: RENDERER_VERSION,

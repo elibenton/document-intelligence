@@ -6,11 +6,19 @@ When working on Convex code, **always read `convex/_generated/ai/guidelines.md` 
 Convex agent skills for common tasks can be installed by running `npx convex ai-files install`.
 <!-- convex-ai-end -->
 
-## Interfaze usage rules (verified against interfaze.ai/docs, 2026-08-12)
+## Interfaze usage rules (re-verified against interfaze.ai/docs + the shipped SDK, 2026-08-13)
 
-- **Precontext entries are per-task-invocation, not per-page.** Docs: repeated tasks yield multiple entries with the same `name`. `ocrToPages` (`convex/interfaze.ts`) branching on `ocrs.length > 1` as "one entry per page" is unsound by spec and corrupts text + geometry today. Collapse duplicates; only use per-result when entry count == page count.
-- **One task per call.** `task: "ocr"` cannot also return `object_detection`. A full completion *can* return both (precontext may mix task types). Objects + OCR = either one full call or two task calls.
+- **Precontext entries are per-task-invocation, not per-page.** Docs: repeated tasks yield multiple entries with the same `name`; nothing ties an entry to a page. Only map entry→page when entry count == page count, and assert it. (Historical note: `ocrToPages` moved to `convex/interfazeOcr.ts`, its `ocrs.length > 1` branch is guarded, and `ocrDocument` synthesizes exactly one entry at `interfaze.ts:456` — so that branch is unreachable from production. Nothing is corrupted today.)
+- **One task per call.** `task: "ocr"` cannot also return `object_detection`. A full completion *can* return both (precontext may mix task types). Objects + OCR = either one full call or two task calls. Note the SDK guard at `dist/index.js:380` is about the explicit `task` **parameter** only — it says nothing about whether the MoA router runs an internal specialist, which it will on a normal completion.
 - **`total_pages` is undocumented.** The sections-as-pages height division is inference; assert it, fail loudly, never emit empty pages.
-- **Size ceilings:** URL-in-prompt 80MB; base64 / file object 20MB; 5-min request timeout; 1M context; 32k output tokens; 50 rps. Pass big files by URL. Our `maxTokens: 8192` is self-imposed, not the API cap.
-- **Don't re-upload for text work.** Extract should go text-in, chunked (`LIMITS.maxInlineTextBytesPerFile` = 250,000).
-- **Non-streaming only.** Streamed completions hardcode `vcache: false` and drop `usage`, which zeroes the cost ledger (`apiLogs`, `apiUsageTotals`, `providerHealth`).
+- **Size ceilings by transport — this is the one people get wrong.** URL-in-prompt-*text* 80MB; base64 20MB; **binary file object 20MB**. We send documents as a **URL wrapped in a `file` content part** (`fileUrlContent` → `inputs.file`), which is the *file-object* transport and subject to the **20MB** ceiling even though no bytes are inlined by this app. That is why the PDF preflight gate is 18MB — **do not raise it to 80MB.** Switching OCR to URL-in-text would lift the ceiling but was measured at 11× the cost ($0.0238 vs $0.0021) for byte-identical results. Also: 5-min request timeout; 1M context; 32k output tokens; 50 rps.
+- **Don't re-upload for text work.** Extract goes text-in, chunked. Import `LIMITS.maxInlineTextBytesPerFile` (250,000) from the SDK rather than hardcoding it.
+- **Never cap `maxTokens` defensively.** Output is billed per token *emitted*, so a cap can never save money — it can only lose a completed response and make you pay twice. The API ceiling is 32,000. The only justified cap is where a short output is the actual spec (e.g. a title).
+- **Keep extraction as ONE merged schema.** `extractionSchema.ts` compiles all suggested extractions into a single call. A "one call per field" refactor would multiply the per-document bill by the field count.
+- **Non-streaming only.** Streaming hardcodes `vcache: false` (`dist/index.js:247`), so a stream can never report a cache hit. Usage is *preserved when present* but is absent in practice because the SDK never sets `stream_options.include_usage` — don't "fix" this by patching the accumulator.
+- **`vcache` invalidation is undocumented.** Several comments bank on an unchanged text-in re-run hitting cache. The docs say only "the same file or a very similar prompt" — no key composition, no TTL. It is a reasonable bet, not a guarantee. Log the hit rate rather than assuming it.
+
+## Cost shape (measured, 12-page born-digital English PDF)
+
+Scan $0.0021 → Analyze $0.0308 → Rename $0.0062 → Extract $0.0271 = **$0.066/doc**.
+Analyze + Extract are **88% of the bill and send substantially the same 17–18k input tokens**. That is where cost work belongs; deleting lines of Interfaze glue saves $0.00. Each *additional* extraction template re-sends the full document at +$0.027.

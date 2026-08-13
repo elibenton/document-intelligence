@@ -29,13 +29,9 @@ export const EMBEDDING_DIMENSIONS = 1536;
 const MAX_EMBED_CHARS = 8_000;
 // Per-request embedding batch (batchEmbedContents itself allows up to 100).
 const BATCH_SIZE = 8;
-// Paced BETWEEN API calls only — never while merely scanning already-embedded
-// pages, or the backfill would spend its whole 10-minute action budget asleep.
+// Paced BETWEEN API calls only, never while merely scanning.
 const BATCH_PACING_MS = 1_000;
 const RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
-// Rows scanned per pagination round when hunting for un-embedded pages.
-// Larger than BATCH_SIZE so a mostly-embedded table is walked in few queries.
-const SCAN_PAGE_SIZE = 100;
 
 export function embeddingsApiKey(): string | undefined {
   return process.env.GEMINI_API_KEY || undefined;
@@ -203,24 +199,6 @@ export const pagesNeedingEmbedding = internalQuery({
   },
 });
 
-/** Cursor-paginated scan for the backfill (each page read exactly once). */
-export const pagesForBackfill = internalQuery({
-  args: { cursor: v.union(v.string(), v.null()), numItems: v.number() },
-  handler: async (ctx, args) => {
-    const result = await ctx.db.query("pages").paginate({
-      cursor: args.cursor,
-      numItems: args.numItems,
-    });
-    return {
-      entries: result.page
-        .filter((p) => !p.embedding && (p.text).trim())
-        .map((p) => ({ _id: p._id, text: p.text })),
-      continueCursor: result.continueCursor,
-      isDone: result.isDone,
-    };
-  },
-});
-
 export const storePageEmbeddings = internalMutation({
   args: {
     entries: v.array(
@@ -270,58 +248,6 @@ export const embedDocument = internalAction({
       if (pages.length < BATCH_SIZE) break;
       await new Promise((r) => setTimeout(r, BATCH_PACING_MS));
     }
-  },
-});
-
-/**
- * Backfill embeddings for all existing documents' pages. Safe to re-run;
- * only touches pages without an embedding. Returns a summary string.
- */
-export const backfill = action({
-  args: {},
-  handler: async (ctx): Promise<string> => {
-    const apiKey = embeddingsApiKey();
-    if (!apiKey) {
-      await healthReporter(ctx)({
-        provider: "google",
-        status: "not_configured",
-        message: "GEMINI_API_KEY is not set on this Convex deployment.",
-      });
-      return "GEMINI_API_KEY is not set — skipping embedding backfill. Set it with `npx convex env set GEMINI_API_KEY ...` and re-run.";
-    }
-    let embedded = 0;
-    let cursor: string | null = null;
-    for (;;) {
-      const batch: {
-        entries: Array<{ _id: Id<"pages">; text: string }>;
-        continueCursor: string;
-        isDone: boolean;
-      } = await ctx.runQuery(internal.embeddings.pagesForBackfill, {
-        cursor,
-        numItems: SCAN_PAGE_SIZE,
-      });
-      // Embed the un-embedded rows this scan turned up, BATCH_SIZE at a time.
-      for (let i = 0; i < batch.entries.length; i += BATCH_SIZE) {
-        const group = batch.entries.slice(i, i + BATCH_SIZE);
-        if (embedded > 0) {
-          await new Promise((r) => setTimeout(r, BATCH_PACING_MS));
-        }
-        const vectors = await embedTexts(group.map((p) => p.text), apiKey, {
-          log: usageLogger(ctx),
-          health: healthReporter(ctx),
-        });
-        await ctx.runMutation(internal.embeddings.storePageEmbeddings, {
-          entries: group.map((p, j) => ({
-            pageId: p._id,
-            embedding: vectors[j],
-          })),
-        });
-        embedded += group.length;
-      }
-      if (batch.isDone) break;
-      cursor = batch.continueCursor;
-    }
-    return `Embedded ${embedded} pages.`;
   },
 });
 
