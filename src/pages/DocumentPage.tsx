@@ -116,9 +116,13 @@ export default function DocumentPage() {
   // kick off a render for them on first view (the mutation is a no-op if
   // images already exist or a render is already scheduled).
   const isCsv = document ? isCsvDocument(document) : false;
+  // Paged documents (PDF and DOCX) get server-rendered page images and the
+  // page-image reader; everything else falls back to the text view.
   const isPdfDocument =
     !isCsv &&
-    (document?.mediaType === "pdf" || document?.mimeType === "application/pdf");
+    (document?.mediaType === "pdf" ||
+      document?.mediaType === "docx" ||
+      document?.mimeType === "application/pdf");
   const isRecording = Boolean(
     document &&
       (document.mediaType === "audio" ||
@@ -266,6 +270,19 @@ export default function DocumentPage() {
     }
     return keys;
   }, [extractions]);
+
+  // Analyze's per-document extraction suggestions. Ones the user has already
+  // run are noise, so match on the same key the custom form derives and drop
+  // a pill once its results exist. Declared above the loading early-return —
+  // every hook on this page has to run on every render.
+  const suggestedExtractions = useMemo(
+    () =>
+      (document?.suggestedExtractions ?? []).filter(
+        (suggestion) =>
+          !extractedKeys.has(suggestion.label.toLowerCase().replace(/\s+/g, "_"))
+      ),
+    [document?.suggestedExtractions, extractedKeys]
+  );
 
   if (document === undefined) {
     return (
@@ -509,21 +526,17 @@ export default function DocumentPage() {
               </button>
             </div>
           )}
-          {isPdfDocument &&
-            (document.renderStatus === "queued" ||
-              document.renderStatus === "rendering") && (
-              <span className="text-xs text-muted-foreground tabular-nums">
-                Preparing pages {document.renderedPageCount ?? 0}/
-                {document.renderExpectedPages ?? document.pageCount ?? "…"}
-              </span>
-            )}
+          {/* Pages render in the browser, so text-geometry extraction never
+              blocks the viewer. It only affects selectable text and overlays,
+              which is what this reports. */}
           {isPdfDocument && document.renderStatus === "failed" && (
             <Button
               variant="outline"
               size="sm"
               onClick={() => void retryRender({ documentId })}
+              title={document.renderLastError ?? undefined}
             >
-              Retry pages
+              Retry text layer
             </Button>
           )}
           {hasBlocks && (
@@ -580,6 +593,7 @@ export default function DocumentPage() {
                 <ImagePdfViewer
                   ref={imageViewerRef}
                   documentId={documentId}
+                  pdfUrl={url}
                   pageImages={pageImages ?? []}
                   pages={pages ?? []}
                   totalPages={document.pageCount ?? pageImages?.length ?? 1}
@@ -619,6 +633,7 @@ export default function DocumentPage() {
                   <div className="-mx-4 -mt-4">
                     <TableOfContents
                       blocks={blocks ?? []}
+                      outline={document.tableOfContents}
                       currentPage={currentPage}
                       totalPages={document.pageCount ?? 0}
                       onNavigate={scrollToPage}
@@ -657,6 +672,35 @@ export default function DocumentPage() {
               {isParsed && (
                 <div className="flex flex-col gap-3">
                   <h3 className="text-sm font-medium">New Entity</h3>
+
+                  {/* Analyze's per-document suggestions. Unlike the presets
+                      below — which are the same four for every document —
+                      these come from what this document actually contains, so
+                      they load into the custom form for editing rather than
+                      firing a fixed schema. */}
+                  {suggestedExtractions.length > 0 && (
+                    <div className="flex flex-col gap-1.5">
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Suggested
+                      </h4>
+                      <div className="flex flex-wrap gap-1.5">
+                        {suggestedExtractions.map((suggestion) => (
+                          <button
+                            key={suggestion.label}
+                            title={suggestion.rationale || suggestion.prompt}
+                            onClick={() => {
+                              setCustomTitle(suggestion.label);
+                              setCustomDescription(suggestion.prompt);
+                            }}
+                            disabled={document.status === "extracting"}
+                            className="text-xs px-2 py-1 rounded-md border border-dashed bg-background hover:bg-accent text-foreground transition-colors"
+                          >
+                            {suggestion.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Preset buttons */}
                   {PRESET_ENTITIES.some((p) => !extractedKeys.has(p.key)) && (
@@ -1162,6 +1206,27 @@ function DocumentMetaEditor({ document }: { document: Doc<"documents"> }) {
           ))}
         </datalist>
       </div>
+
+      {/* The hierarchy behind the flat kind above: "writ of mandate" is also a
+          "legal document", and both are worth showing (and filtering on). */}
+      {(document.documentTypes ?? []).length > 0 && (
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-muted-foreground">
+            Document type
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {document.documentTypes!.map((type) => (
+              <span
+                key={type.path.join("/")}
+                title={`${Math.round(type.confidence * 100)}% confidence`}
+                className="text-xs px-2 py-0.5 rounded-md border bg-muted/40"
+              >
+                {type.path.join(" › ")}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-1">
         <label className="text-xs font-medium text-muted-foreground">

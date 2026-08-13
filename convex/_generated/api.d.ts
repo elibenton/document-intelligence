@@ -8,11 +8,14 @@
  * @module
  */
 
+import type * as analyzePrompt from "../analyzePrompt.js";
 import type * as apiLogs from "../apiLogs.js";
 import type * as blocks from "../blocks.js";
 import type * as clips from "../clips.js";
 import type * as detections from "../detections.js";
 import type * as documents from "../documents.js";
+import type * as docx from "../docx.js";
+import type * as docxRender from "../docxRender.js";
 import type * as embeddings from "../embeddings.js";
 import type * as entities from "../entities.js";
 import type * as entityResolution from "../entityResolution.js";
@@ -39,6 +42,7 @@ import type * as relationshipsNode from "../relationshipsNode.js";
 import type * as rename from "../rename.js";
 import type * as renameNode from "../renameNode.js";
 import type * as renderPages from "../renderPages.js";
+import type * as renderPool from "../renderPool.js";
 import type * as rendererConfig from "../rendererConfig.js";
 import type * as research from "../research.js";
 import type * as researchQueries from "../researchQueries.js";
@@ -58,11 +62,14 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  analyzePrompt: typeof analyzePrompt;
   apiLogs: typeof apiLogs;
   blocks: typeof blocks;
   clips: typeof clips;
   detections: typeof detections;
   documents: typeof documents;
+  docx: typeof docx;
+  docxRender: typeof docxRender;
   embeddings: typeof embeddings;
   entities: typeof entities;
   entityResolution: typeof entityResolution;
@@ -89,6 +96,7 @@ declare const fullApi: ApiFromModules<{
   rename: typeof rename;
   renameNode: typeof renameNode;
   renderPages: typeof renderPages;
+  renderPool: typeof renderPool;
   rendererConfig: typeof rendererConfig;
   research: typeof research;
   researchQueries: typeof researchQueries;
@@ -130,5 +138,6 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   processingWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"processingWorkpool">;
+  renderWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"renderWorkpool">;
   staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
 };

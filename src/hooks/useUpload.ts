@@ -21,6 +21,12 @@ export interface UploadItem {
     | "error";
   error?: string;
   detail?: string;
+  /**
+   * Problems that do not stop the upload but will degrade the result — a
+   * scanned page with no text layer, a document past the provider's page limit.
+   * Shown so a later empty scan is interpretable instead of mysterious.
+   */
+  warnings?: string[];
   documentId?: Id<"documents">;
 }
 
@@ -108,7 +114,10 @@ export function useUpload(projectId: Id<"projects">) {
             );
             return undefined;
           }
-          patchUpload(id, { detail: preflight.message });
+          patchUpload(id, {
+            detail: preflight.message,
+            warnings: preflight.warnings.map((warning) => warning.message),
+          });
         } else if (isAudioUpload(file)) {
           const preflight = await preflightAudio(file);
           if (!preflight.ok) {

@@ -39,11 +39,14 @@ export function DocStatusIndicator({
   status,
   mediaType,
   mimeType,
+  reviewSkippedAt,
   className,
 }: {
   status: string;
   mediaType?: string;
   mimeType?: string;
+  /** Set when the user dismissed this document from the review queue. */
+  reviewSkippedAt?: number;
   className?: string;
 }) {
   if (status === "completed") return null;
@@ -66,6 +69,25 @@ export function DocStatusIndicator({
       >
         <Spinner className="h-3 w-3" />
         {activeLabels[status]}
+      </span>
+    );
+  }
+
+  // Skipped review: in the library, but nothing was ever extracted from it.
+  // Muted and static rather than the pulsing amber of a live queue item —
+  // it's a standing fact about the document, not a task shouting for
+  // attention. The document page can still extract at any time.
+  if (status === "parsed" && reviewSkippedAt !== undefined) {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 text-[11px] text-muted-foreground shrink-0",
+          className
+        )}
+        title="Review skipped — nothing has been extracted from this document"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
+        Not extracted
       </span>
     );
   }

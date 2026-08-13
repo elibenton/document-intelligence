@@ -95,6 +95,13 @@ export const runFullPipeline = action({
       documentId: args.documentId,
       status: "uploaded",
     });
+    // This run produces its own Analyze, so a job row left behind by a
+    // standalone Analyze retry is stale — leaving it would let an old failure
+    // outrank the fresh result in the pipeline UI.
+    await ctx.runMutation(internal.processing.clearStageJob, {
+      documentId: args.documentId,
+      stage: "analyze",
+    });
     const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
     const workId = isRecording
       ? await processingPool.enqueueAction(
@@ -117,6 +124,43 @@ export const runFullPipeline = action({
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
       stage,
+      workId,
+    });
+    return null;
+  },
+});
+
+
+/**
+ * Re-run Analyze alone, optionally with a prompt the user edited.
+ *
+ * Deliberately does not touch Scan: the scan is what extractions, entities and
+ * geometry are built on, so it is re-run only when it failed, via
+ * runFullPipeline. Analyze is text-in and cheap, so it stays retryable forever.
+ */
+export const runAnalyze = action({
+  args: {
+    documentId: v.id("documents"),
+    promptOverride: v.optional(v.string()),
+    bypassCache: v.optional(v.boolean()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const shouldEnqueue: boolean = await ctx.runMutation(
+      internal.processing.createJob,
+      { documentId: args.documentId, stage: "analyze" }
+    );
+    if (!shouldEnqueue) return null;
+    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
+    const workId = await processingPool.enqueueAction(
+      ctx,
+      internal.processingNode.runAnalyze,
+      args,
+      processingEnqueueOptions(paused)
+    );
+    await ctx.runMutation(internal.processing.attachWorkId, {
+      documentId: args.documentId,
+      stage: "analyze",
       workId,
     });
     return null;
@@ -451,6 +495,56 @@ async function failDocument(
     }
   }
 }
+
+
+/**
+ * Fail one stage without failing the document.
+ *
+ * A stage that runs after the scan (Analyze, on retry) can fail without
+ * costing the user anything they already have — the text is stored and the
+ * document is still searchable — so the failure belongs on the job row, not on
+ * the document banner.
+ */
+/** Drop a stage's job row, for stages a newer run supersedes. */
+export const clearStageJob = internalMutation({
+  args: { documentId: v.id("documents"), stage: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db
+      .query("processingJobs")
+      .withIndex("by_document", (q) =>
+        q.eq("documentId", args.documentId).eq("stage", args.stage)
+      )
+      .first();
+    if (job && job.status !== "running") await ctx.db.delete(job._id);
+    return null;
+  },
+});
+
+
+export const markStageFailed = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    stage: v.string(),
+    errorMessage: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db
+      .query("processingJobs")
+      .withIndex("by_document", (q) =>
+        q.eq("documentId", args.documentId).eq("stage", args.stage)
+      )
+      .first();
+    if (job) {
+      await ctx.db.patch(job._id, {
+        status: "failed",
+        errorMessage: args.errorMessage,
+      });
+    }
+    return null;
+  },
+});
 
 
 export const markFailed = internalMutation({

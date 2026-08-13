@@ -1,11 +1,20 @@
 "use node";
 
 /**
- * Canonical PDF derivative renderer. Each page is opened once to produce a
- * server-side PNG (when missing) and native PDF text geometry (when present).
+ * Native PDF text geometry extractor.
+ *
+ * This used to also rasterize every page to a server-side PNG. Nothing on the
+ * server ever read those images — only the browser did — and producing them
+ * required @napi-rs/canvas in the Convex Node runtime, where the first
+ * page.render() alone spiked RSS by ~380MB and the action was repeatedly killed
+ * by the platform before its own catch block could run. Pages are now drawn
+ * client-side by pdf.js from the original file (see PdfPageCanvas), so this
+ * action keeps only the half with a server-side consumer: the text and word
+ * boxes that back search, citations, and the selectable text layer.
+ *
+ * That half is cheap — roughly 10ms per page, no canvas, no image storage.
  * Scanned pages naturally yield no native text, so their Interfaze OCR rows
- * remain canonical. Versioned commits make upgrades resumable without
- * re-rasterizing pages whose pixels already exist.
+ * remain canonical. Versioned commits keep upgrades resumable.
  */
 
 import { internalAction } from "./_generated/server";
@@ -14,6 +23,7 @@ import { internal } from "./_generated/api";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { RENDERER_VERSION } from "./rendererConfig";
+import { renderEnqueueOptions, renderPool } from "./renderPool";
 import type {
   PDFDocumentProxy,
   PDFPageProxy,
@@ -229,10 +239,6 @@ async function extractNativeBlocks(
   return { blocks, geometryScore };
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export const renderBatch = internalAction({
   args: {
     documentId: v.id("documents"),
@@ -245,6 +251,18 @@ export const renderBatch = internalAction({
         documentId: args.documentId,
       });
       if (!doc) return null;
+      // DOCX derivatives come from the lightweight docx renderer. Dispatch here
+      // so every scheduling path (upload, ensureRendered, retry, backfill)
+      // stays media-agnostic.
+      if (doc.mediaType === "docx") {
+        await renderPool.enqueueAction(
+          ctx,
+          internal.docxRender.renderDocx,
+          { documentId: args.documentId },
+          renderEnqueueOptions(args.documentId)
+        );
+        return null;
+      }
       if (doc.mimeType !== "application/pdf" && doc.mediaType !== "pdf") {
         return null;
       }
@@ -271,13 +289,6 @@ export const renderBatch = internalAction({
         rendererVersion: RENDERER_VERSION,
       });
 
-      const canvasFactory = pdf.canvasFactory as {
-        create: (width: number, height: number) => {
-          canvas: { toBuffer: (mime: "image/png") => Buffer };
-          context: CanvasRenderingContext2D;
-        };
-        destroy: (canvas: unknown) => void;
-      };
       const existingVersions = new Map(
         (
           await ctx.runQuery(internal.pageImages.renderedPageVersions, {
@@ -294,43 +305,22 @@ export const renderBatch = internalAction({
 
         const page = await pdf.getPage(pageIndex + 1);
         try {
+          // The geometry is expressed in the coordinate space the viewer
+          // scales overlays against, which is why the viewport is still built
+          // at TARGET_WIDTH even though no pixels are produced from it.
           const base = page.getViewport({ scale: 1 });
           const scale = Math.min(TARGET_WIDTH / base.width, MAX_SCALE);
           const viewport = page.getViewport({ scale });
-          const width = Math.ceil(viewport.width);
-          const height = Math.ceil(viewport.height);
           const [nativeGeometry, textVisibility] = await Promise.all([
             extractNativeBlocks(pdfjs, page, viewport, pageIndex),
             nativeTextVisibility(pdfjs, page),
           ]);
 
-          let storageId;
-          if (!existingVersions.has(pageIndex)) {
-            const canvasAndContext = canvasFactory.create(width, height);
-            let png: Buffer;
-            try {
-              const context = canvasAndContext.context;
-              context.fillStyle = "#ffffff";
-              context.fillRect(0, 0, width, height);
-              await page.render({
-                canvas: canvasAndContext.canvas as unknown as HTMLCanvasElement,
-                viewport,
-              }).promise;
-              png = canvasAndContext.canvas.toBuffer("image/png");
-            } finally {
-              canvasFactory.destroy(canvasAndContext);
-            }
-            storageId = await ctx.storage.store(
-              new Blob([new Uint8Array(png)], { type: "image/png" })
-            );
-          }
-
           await ctx.runMutation(internal.pageImages.commitPage, {
             documentId: args.documentId,
             pageNumber: pageIndex,
-            storageId,
-            width,
-            height,
+            width: Math.ceil(viewport.width),
+            height: Math.ceil(viewport.height),
             rendererVersion: RENDERER_VERSION,
             nativeBlocks: nativeGeometry.blocks,
             nativeTextVisibility: textVisibility,
@@ -342,10 +332,13 @@ export const renderBatch = internalAction({
       }
 
       if (pageIndex < pdf.numPages) {
-        await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
-          documentId: args.documentId,
-          startPage: pageIndex,
-        });
+        // Continue through the pool so a killed successor is retried too.
+        await renderPool.enqueueAction(
+          ctx,
+          internal.renderPages.renderBatch,
+          { documentId: args.documentId, startPage: pageIndex },
+          renderEnqueueOptions(args.documentId)
+        );
       } else {
         await ctx.runMutation(internal.pageImages.completeRender, {
           documentId: args.documentId,
@@ -355,15 +348,11 @@ export const renderBatch = internalAction({
       }
       return null;
     } catch (error) {
-      try {
-        await ctx.runMutation(internal.pageImages.failRender, {
-          documentId: args.documentId,
-          rendererVersion: RENDERER_VERSION,
-          error: errorMessage(error),
-        });
-      } catch {
-        // Keep the renderer's original error as the action failure.
-      }
+      // Do not write "failed" here. One attempt's death is not a verdict: the
+      // pool retries, and renderPool's onComplete records the terminal state
+      // once retries are exhausted. Writing it here would flash a failure the
+      // pool is about to recover from, disarm the watchdog, and burn an
+      // attempt on every retry.
       throw error;
     } finally {
       if (pdf) await pdf.destroy();

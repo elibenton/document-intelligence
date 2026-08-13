@@ -1,22 +1,42 @@
 import { useEffect, useState } from "react";
 import { useAction, useQuery } from "convex/react";
-import { Check, X } from "lucide-react";
+import { Check, RotateCw, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { Spinner } from "@/components/ui/spinner";
-import { Progress } from "@/components/ui/progress";
 import { isAudioVideo, parseStageLabel } from "./DocStatusIndicator";
 import { cn } from "@/lib/utils";
 import { isCsvDocument } from "@/lib/uploadTypes";
 import { languageName } from "@/lib/languages";
 import { Button } from "@/components/ui/button";
+import {
+  AnalyzeRetryDialog,
+  ExtractRetryDialog,
+  type TemplateRole,
+} from "./StageRetryDialog";
 
 type StepStatus = "pending" | "running" | "completed" | "failed" | "waiting";
+
+/**
+ * A step's retry affordance, revealed on hover/focus in place of its marker.
+ *
+ * Absent means there is deliberately nothing to reveal — that is how Scan says
+ * "a successful scan is not re-runnable" rather than showing a disabled button
+ * the user has to reason about.
+ */
+interface StepRetry {
+  label: string;
+  onActivate: () => void;
+}
 
 interface Step {
   key: string;
   label: string;
+  retry?: StepRetry;
   detail?: string;
+  /** Secondary line under a step — a derived side-effect, not a stage. */
+  note?: string;
+  noteStatus?: StepStatus;
   status: StepStatus;
   startedAt?: number;
   completedAt?: number;
@@ -106,11 +126,17 @@ export function ProcessingEstimate({
 }
 
 /**
- * Live pipeline stepper for a document: Upload → Understand → Extract.
- * Understand is one Interfaze completion: OCR and object detection run as
- * precontext before the structured document analysis is returned.
- * Driven by the document status plus per-stage processingJobs, so it updates
- * reactively as the backend advances.
+ * Live pipeline for a document, as a vertical list: Scan → Analyze → Extract.
+ *
+ * Those three are the product's vocabulary, so the UI names them even though
+ * the backend still produces Scan and Analyze from a single Interfaze
+ * completion — they will simply separate in time once the calls are split, with
+ * no change here.
+ *
+ * Upload is not a step. By the time this renders the upload has succeeded, so a
+ * permanently-checked box only added width. Translation is not a step either:
+ * it is a derived layer over the scan, so it reads as a note under Scan rather
+ * than a peer of it.
  */
 export function PipelineProgress({
   document,
@@ -121,7 +147,15 @@ export function PipelineProgress({
 }) {
   const documentId = document._id as Id<"documents">;
   const retryPipeline = useAction(api.processing.runFullPipeline);
+  const retryAnalyze = useAction(api.processing.runAnalyze);
+  const retryExtract = useAction(api.processing.runTemplateExtraction);
   const [retrying, setRetrying] = useState(false);
+  const [dialog, setDialog] = useState<"analyze" | "extract" | null>(null);
+  const analyzePrompt = useQuery(
+    api.analyzePrompt.forDocument,
+    dialog === "analyze" ? { documentId } : "skip"
+  );
+  const kinds = useQuery(api.kinds.list, dialog === "extract" ? {} : "skip");
   const jobs = useQuery(api.processingJobs.byDocument, { documentId });
   const estimate = useQuery(api.processingJobs.estimateByDocument, { documentId });
   const pages = useQuery(
@@ -133,8 +167,8 @@ export function PipelineProgress({
 
   const jobByStage = new Map((jobs ?? []).map((j) => [j.stage, j]));
   const parseJob = jobByStage.get("parse") ?? jobByStage.get("transcribe");
-  const translateJob = jobByStage.get("translate");
   const extractJob = jobByStage.get("extract");
+  const analyzeJob = jobByStage.get("analyze");
 
   const failed = document.status === "failed";
 
@@ -168,64 +202,124 @@ export function PipelineProgress({
     else if (parseDone && !failed) extractStatus = "waiting";
   }
 
+  const recording = isAudioVideo(document);
+  const csv = isCsvDocument(document);
+  const pageTotal = document.pageCount ?? pages?.length;
+
+  // Recordings never run the metadata pass (convex/processingNode.ts hands the
+  // transcript to the rename pass instead), so their analysis lands with the
+  // transcript rather than after it.
+  const analyzeDone = recording
+    ? parseDone
+    : Boolean(document.metadata || document.primaryKind);
+
+  const scanStatus: StepStatus =
+    parseJob?.status === "canceled" || (failed && parseStatus === "running")
+      ? "failed"
+      : parseStatus;
+
+  async function runScanRetry() {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await retryPipeline({ documentId });
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  const translationNote = (): string | undefined => {
+    switch (document.translationStatus) {
+      case "not_needed":
+        return `Already ${languageName(document.sourceLanguageCode)}`;
+      case "translating":
+        return `Translating to ${languageName(document.translationLanguageCode)}…`;
+      case "complete":
+        return `Translated to ${languageName(document.translationLanguageCode)}`;
+      case "failed":
+        return "Translation failed";
+      default:
+        return undefined;
+    }
+  };
+
   const steps: Step[] = [
     {
-      key: "upload",
-      label: "Upload",
-      status: "completed",
-    },
-    {
-      key: "understand",
-      label:
-        isAudioVideo(document) || isCsvDocument(document)
-          ? parseStageLabel(document)
-          : "Understand",
+      key: "scan",
+      label: recording ? parseStageLabel(document) : "Scan",
       detail:
-        parseStatus === "running" && isCsvDocument(document)
-          ? "Rows + columns + analysis"
-          : parseStatus === "running" && !isAudioVideo(document)
-            ? "OCR + objects + analysis"
-          : parseDone && (document.pageCount || pages?.length)
-            ? isCsvDocument(document)
-              ? "CSV parsed"
-              : `${document.pageCount ?? pages?.length} page${(document.pageCount ?? pages?.length) === 1 ? "" : "s"}`
-          : undefined,
-      status:
-        parseJob?.status === "canceled" ||
-        (failed && parseStatus === "running")
+        parseStatus === "running"
+          ? csv
+            ? "Reading rows and columns"
+            : recording
+              ? "Transcribing with speaker labels"
+              : "Reading text, geometry, and objects"
+          : parseDone && pageTotal
+            ? csv
+              ? "Parsed"
+              : `${pageTotal} page${pageTotal === 1 ? "" : "s"}, searchable`
+            : undefined,
+      note: translationNote(),
+      noteStatus:
+        document.translationStatus === "failed"
           ? "failed"
-          : parseStatus,
+          : document.translationStatus === "translating"
+            ? "running"
+            : "completed",
+      status: scanStatus,
+      // No re-scan of a good scan: extractions, entities and page geometry are
+      // all built on it, so silently replacing it would invalidate them.
+      retry:
+        scanStatus === "failed"
+          ? { label: "Retry scan", onActivate: () => void runScanRetry() }
+          : undefined,
       startedAt: parseJob?.startedAt,
       completedAt: parseJob?.completedAt,
     },
-    ...(document.translationStatus
-      ? [
-          {
-            key: "translate",
-            label: "Translate",
-            detail:
-              document.translationStatus === "not_needed"
-                ? "Already " + languageName(document.sourceLanguageCode)
-                : document.translationLanguageCode
-                  ? "To " + languageName(document.translationLanguageCode)
-                  : undefined,
-            status:
-              document.translationStatus === "not_needed" ||
-              document.translationStatus === "complete"
-                ? ("completed" as const)
-                : document.translationStatus === "failed"
-                  ? ("failed" as const)
-                  : document.translationStatus === "translating"
-                    ? ("running" as const)
-                    : ("pending" as const),
-            startedAt: translateJob?.startedAt,
-            completedAt: translateJob?.completedAt,
-          },
-        ]
-      : []),
+    {
+      key: "analyze",
+      label: "Analyze",
+      retry: parseDone
+        ? { label: "Re-run analyze…", onActivate: () => setDialog("analyze") }
+        : undefined,
+      startedAt: analyzeJob?.startedAt,
+      completedAt: analyzeJob?.completedAt,
+      detail: analyzeDone
+        ? [document.primaryKind, document.displayName ? "titled" : undefined]
+            .filter(Boolean)
+            .join(" · ") || "Understood"
+        : parseDone
+          ? "Identifying type and structure"
+          : undefined,
+      // A standalone Analyze re-run owns the step while it is in flight, so its
+      // job wins over the metadata-derived guess.
+      status:
+        analyzeJob?.status === "running" || analyzeJob?.status === "pending"
+          ? "running"
+          : analyzeJob?.status === "failed"
+            ? "failed"
+            : failed
+              ? parseStatus === "failed"
+                ? "pending"
+                : "failed"
+              : analyzeDone
+                ? "completed"
+                : parseDone
+                  ? "running"
+                  : "pending",
+    },
     {
       key: "extract",
       label: "Extract",
+      retry: parseDone
+        ? { label: "Re-run extract…", onActivate: () => setDialog("extract") }
+        : undefined,
+      detail:
+        extractStatus === "waiting"
+          ? "Confirm what to pull out"
+          : extractStatus === "running"
+            ? "Finding entities"
+            : undefined,
       status: extractStatus,
       startedAt: extractJob?.startedAt,
       completedAt: extractJob?.completedAt,
@@ -235,16 +329,6 @@ export function PipelineProgress({
   const anyRunning = steps.some((s) => s.status === "running");
   const anyActive = anyRunning || estimate?.status === "pending";
   const now = useNow(anyActive);
-  const estimatedProgress =
-    estimate?.status === "running" && estimate.startedAt
-      ? Math.min(
-          92,
-          Math.max(
-            5,
-            ((now - estimate.startedAt) / estimate.estimatedDurationMs) * 100
-          )
-        )
-      : undefined;
 
   const allDone = document.status === "completed" && !anyRunning;
   const errorMessage =
@@ -257,8 +341,10 @@ export function PipelineProgress({
 
   return (
     <div className={cn("flex flex-col gap-2", !compact && "rounded-lg border bg-card p-3")}>
+      {/* One status line, not four. The running step already carries a
+          spinner, so the header adds only the words a spinner cannot say. */}
       {!compact && (
-        <div className="flex items-center justify-between">
+        <div className="flex items-baseline justify-between gap-2">
           <h3 className="text-sm font-medium">
             {failed
               ? "Processing failed"
@@ -268,24 +354,22 @@ export function PipelineProgress({
                   ? "Queued"
                   : "Processing"}
           </h3>
-          {anyActive && <Spinner className="h-3.5 w-3.5 text-muted-foreground" />}
+          {estimate && (
+            <span
+              className="text-xs text-muted-foreground shrink-0"
+              title={
+                estimate.sampleSize > 0
+                  ? `Estimate uses the median of ${estimate.sampleSize} recent ${estimate.stage} run${estimate.sampleSize === 1 ? "" : "s"}.`
+                  : "Early estimate; this will improve as more jobs finish."
+              }
+            >
+              {estimateText(estimate, now)}
+            </span>
+          )}
         </div>
       )}
 
-      {estimate && (
-        <p
-          className="text-xs text-muted-foreground"
-          title={
-            estimate.sampleSize > 0
-              ? `Estimate uses the median of ${estimate.sampleSize} recent ${estimate.stage} run${estimate.sampleSize === 1 ? "" : "s"}.`
-              : "Early estimate; this will improve as more jobs finish."
-          }
-        >
-          {estimateText(estimate, now)}
-        </p>
-      )}
-
-      <ol className="flex items-start">
+      <ol className="flex flex-col">
         {steps.map((step, i) => {
           const isLast = i === steps.length - 1;
           const duration =
@@ -296,45 +380,68 @@ export function PipelineProgress({
                 : null;
 
           return (
-            <li key={step.key} className={cn("flex items-start", !isLast && "flex-1")}>
-              <div className="flex flex-col items-center gap-1 min-w-12">
-                <StepIcon status={step.status} />
-                <span
-                  className={cn(
-                    "text-[11px] leading-tight",
-                    step.status === "running"
-                      ? "font-medium text-foreground"
-                      : step.status === "completed"
-                        ? "text-foreground"
-                        : step.status === "failed"
-                          ? "text-red-600 dark:text-red-400"
-                          : "text-muted-foreground"
-                  )}
-                >
-                  {step.label}
-                </span>
-                {(step.detail || duration || step.status === "waiting") && (
-                  <span className="text-[10px] text-muted-foreground leading-none truncate max-w-20 text-center">
-                    {step.status === "waiting"
-                      ? "needs review"
-                      : (step.detail ?? duration)}
-                  </span>
+            <li key={step.key} className="group/step flex items-stretch gap-2.5">
+              {/* Rail: marker plus the connector down to the next step. The
+                  marker doubles as the retry control where one exists — same
+                  20px circle, swapped contents, so nothing reflows on hover. */}
+              <div className="flex flex-col items-center">
+                <StepMarker status={step.status} retry={step.retry} />
+                {!isLast && (
+                  <div
+                    className={cn(
+                      "w-px flex-1 my-1 rounded",
+                      step.status === "completed" ? "bg-primary/40" : "bg-border"
+                    )}
+                  />
                 )}
               </div>
-              {!isLast && (
-                <div
-                  className={cn(
-                    "h-px flex-1 mt-2.5 mx-1 rounded",
-                    step.status === "completed" ? "bg-primary/40" : "bg-border"
+
+              <div className={cn("min-w-0 flex-1", !isLast && "pb-3")}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span
+                    className={cn(
+                      "text-sm leading-5",
+                      step.status === "running"
+                        ? "font-medium text-foreground"
+                        : step.status === "completed"
+                          ? "text-foreground"
+                          : step.status === "failed"
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-muted-foreground"
+                    )}
+                  >
+                    {step.label}
+                  </span>
+                  {duration && (
+                    <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">
+                      {duration}
+                    </span>
                   )}
-                />
-              )}
+                </div>
+
+                {step.detail && (
+                  <p className="text-xs text-muted-foreground leading-snug truncate">
+                    {step.detail}
+                  </p>
+                )}
+
+                {step.note && (
+                  <p
+                    className={cn(
+                      "text-xs leading-snug truncate",
+                      step.noteStatus === "failed"
+                        ? "text-red-600 dark:text-red-400"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    {step.note}
+                  </p>
+                )}
+              </div>
             </li>
           );
         })}
       </ol>
-
-      {anyActive && <Progress className="h-1" value={estimatedProgress} />}
 
       {(failed || document.translationStatus === "failed") && errorMessage && (
         <p className="text-xs text-red-600 dark:text-red-400 leading-snug">{errorMessage}</p>
@@ -357,7 +464,98 @@ export function PipelineProgress({
           {retrying ? "Queueing…" : "Retry processing"}
         </Button>
       )}
+
+      {dialog === "analyze" && analyzePrompt !== undefined && (
+        <AnalyzeRetryDialog
+          defaultPrompt={analyzePrompt ?? ""}
+          onClose={() => setDialog(null)}
+          onRun={async (prompt) => {
+            await retryAnalyze({
+              documentId,
+              promptOverride: prompt,
+              // An edited prompt is its own cache key. An unedited one would
+              // just replay the cached answer, which is not what the user
+              // pressing retry asked for — so force a fresh call.
+              bypassCache: prompt.trim() === (analyzePrompt ?? "").trim(),
+            });
+          }}
+        />
+      )}
+
+      {dialog === "extract" && kinds !== undefined && (
+        <ExtractRetryDialog
+          defaultRoles={extractDefaultRoles(document, kinds)}
+          onClose={() => setDialog(null)}
+          onRun={async (roles) => {
+            await retryExtract({ documentId, roles });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The template a retry starts from: what this document's analysis suggested,
+ * falling back to the saved template for its kind — the same precedence the
+ * review panel uses (ExtractionSetup.tsx).
+ */
+function extractDefaultRoles(
+  document: Doc<"documents">,
+  kinds: Doc<"documentKinds">[]
+): TemplateRole[] {
+  if (document.suggestedRoles && document.suggestedRoles.length > 0) {
+    return document.suggestedRoles.map((role) => ({ ...role }));
+  }
+  const template = kinds.find((k) => k.name === document.primaryKind)
+    ?.templateRoles;
+  return template ? template.map((r) => ({ ...r })) : [];
+}
+
+/**
+ * The rail marker, and — where the stage is re-runnable — the retry button.
+ *
+ * Both live in the same fixed 20px box and are cross-faded, so revealing the
+ * control on hover never moves the row. The button is always in the DOM and
+ * focusable, so keyboard and screen-reader users reach it the same way; only
+ * its opacity is conditional.
+ */
+function StepMarker({
+  status,
+  retry,
+}: {
+  status: StepStatus;
+  retry?: StepRetry;
+}) {
+  const [focused, setFocused] = useState(false);
+  if (!retry) return <StepIcon status={status} />;
+  return (
+    <span className="relative h-5 w-5 shrink-0">
+      <span
+        className={cn(
+          "absolute inset-0 transition-opacity group-hover/step:opacity-0",
+          focused && "opacity-0"
+        )}
+      >
+        <StepIcon status={status} />
+      </span>
+      <button
+        type="button"
+        aria-label={retry.label}
+        title={retry.label}
+        onClick={retry.onActivate}
+        onFocus={(e) => setFocused(e.currentTarget.matches(":focus-visible"))}
+        onBlur={() => setFocused(false)}
+        className={cn(
+          "absolute inset-0 flex h-5 w-5 items-center justify-center rounded-full",
+          "border-2 border-primary bg-background text-primary",
+          "opacity-0 transition-opacity group-hover/step:opacity-100 focus-visible:opacity-100",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+        )}
+      >
+        <RotateCw className="h-2.5 w-2.5" strokeWidth={3} />
+      </button>
+    </span>
   );
 }
 

@@ -14,6 +14,55 @@ export const list = query({
   },
 });
 
+/**
+ * The extraction review queue: documents that finished Analyze and are waiting
+ * for the user to confirm what to pull out of them.
+ *
+ * A document leaves the queue by being extracted (its status moves past
+ * "parsed") or by being explicitly skipped. It is deliberately not possible to
+ * leave silently — a skipped document stays flagged in the library as never
+ * extracted against.
+ *
+ * Oldest first: the queue is work to get through, not a feed.
+ */
+export const reviewQueue = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    return docs
+      .filter(
+        (doc) =>
+          doc.status === "parsed" &&
+          doc.archivedAt === undefined &&
+          doc.reviewSkippedAt === undefined
+      )
+      .sort((a, b) => a.uploadedAt - b.uploadedAt);
+  },
+});
+
+/** Dismiss a document from the review queue without extracting from it. */
+export const skipReview = mutation({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.documentId, { reviewSkippedAt: Date.now() });
+    return null;
+  },
+});
+
+/** Put a skipped document back in the queue — "extract this after all". */
+export const resumeReview = mutation({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.documentId, { reviewSkippedAt: undefined });
+    return null;
+  },
+});
+
 export const listArchived = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
@@ -163,6 +212,41 @@ export const updateIdentity = mutation({
     }
 
     await ctx.db.patch(args.id, patch);
+  },
+});
+
+/**
+ * Add kinds to a document without disturbing the ones it already has.
+ *
+ * `updateIdentity` replaces the whole set, which is right for the identity
+ * editor but wrong for tagging a selection: the documents in a selection rarely
+ * share a kind list, and replacing would flatten them all to the same one.
+ */
+export const addKinds = mutation({
+  args: { id: v.id("documents"), kinds: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.id);
+    if (!doc) return;
+
+    const existing = doc.kinds ?? (doc.primaryKind ? [doc.primaryKind] : []);
+    const added = args.kinds
+      .map((k) => k.trim().toLowerCase())
+      .filter(Boolean);
+    const kinds = [...new Set([...existing, ...added])].slice(0, MAX_KINDS);
+
+    await ctx.db.patch(args.id, {
+      kinds,
+      primaryKind: kinds[0],
+      kindSource: "human",
+    });
+
+    for (const name of added) {
+      await ctx.runMutation(internal.kinds.upsert, {
+        name,
+        source: "human",
+        templateRoles: [],
+      });
+    }
   },
 });
 

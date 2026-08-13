@@ -2,20 +2,29 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Link, useParams } from "react-router-dom";
 import {
+  Archive,
   ArrowLeft,
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
   Filter,
+  Plus,
   Search,
   Star,
+  Tag,
+  Trash2,
   X,
 } from "lucide-react";
+import { Popover } from "@base-ui/react/popover";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { DropZone } from "@/components/documents/DropZone";
+import { ReviewDialog } from "@/components/documents/ReviewDialog";
 import { DocStatusIndicator } from "@/components/documents/DocStatusIndicator";
 import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
+import { DocTypeIcon } from "@/components/documents/DocTypeIcon";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   MergeSuggestions,
   type MergeSuggestion,
@@ -44,6 +53,7 @@ const typeLabels: Record<string, string> = {
 
 const sourceTypeLabels: Record<string, string> = {
   pdf: "PDF",
+  docx: "Word",
   csv: "CSV",
   image: "Image",
   audio: "Audio",
@@ -61,6 +71,7 @@ function entityTypeKey(type: string): string {
 function sourceType(doc: Doc<"documents">): string {
   if (doc.mediaType) return doc.mediaType;
   if (doc.mimeType === "application/pdf") return "pdf";
+  if (doc.mimeType.includes("wordprocessingml")) return "docx";
   if (doc.mimeType.includes("csv")) return "csv";
   if (doc.mimeType.startsWith("image/")) return "image";
   if (doc.mimeType.startsWith("audio/")) return "audio";
@@ -231,6 +242,164 @@ function ViewToolbar({
   );
 }
 
+/**
+ * The bar that replaces the Sources filter/sort toolbar while rows are
+ * checked: what you can do to a selection, and nothing else.
+ */
+function SelectionToolbar({
+  selected,
+  onClear,
+}: {
+  selected: Id<"documents">[];
+  onClear: () => void;
+}) {
+  const setArchived = useMutation(api.documents.setArchived);
+  const addKinds = useMutation(api.documents.addKinds);
+  const remove = useMutation(api.documents.remove);
+  const allKinds = useQuery(api.kinds.list);
+
+  const [tagOpen, setTagOpen] = useState(false);
+  const [newTag, setNewTag] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Each document is its own mutation: `remove` cascades through pages,
+  // blocks, extractions, and stored files, so batching a selection into one
+  // transaction would risk blowing the write limits on a large pick.
+  async function run(action: (id: Id<"documents">) => Promise<unknown>) {
+    setBusy(true);
+    try {
+      for (const id of selected) await action(id);
+      onClear();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyTag(kind: string) {
+    const name = kind.trim().toLowerCase();
+    if (!name) return;
+    setTagOpen(false);
+    setNewTag("");
+    await run((id) => addKinds({ id, kinds: [name] }));
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <span className="mr-1 text-xs text-muted-foreground">
+        {selected.length} selected
+      </span>
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 gap-1.5 px-2 text-xs"
+        disabled={busy}
+        onClick={() =>
+          void run((id) => setArchived({ id, archived: true }))
+        }
+      >
+        <Archive className="h-3.5 w-3.5" />
+        Archive
+      </Button>
+
+      <Popover.Root open={tagOpen} onOpenChange={setTagOpen}>
+        <Popover.Trigger
+          disabled={busy}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+        >
+          <Tag className="h-3.5 w-3.5" />
+          Tag
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Positioner
+            side="bottom"
+            align="end"
+            sideOffset={6}
+            className="z-50"
+          >
+            <Popover.Popup className="w-56 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-1">
+                  <Input
+                    autoFocus
+                    value={newTag}
+                    placeholder="Add a type…"
+                    onChange={(e) => setNewTag(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void applyTag(newTag);
+                      }
+                    }}
+                    className="h-7 text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2"
+                    disabled={!newTag.trim()}
+                    onClick={() => void applyTag(newTag)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                {(allKinds ?? []).length > 0 && (
+                  <div className="flex max-h-40 flex-wrap gap-1 overflow-y-auto">
+                    {(allKinds ?? []).map((kind) => (
+                      <button
+                        key={kind.name}
+                        type="button"
+                        onClick={() => void applyTag(kind.name)}
+                        className="rounded-4xl border border-border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
+                      >
+                        {kind.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Popover.Popup>
+          </Popover.Positioner>
+        </Popover.Portal>
+      </Popover.Root>
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 gap-1.5 px-2 text-xs text-destructive hover:text-destructive"
+        disabled={busy}
+        onClick={() => {
+          const plural = selected.length === 1 ? "source" : "sources";
+          if (
+            !window.confirm(
+              `Delete ${selected.length} ${plural}? This also removes their pages, extractions, and files.`
+            )
+          ) {
+            return;
+          }
+          void run((id) => remove({ id }));
+        }}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Delete
+      </Button>
+
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label="Clear selection"
+        title="Clear selection"
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function domainOf(url: string): string {
   try {
     return new URL(url).hostname;
@@ -348,6 +517,28 @@ export default function HomePage() {
     projectId,
   });
 
+  // Which sources still owe a review decision. Clicking one of them in the
+  // list opens its review instead of the viewer — the queue lives in the
+  // Sources list now rather than in a panel of its own.
+  const reviewQueue = useQuery(api.documents.reviewQueue, { projectId });
+  const needsReview = useMemo(
+    () => new Set((reviewQueue ?? []).map((doc) => doc._id)),
+    [reviewQueue]
+  );
+  const [reviewingId, setReviewingId] = useState<Id<"documents"> | null>(null);
+  const reviewing =
+    (reviewQueue ?? []).find((doc) => doc._id === reviewingId) ?? null;
+
+  const [selected, setSelected] = useState<Id<"documents">[]>([]);
+  // The last row checked on its own — the anchor a shift-click extends from.
+  const selectionAnchor = useRef<number | null>(null);
+  const sourcesRef = useRef<HTMLDivElement>(null);
+
+  function clearSelection() {
+    selectionAnchor.current = null;
+    setSelected([]);
+  }
+
   const [sourceQuery, setSourceQuery] = useState("");
   const [sourceTypeFilter, setSourceTypeFilter] = useState("all");
   const [sourceSort, setSourceSort] = useState("newest");
@@ -389,6 +580,31 @@ export default function HomePage() {
       return b.uploadedAt - a.uploadedAt;
     });
   }, [documents, sourceQuery, sourceSort, sourceTypeFilter]);
+
+  // Drop anything that left the list — archived, deleted, or filtered out —
+  // so the toolbar never counts rows the user can no longer see.
+  useEffect(() => {
+    if (selected.length === 0) return;
+    const visible = new Set(visibleDocuments.map((doc) => doc._id));
+    if (selected.every((id) => visible.has(id))) return;
+    setSelected((current) => current.filter((id) => visible.has(id)));
+  }, [selected, visibleDocuments]);
+
+  // A click anywhere outside the Sources column drops the selection — the
+  // same way a file list does. The Tag popover is portalled to the body, so
+  // it's outside the column in the DOM and has to be excused explicitly.
+  useEffect(() => {
+    if (selected.length === 0) return;
+    function onPointerDown(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (sourcesRef.current?.contains(target)) return;
+      if (target.closest("[role='dialog']")) return;
+      clearSelection();
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [selected.length]);
 
   const entityTypeOptions = useMemo(() => {
     const available = new Map<string, string>();
@@ -470,38 +686,38 @@ export default function HomePage() {
     entityTypeFilter !== "all";
 
   return (
-    <div className="flex flex-col">
-      <header className="border-b px-6 py-4 flex items-start justify-between">
-        <div className="flex items-center gap-3 min-w-0">
-          <Link
-            to="/"
-            title="All projects"
-            className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
-          <div className="min-w-0">
-            <h1 className="text-xl font-bold truncate">
-              {project?.name ?? "…"}
-            </h1>
-            {/* The project's own description, falling back to the generic
-                pitch for projects that don't have one yet. */}
-            <p className="text-sm text-muted-foreground truncate">
-              {project?.description?.trim() ||
-                "Upload anything, extract entities, uncover connections."}
-            </p>
-          </div>
-        </div>
-      </header>
+    <div className="relative flex flex-col">
+      {/* Back to all projects — a quiet corner affordance, not a header bar. */}
+      <Link
+        to="/"
+        title="All projects"
+        aria-label="All projects"
+        className="absolute left-4 top-4 z-30 grid h-8 w-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <ArrowLeft className="h-4 w-4" />
+      </Link>
 
       <div className="flex-1">
         <div className="p-6">
+        {/* The project announces itself above the search box: name big,
+            description under it, both centered on the thing you came to do. */}
+        <div className="mx-auto mb-6 mt-10 max-w-2xl text-center">
+          <h1 className="text-4xl font-bold tracking-tight">
+            {project?.name ?? "…"}
+          </h1>
+          {/* The project's own description, falling back to the generic
+              pitch for projects that don't have one yet. */}
+          <p className="mt-2 text-base text-muted-foreground">
+            {project?.description?.trim() ||
+              "Upload anything, extract entities, uncover connections."}
+          </p>
+        </div>
+
         {/* Search — full-text + semantic + entity-graph, Interfaze-planned */}
-        <div className="mb-8 mt-2">
+        <div className="mb-8">
           <SearchBar projectId={projectId} />
         </div>
 
-        {/* Drop zone */}
         <div className="mb-8">
           <DropZone projectId={projectId} />
         </div>
@@ -509,10 +725,16 @@ export default function HomePage() {
         {/* Three-column grid: Sources (spans 2) | Entities */}
         <div className="grid grid-cols-3 gap-6">
           {/* Sources — documents, recordings, and web clips in one list */}
-          <div className="col-span-2">
+          <div className="col-span-2" ref={sourcesRef}>
             <div className="sticky top-0 z-20 mb-2 bg-background">
               <div className="flex items-center justify-between gap-3 border-b pb-2">
                 <h2 className="text-lg font-semibold">Sources</h2>
+                {selected.length > 0 ? (
+                  <SelectionToolbar
+                    selected={selected}
+                    onClear={clearSelection}
+                  />
+                ) : (
                 <ViewToolbar
                   query={sourceQuery}
                   onQueryChange={setSourceQuery}
@@ -545,6 +767,7 @@ export default function HomePage() {
                     ]}
                   />
                 </ViewToolbar>
+                )}
               </div>
             </div>
             {documents === undefined ? (
@@ -563,30 +786,94 @@ export default function HomePage() {
               </p>
             ) : (
               <div className="flex flex-col">
-                {visibleDocuments.map((doc) => {
+                {visibleDocuments.map((doc, index) => {
                   const { primary, original } = documentTitles(doc);
+                  const checked = selected.includes(doc._id);
                   return (
-                  // The row is a link, but the identity menu inside it is a
-                  // button — so the link is the title with a stretched hit
-                  // area (::after) and the menu sits above it on z-10, rather
-                  // than a button nested inside an anchor.
+                  // The row is a link, but the checkbox and identity menu
+                  // inside it are controls — so the link is the title with a
+                  // stretched hit area (::after) and the controls sit above it
+                  // on z-10, rather than buttons nested inside an anchor.
                   <div
                     key={doc._id}
-                    className="relative flex items-center justify-between py-1.5 px-1 -mx-1 rounded hover:bg-accent/50 transition-colors"
+                    className={cn(
+                      "group/row relative flex items-center justify-between py-1.5 px-1 -mx-1 rounded transition-colors hover:bg-accent/50",
+                      checked && "bg-accent/50"
+                    )}
                   >
                     <span className="flex items-start gap-1.5 min-w-0">
-                      <DocumentIdentityMenu
-                        document={doc}
-                        className="relative z-10 mt-0.5"
-                      />
+                      {/* The media-type icon doubles as the selection
+                          checkbox: it swaps when you hover the icon itself,
+                          and stays a checkbox for every row once a selection
+                          exists. */}
+                      <span className="group/check relative z-10 mt-0.5 grid h-5 w-5 shrink-0 place-items-center">
+                        <DocTypeIcon
+                          mediaType={doc.mediaType}
+                          mimeType={doc.mimeType}
+                          className={cn(
+                            "col-start-1 row-start-1 pointer-events-none transition-opacity",
+                            selected.length > 0
+                              ? "opacity-0"
+                              : "group-hover/check:opacity-0"
+                          )}
+                        />
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          aria-label={`Select ${primary}`}
+                          // Shift-click extends from the last row checked on
+                          // its own, the way a file list does. It's handled on
+                          // click, not change: only the click event carries
+                          // the modifier keys.
+                          onClick={(event) => {
+                            if (!event.shiftKey) return;
+                            const anchor = selectionAnchor.current;
+                            if (anchor === null) return;
+                            event.preventDefault();
+                            const [from, to] =
+                              anchor < index ? [anchor, index] : [index, anchor];
+                            const range = visibleDocuments
+                              .slice(from, to + 1)
+                              .map((d) => d._id);
+                            setSelected((current) => [
+                              ...new Set([...current, ...range]),
+                            ]);
+                          }}
+                          onChange={(event) => {
+                            selectionAnchor.current = index;
+                            setSelected((current) =>
+                              event.target.checked
+                                ? [...new Set([...current, doc._id])]
+                                : current.filter((id) => id !== doc._id)
+                            );
+                          }}
+                          className={cn(
+                            "col-start-1 row-start-1 h-3.5 w-3.5 cursor-pointer accent-primary transition-opacity",
+                            selected.length === 0 &&
+                              "opacity-0 group-hover/check:opacity-100 focus-visible:opacity-100"
+                          )}
+                        />
+                      </span>
                       <span className="flex flex-col min-w-0">
                         <span className="flex items-center gap-1.5 min-w-0">
-                          <Link
-                            to={`/documents/${doc._id}`}
-                            className="text-sm truncate after:absolute after:inset-0 after:content-['']"
-                          >
-                            {primary}
-                          </Link>
+                          {/* A source still awaiting a review decision opens
+                              its review; everything else opens the viewer. */}
+                          {needsReview.has(doc._id) ? (
+                            <button
+                              type="button"
+                              onClick={() => setReviewingId(doc._id)}
+                              className="text-sm truncate text-left after:absolute after:inset-0 after:content-['']"
+                            >
+                              {primary}
+                            </button>
+                          ) : (
+                            <Link
+                              to={`/documents/${doc._id}`}
+                              className="text-sm truncate after:absolute after:inset-0 after:content-['']"
+                            >
+                              {primary}
+                            </Link>
+                          )}
                           {doc.mediaType === "webScrape" && doc.sourceUrl && (
                             <span className="text-xs text-muted-foreground truncate shrink-0">
                               {domainOf(doc.sourceUrl)}
@@ -603,7 +890,19 @@ export default function HomePage() {
                       </span>
                     </span>
                     <span className="flex items-center gap-2 shrink-0 ml-3">
-                      <DocStatusIndicator status={doc.status} mediaType={doc.mediaType} mimeType={doc.mimeType} />
+                      {/* Renaming and typing a single document used to live on
+                          the icon; the icon is the checkbox now, so the ⋮
+                          moves here and appears on row hover. */}
+                      <DocumentIdentityMenu
+                        document={doc}
+                        className="relative z-10 opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100"
+                      />
+                      <DocStatusIndicator
+                        status={doc.status}
+                        mediaType={doc.mediaType}
+                        mimeType={doc.mimeType}
+                        reviewSkippedAt={doc.reviewSkippedAt}
+                      />
                       <span className="text-xs text-muted-foreground">
                         {new Date(doc.uploadedAt).toLocaleDateString()}
                       </span>
@@ -687,6 +986,13 @@ export default function HomePage() {
         </div>
         </div>
       </div>
+
+      {reviewing && (
+        <ReviewDialog
+          document={reviewing}
+          onClose={() => setReviewingId(null)}
+        />
+      )}
     </div>
   );
 }

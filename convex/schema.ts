@@ -56,6 +56,53 @@ export default defineSchema({
     tags: v.optional(v.array(v.string())),
     // Detailed metadata extractor output (JSON string), human-editable
     metadata: v.optional(v.string()),
+    // Nested table of contents from the Analyze pass. Stored flat with a
+    // depth so the tree is representable without a recursive validator;
+    // `level` is 1-based and monotonic-ish, `page` is 1-based to match what
+    // the viewer navigates by. Absent = Analyze hasn't run (or found no
+    // structure), in which case the Contents tab falls back to SectionHeader
+    // blocks from the scan.
+    // Broad-to-specific type paths from Analyze (["legal document",
+    // "writ of mandate"]). `kinds`/`primaryKind` stay the flat handle every
+    // existing consumer reads; this is the hierarchy behind them.
+    documentTypes: v.optional(
+      v.array(v.object({ path: v.array(v.string()), confidence: v.number() }))
+    ),
+    // Analyze's guess at where this file contains more than one document.
+    // Suggestions only — splitting is a user action and would need provenance
+    // (a parent document id on the pieces), which does not exist yet.
+    suggestedSplits: v.optional(
+      v.array(
+        v.object({
+          title: v.string(),
+          startPage: v.number(),
+          endPage: v.number(),
+          documentType: v.string(),
+          reason: v.string(),
+          confidence: v.number(),
+        })
+      )
+    ),
+    // Extraction pills for the review queue: label, the editable prompt behind
+    // it, and why this document warrants it.
+    suggestedExtractions: v.optional(
+      v.array(
+        v.object({
+          label: v.string(),
+          prompt: v.string(),
+          rationale: v.string(),
+        })
+      )
+    ),
+    tableOfContents: v.optional(
+      v.array(
+        v.object({
+          title: v.string(),
+          level: v.number(),
+          page: v.number(),
+        })
+      )
+    ),
     pageCount: v.optional(v.number()),
     status: v.string(), // "uploaded" | "parsing" | "parsed" | "extracting" | "completed" | "failed"
     errorMessage: v.optional(v.string()),
@@ -64,6 +111,11 @@ export default defineSchema({
     // FailureCode — currently "insufficient_credits" | "invalid_api_key" |
     // "rate_limited" | "timeout". Absent = uncategorized failure.
     errorCode: v.optional(v.string()),
+    // Set when the user dismisses the document from the extraction review
+    // queue without running anything. It leaves the queue but stays flagged in
+    // the library as never extracted against — skipping is allowed, silently
+    // forgetting is not.
+    reviewSkippedAt: v.optional(v.number()),
     // Set when the document is archived (hidden from the main list, kept
     // queryable). Cleared on restore. Absent = active.
     archivedAt: v.optional(v.number()),

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import {
   FileText,
+  FileType,
   Image,
   Mic,
   Film,
@@ -21,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner";
 // clipper rather than a file drop.
 const SUPPORTED_TYPES = [
   { icon: FileText, label: "PDFs" },
+  { icon: FileType, label: "Docs" },
   { icon: Table, label: "CSVs" },
   { icon: Image, label: "Images" },
   { icon: Mic, label: "Audio" },
@@ -84,7 +86,7 @@ export function DropZone({ projectId }: { projectId: Id<"projects"> }) {
           {isUploading ? "Uploading..." : "Drop files to analyze"}
         </p>
         <p className="text-sm text-muted-foreground mt-1">
-          Store and parse PDFs and CSVs, OCR images, transcribe recordings,
+          Store and parse PDFs, Word docs, and CSVs, OCR images, transcribe recordings,
           extract entities, and uncover connections.
         </p>
         <div className="flex flex-wrap justify-center gap-2 mt-4">
@@ -160,6 +162,15 @@ export function UploadRow({ item }: { item: UploadItem }) {
       {item.status !== "error" && item.detail && (
         <p className="text-xs text-muted-foreground">{item.detail}</p>
       )}
+      {item.status !== "error" &&
+        item.warnings?.map((warning) => (
+          <p
+            key={warning}
+            className="text-xs text-amber-700 dark:text-amber-500"
+          >
+            {warning}
+          </p>
+        ))}
     </div>
   );
 }

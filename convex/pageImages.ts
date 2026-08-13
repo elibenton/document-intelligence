@@ -7,6 +7,8 @@ import {
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
+import { renderEnqueueOptions, renderPool } from "./renderPool";
+import { vOnCompleteArgs } from "@convex-dev/workpool";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
@@ -31,6 +33,20 @@ const nativeBlockValidator = v.object({
 
 const GEOMETRY_BACKFILL_KEY = "page-text-geometry";
 const BACKFILL_BATCH_SIZE = 8;
+
+// A render action can be killed by the platform (container eviction, the
+// 10-minute action limit) without its catch block ever running, which leaves
+// renderStatus stuck on "rendering" with no renderLastError and no successor
+// scheduled — the viewer then shows "Preparing pages" forever.
+//
+// renderPool is the primary recovery: its recovery scan reads the platform
+// scheduler and retries work the action itself never got to report on. This
+// watchdog is the backstop underneath it, for the case the pool cannot see —
+// a document left "rendering" with no live work item at all. It only ever
+// reports; retrying belongs to the pool, so the two never form competing
+// ladders. Every commitPage refreshes renderScheduledAt as the heartbeat.
+const RENDER_STALE_AFTER_MS = 20 * 60 * 1000;
+const RENDER_WATCHDOG_DELAY_MS = 10 * 60 * 1000;
 
 /** Signed, versioned page derivatives ordered by PDF page number. */
 export const byDocument = query({
@@ -128,10 +144,67 @@ export const beginRender = internalMutation({
       renderLastError: undefined,
       renderCompletedAt: undefined,
       renderStartedAt: isNewAttempt ? Date.now() : doc.renderStartedAt,
+      renderScheduledAt: Date.now(),
       renderAttempts: isNewAttempt
         ? (doc.renderAttempts ?? 0) + 1
         : doc.renderAttempts,
     });
+    // One watchdog per attempt. Continuation batches inherit the live one,
+    // which re-arms itself for as long as pages keep committing.
+    if (isNewAttempt) {
+      await ctx.scheduler.runAfter(
+        RENDER_WATCHDOG_DELAY_MS,
+        internal.pageImages.failIfRenderStuck,
+        { documentId: args.documentId, rendererVersion: args.rendererVersion }
+      );
+    }
+    return null;
+  },
+});
+
+/**
+ * Dead-man's switch for the derivative renderer. A render that has not
+ * committed a page within the stale window is presumed dead: rendering is
+ * resumable, so retry it until the attempt budget is spent, then surface the
+ * stall as a real failure instead of an endless "Preparing pages".
+ */
+export const failIfRenderStuck = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    rendererVersion: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (!doc) return null;
+    if (doc.renderStatus !== "rendering" && doc.renderStatus !== "queued") {
+      return null;
+    }
+    if (doc.rendererVersion !== args.rendererVersion) return null;
+
+    const heartbeat = Math.max(
+      doc.renderScheduledAt ?? 0,
+      doc.renderStartedAt ?? 0
+    );
+    if (Date.now() - heartbeat < RENDER_STALE_AFTER_MS) {
+      await ctx.scheduler.runAfter(
+        RENDER_WATCHDOG_DELAY_MS,
+        internal.pageImages.failIfRenderStuck,
+        args
+      );
+      return null;
+    }
+
+    const rendered = doc.renderedPageCount ?? 0;
+    const expected = doc.renderExpectedPages ?? 0;
+    await markRenderFailed(
+      ctx,
+      args.documentId,
+      args.rendererVersion,
+      `Page rendering stalled at ${rendered}/${expected} pages — the render ` +
+        `action stopped making progress and the pool did not recover it. ` +
+        `Retry to resume from page ${rendered}.`
+    );
     return null;
   },
 });
@@ -168,19 +241,13 @@ export const commitPage = internalMutation({
       )
       .unique();
 
+    // Page images are legacy. Pages are drawn client-side by pdf.js now, so no
+    // new rasters are produced; existing rows are kept (and their dimensions
+    // refreshed) so documents rendered before the change still display from
+    // their stored PNGs until they are cleaned up.
     if (existingImage) {
       if (args.storageId) await ctx.storage.delete(args.storageId);
       await ctx.db.patch(existingImage._id, {
-        width: args.width,
-        height: args.height,
-        rendererVersion: args.rendererVersion,
-      });
-    } else {
-      if (!args.storageId) throw new Error("A new page derivative needs storage");
-      await ctx.db.insert("pageImages", {
-        documentId: args.documentId,
-        pageNumber: args.pageNumber,
-        storageId: args.storageId,
         width: args.width,
         height: args.height,
         rendererVersion: args.rendererVersion,
@@ -311,12 +378,15 @@ export const commitPage = internalMutation({
       await ctx.db.delete(duplicatePage._id);
     }
 
-    const currentVersionRows = await ctx.db
-      .query("pageImages")
+    // Progress is the number of pages whose geometry is at the current
+    // version. It used to count pageImages rows, which no longer exist for
+    // documents processed after the rasterizer was removed.
+    const geometryRows = await ctx.db
+      .query("pages")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
       .collect();
-    const renderedPageCount = currentVersionRows.filter(
-      (row) => row.rendererVersion === args.rendererVersion
+    const renderedPageCount = geometryRows.filter(
+      (row) => row.geometryVersion === args.rendererVersion
     ).length;
     await ctx.db.patch(args.documentId, {
       renderedPageCount,
@@ -346,6 +416,22 @@ export const completeRender = internalMutation({
   },
 });
 
+async function markRenderFailed(
+  ctx: MutationCtx,
+  documentId: Id<"documents">,
+  rendererVersion: number,
+  error: string
+) {
+  const doc = await ctx.db.get(documentId);
+  if (!doc || doc.rendererVersion !== rendererVersion) return;
+  if (doc.renderStatus === "complete") return;
+  await ctx.db.patch(documentId, {
+    renderStatus: "failed",
+    renderLastError: error.slice(0, 1000),
+    renderScheduledAt: undefined,
+  });
+}
+
 export const failRender = internalMutation({
   args: {
     documentId: v.id("documents"),
@@ -353,13 +439,42 @@ export const failRender = internalMutation({
     error: v.string(),
   },
   handler: async (ctx, args) => {
-    const doc = await ctx.db.get(args.documentId);
-    if (!doc || doc.rendererVersion !== args.rendererVersion) return null;
-    await ctx.db.patch(args.documentId, {
-      renderStatus: "failed",
-      renderLastError: args.error.slice(0, 1000),
-      renderScheduledAt: undefined,
-    });
+    await markRenderFailed(
+      ctx,
+      args.documentId,
+      args.rendererVersion,
+      args.error
+    );
+    return null;
+  },
+});
+
+/**
+ * The single writer of the terminal render state. The pool calls this once the
+ * work item is genuinely done — success, exhausted retries, or cancellation —
+ * so an individual attempt's death never shows the user a failure the pool is
+ * about to recover from.
+ */
+export const renderJobComplete = internalMutation({
+  args: vOnCompleteArgs(
+    v.object({
+      documentId: v.id("documents"),
+      rendererVersion: v.number(),
+    })
+  ),
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    if (args.result.kind === "success") return null;
+    const error =
+      args.result.kind === "canceled"
+        ? "Page rendering was canceled."
+        : `Page rendering failed after every retry: ${args.result.error}`;
+    await markRenderFailed(
+      ctx,
+      args.context.documentId,
+      args.context.rendererVersion,
+      error
+    );
     return null;
   },
 });
@@ -399,10 +514,12 @@ async function scheduleRender(
     renderLastError: undefined,
     renderScheduledAt: Date.now(),
   });
-  await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
-    documentId,
-    startPage: 0,
-  });
+  await renderPool.enqueueAction(
+    ctx,
+    internal.renderPages.renderBatch,
+    { documentId, startPage: 0 },
+    renderEnqueueOptions(documentId)
+  );
 }
 
 /** Progress for the archive-wide renderer/geometry upgrade. */
@@ -506,7 +623,10 @@ export const backfillGeometryBatch = internalMutation({
     let scheduled = 0;
     const now = Date.now();
     for (const doc of page.page) {
-      const isPdf = doc.mimeType === "application/pdf" || doc.mediaType === "pdf";
+      const isPaged =
+        doc.mimeType === "application/pdf" ||
+        doc.mediaType === "pdf" ||
+        doc.mediaType === "docx";
       const isCurrent =
         doc.renderStatus === "complete" &&
         doc.rendererVersion === RENDERER_VERSION &&
@@ -516,7 +636,7 @@ export const backfillGeometryBatch = internalMutation({
         doc.rendererVersion === RENDERER_VERSION &&
         doc.renderScheduledAt !== undefined &&
         now - doc.renderScheduledAt < 15 * 60 * 1000;
-      if (isPdf && !isCurrent && !isFreshlyInFlight) {
+      if (isPaged && !isCurrent && !isFreshlyInFlight) {
         await scheduleRender(ctx, doc._id);
         scheduled++;
       }
@@ -560,8 +680,11 @@ export const ensureRendered = mutation({
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
     if (!doc) return null;
-    const isPdf = doc.mimeType === "application/pdf" || doc.mediaType === "pdf";
-    if (!isPdf) return null;
+    const isPaged =
+      doc.mimeType === "application/pdf" ||
+      doc.mediaType === "pdf" ||
+      doc.mediaType === "docx";
+    if (!isPaged) return null;
 
     if (
       doc.renderStatus === "complete" &&
@@ -589,8 +712,13 @@ export const retryRender = mutation({
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
     if (!doc) return null;
-    const isPdf = doc.mimeType === "application/pdf" || doc.mediaType === "pdf";
-    if (!isPdf) return null;
+    const isPaged =
+      doc.mimeType === "application/pdf" ||
+      doc.mediaType === "pdf" ||
+      doc.mediaType === "docx";
+    if (!isPaged) return null;
+    // An explicit retry gets a fresh watchdog attempt budget.
+    await ctx.db.patch(args.documentId, { renderAttempts: 0 });
     await scheduleRender(ctx, args.documentId);
     return null;
   },

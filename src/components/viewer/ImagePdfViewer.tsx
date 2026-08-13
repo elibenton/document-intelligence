@@ -20,16 +20,27 @@ import {
   type TextBlock,
 } from "../../lib/pdfTextGeometry";
 import type { PageDims } from "./PersonHighlight";
+import { usePdfDocument } from "../../lib/pdfDocument";
+import { PdfPageCanvas } from "./PdfPageCanvas";
 
 /**
- * Viewer for PDFs that were pre-rendered to page images server-side
- * (convex/renderPages.ts). Each page is a plain <img> plus a transparent text
- * layer built from the OCR line boxes, so text stays selectable, searchable
+ * Paged PDF viewer: each page is a rendered surface plus a transparent text
+ * layer built from the stored line boxes, so text stays selectable, searchable
  * with the browser's own find, and highlightable by the block overlays.
  *
- * Nothing is parsed or rasterized in the browser, which is what makes this
- * reliable: no worker to mismatch, no canvas render to be cancelled mid-scroll,
- * and scanned documents behave exactly like born-digital ones.
+ * Pages are drawn in the browser by pdf.js from the original file. They used to
+ * be PNGs rasterized ahead of time by convex/renderPages.ts, which meant no
+ * page could be shown until a server job had finished the whole document — the
+ * source of the "Preparing pages" wait, and of documents that stranded when
+ * that job was killed. Those rasters were also ~2.1 MB per page against ~97 KB
+ * of source PDF, and nothing on the server ever read them.
+ *
+ * What that design was buying, and what this one must therefore handle: no
+ * worker to mismatch, and no render task to cancel mid-scroll. PdfPageCanvas
+ * owns the cancellation; the shared document cache owns the worker.
+ *
+ * Scanned pages are unaffected either way — their text layer comes from OCR
+ * blocks, not from the PDF.
  */
 
 /** Rendered width of a page in CSS pixels. The block overlays scale their OCR
@@ -148,6 +159,12 @@ export interface PageImage {
 
 interface ImagePdfViewerProps {
   documentId: Id<"documents">;
+  /**
+   * URL of the original PDF. When present the pages are drawn client-side by
+   * pdf.js and no server raster is needed; pageImages is only a fallback for
+   * documents rendered before the server rasterizer was removed.
+   */
+  pdfUrl?: string | null;
   pageImages: PageImage[];
   /** OCR page dimensions — the coordinate space the text layer scales from. */
   pages: PageDims[];
@@ -162,6 +179,7 @@ interface ImagePdfViewerProps {
 
 export function ImagePdfViewer({
   documentId,
+  pdfUrl,
   pageImages,
   pages,
   totalPages,
@@ -173,6 +191,7 @@ export function ImagePdfViewer({
 }: ImagePdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const { pdf, error: pdfError } = usePdfDocument(pdfUrl);
   const [nearPages, setNearPages] = useState<Set<number>>(new Set([1]));
   const [marqueeSelection, setMarqueeSelection] =
     useState<MarqueeSelection | null>(null);
@@ -196,11 +215,12 @@ export function ImagePdfViewer({
     return 11 / 8.5;
   }, [pageImages, pages]);
 
+  // Not smooth: pages below the proximity window mount their text layers as
+  // the animation crosses them, and the resulting reflow cancels the browser's
+  // smooth scroll partway. A jump from page 5 to page 9 simply never arrived —
+  // which read as "clicking the table of contents does nothing".
   const scrollToPage = useCallback((pageNumber: number) => {
-    pageRefs.current.get(pageNumber)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+    pageRefs.current.get(pageNumber)?.scrollIntoView({ block: "start" });
   }, []);
 
   useImperativeHandle(ref, () => ({ scrollToPage }), [scrollToPage]);
@@ -327,7 +347,16 @@ export function ImagePdfViewer({
                   transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
                 }}
               >
-                {image?.url && isNear ? (
+                {pdf && isNear ? (
+                  <PdfPageCanvas
+                    pdf={pdf}
+                    pageNumber={pageNumber}
+                    cssWidth={surfaceWidth}
+                    cssHeight={surfaceHeight}
+                  />
+                ) : image?.url && isNear ? (
+                  // Legacy path: documents rasterized before the renderer was
+                  // removed, and anything without a fetchable original.
                   <img
                     src={image.url}
                     alt={`Page ${pageNumber}`}
@@ -342,9 +371,9 @@ export function ImagePdfViewer({
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <span className="text-xs text-muted-foreground">
-                      {image?.url
-                        ? `Loading page ${pageNumber}…`
-                        : `Rendering page ${pageNumber}…`}
+                      {pdfError
+                        ? `Could not open the PDF: ${pdfError}`
+                        : `Loading page ${pageNumber}…`}
                     </span>
                   </div>
                 )}

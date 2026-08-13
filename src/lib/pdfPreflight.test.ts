@@ -1,0 +1,229 @@
+import { describe, expect, it } from "vitest";
+import {
+  classifyPage,
+  formatBytes,
+  hasPdfHeader,
+  isPdfUpload,
+  preflightPdf,
+  PDF_INTERFAZE_SAFE_BYTES,
+  type PageReadability,
+} from "./pdfPreflight";
+
+// ---------------------------------------------------------------------------
+// Fixture bytes
+// ---------------------------------------------------------------------------
+
+const latin1 = (text: string): Uint8Array =>
+  Uint8Array.from(text, (char) => char.charCodeAt(0) & 0xff);
+
+/** The opening bytes of a real PDF, enough for the header sniff. */
+const PDF_HEADER = latin1("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n1 0 obj\n");
+
+/** A Sharp copier writes trailing text on the header line; still a PDF. */
+const SHARP_HEADER = latin1("%PDF-1.4 Sharp Scanned ImagePDF\n%Sharp Non-Encryption\n");
+
+const file = (bytes: Uint8Array, name = "sample.pdf"): File =>
+  new File([bytes as BlobPart], name, { type: "application/pdf" });
+
+describe("hasPdfHeader", () => {
+  it("accepts a conventional header", () => {
+    expect(hasPdfHeader(PDF_HEADER)).toBe(true);
+  });
+
+  it("accepts the copier header that carries trailing text", () => {
+    expect(hasPdfHeader(SHARP_HEADER)).toBe(true);
+  });
+
+  it("accepts a header offset into the first block, as the spec allows", () => {
+    expect(hasPdfHeader(latin1("junk junk junk %PDF-1.5\n"))).toBe(true);
+  });
+
+  it("rejects bytes with no header at all", () => {
+    expect(hasPdfHeader(latin1("PK\x03\x04 this is a zip"))).toBe(false);
+  });
+});
+
+describe("isPdfUpload", () => {
+  it("matches on MIME type", () => {
+    expect(isPdfUpload(new File([], "x", { type: "application/pdf" }))).toBe(true);
+  });
+
+  it("matches on extension when the browser gives no type", () => {
+    expect(isPdfUpload(new File([], "scan.PDF", { type: "" }))).toBe(true);
+  });
+
+  it("does not match other documents", () => {
+    expect(isPdfUpload(new File([], "notes.docx", { type: "" }))).toBe(false);
+  });
+});
+
+describe("formatBytes", () => {
+  it("uses KB below a megabyte and never rounds to zero", () => {
+    expect(formatBytes(400)).toBe("1 KB");
+    expect(formatBytes(417_644)).toBe("418 KB");
+  });
+
+  it("uses one decimal place until ten megabytes", () => {
+    expect(formatBytes(2_120_000)).toBe("2.1 MB");
+    expect(formatBytes(21_000_000)).toBe("21 MB");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Page classification — the logic behind the "this scan will come back empty"
+// warning. Operator lists are synthesized so each case is unambiguous.
+// ---------------------------------------------------------------------------
+
+const OPS = {
+  setTextRenderingMode: 1,
+  showText: 2,
+  showSpacedText: 3,
+  nextLineShowText: 4,
+  nextLineSetSpacingShowText: 5,
+  paintImageXObject: 6,
+  paintImageMaskXObject: 7,
+  transform: 8,
+  save: 9,
+  restore: 10,
+};
+
+const PAGE_WIDTH = 612;
+const PAGE_HEIGHT = 792;
+
+function classify(
+  steps: [number, unknown[]?][],
+  width = PAGE_WIDTH,
+  height = PAGE_HEIGHT
+): PageReadability {
+  return classifyPage(
+    {
+      fnArray: steps.map(([op]) => op),
+      argsArray: steps.map(([, args]) => args ?? []),
+    },
+    OPS,
+    width,
+    height
+  );
+}
+
+/** A full-bleed image, drawn the way every rasterized page draws it. */
+const fullPageImage: [number, unknown[]?][] = [
+  [OPS.save],
+  [OPS.transform, [PAGE_WIDTH, 0, 0, PAGE_HEIGHT, 0, 0]],
+  [OPS.paintImageXObject, ["Im0"]],
+  [OPS.restore],
+];
+
+describe("classifyPage", () => {
+  it("calls painted text readable", () => {
+    expect(classify([[OPS.showText, [[{ unicode: "a" }]]]])).toBe("readable");
+  });
+
+  it("calls a page with no text at all image-only", () => {
+    expect(classify(fullPageImage)).toBe("image_only");
+  });
+
+  it("flags invisible text, which the provider discards", () => {
+    expect(
+      classify([
+        [OPS.setTextRenderingMode, [3]],
+        [OPS.showText, [[{ unicode: "a" }]]],
+      ])
+    ).toBe("hidden_text");
+  });
+
+  it("flags text sitting under a full-page image", () => {
+    expect(
+      classify([[OPS.showText, [[{ unicode: "a" }]]], ...fullPageImage])
+    ).toBe("covered_by_image");
+  });
+
+  it("leaves text alone when the image is small and clear of it", () => {
+    expect(
+      classify([
+        [OPS.showText, [[{ unicode: "a" }]]],
+        [OPS.save],
+        [OPS.transform, [160, 0, 0, 200, 72, 80]],
+        [OPS.paintImageXObject, ["Im0"]],
+        [OPS.restore],
+      ])
+    ).toBe("readable");
+  });
+
+  it("leaves text alone when the image covers only half the page", () => {
+    expect(
+      classify([
+        [OPS.showText, [[{ unicode: "a" }]]],
+        [OPS.save],
+        [OPS.transform, [PAGE_WIDTH, 0, 0, PAGE_HEIGHT / 2, 0, 0]],
+        [OPS.paintImageXObject, ["Im0"]],
+        [OPS.restore],
+      ])
+    ).toBe("readable");
+  });
+
+  it("restores the transform on Q, so a later small image is not misjudged", () => {
+    // Without a working graphics-state stack the full-page scale would leak out
+    // of the q/Q pair and make the thumbnail look page-sized.
+    expect(
+      classify([
+        [OPS.showText, [[{ unicode: "a" }]]],
+        ...fullPageImage.slice(0, 2),
+        [OPS.restore],
+        [OPS.save],
+        [OPS.transform, [40, 0, 0, 40, 10, 10]],
+        [OPS.paintImageXObject, ["Im0"]],
+        [OPS.restore],
+      ])
+    ).toBe("readable");
+  });
+
+  it("treats a stencil mask as an image", () => {
+    expect(
+      classify([
+        [OPS.save],
+        [OPS.transform, [PAGE_WIDTH, 0, 0, PAGE_HEIGHT, 0, 0]],
+        [OPS.paintImageMaskXObject, ["Im0"]],
+        [OPS.restore],
+      ])
+    ).toBe("image_only");
+  });
+
+  it("accumulates nested transforms rather than taking only the last one", () => {
+    expect(
+      classify([
+        [OPS.save],
+        [OPS.transform, [PAGE_WIDTH / 2, 0, 0, PAGE_HEIGHT / 2, 0, 0]],
+        [OPS.transform, [2, 0, 0, 2, 0, 0]],
+        [OPS.paintImageXObject, ["Im0"]],
+        [OPS.restore],
+      ])
+    ).toBe("image_only");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Byte-level rejections. These all resolve before pdf.js is loaded, so they run
+// anywhere.
+// ---------------------------------------------------------------------------
+
+describe("preflightPdf byte-level gates", () => {
+  it("rejects an empty file", async () => {
+    const result = await preflightPdf(file(new Uint8Array()));
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.code).toBe("empty");
+  });
+
+  it("rejects a file that is not a PDF despite its name", async () => {
+    const result = await preflightPdf(file(latin1("PK\x03\x04not a pdf at all")));
+    expect(result.ok === false && result.code).toBe("invalid_pdf");
+  });
+
+  it("rejects a file over the provider's transfer ceiling", async () => {
+    const oversize = new Uint8Array(PDF_INTERFAZE_SAFE_BYTES + 1);
+    oversize.set(PDF_HEADER);
+    const result = await preflightPdf(file(oversize));
+    expect(result.ok === false && result.code).toBe("provider_size_limit");
+    expect(result.ok === false && result.message).toContain("18 MB");
+  });
+});

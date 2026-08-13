@@ -13,12 +13,18 @@ import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import {
-  understandDocument,
+  ocrDocument,
+  analyzeDocumentText,
   extract,
   transcribe,
   failureCodeOf,
 } from "./interfaze";
 import type { OcrPageResult } from "./interfaze";
+import {
+  analyzeSystemPrompt,
+  buildAnalyzePrompt,
+  DOCUMENT_UNDERSTANDING_SCHEMA,
+} from "./analyzePrompt";
 import { usageLogger } from "./apiLogs";
 import type { Doc, Id } from "./_generated/dataModel";
 import Papa from "papaparse";
@@ -103,196 +109,6 @@ async function csvSearchPages(
   });
 }
 
-const DOCUMENT_UNDERSTANDING_SCHEMA = {
-  type: "object",
-  properties: {
-    pages: {
-      type: "array",
-      description:
-        "Every page in the uploaded document, in file order, with complete verbatim OCR text in the original language. Never translate, summarize, merge, or omit pages.",
-      items: {
-        type: "object",
-        properties: {
-          page_number: {
-            type: "integer",
-            description: "1-based position of the page in the uploaded file",
-          },
-          text: {
-            type: "string",
-            description: "Complete verbatim OCR text for this page",
-          },
-        },
-        required: ["page_number", "text"],
-      },
-    },
-    title: {
-      type: "string",
-      description: "Document title as written, or a concise descriptive title",
-    },
-    summary: {
-      type: "string",
-      description: "A factual 2-3 sentence summary of the complete document",
-    },
-    date: {
-      type: "string",
-      description: "Primary date of the document (ISO if possible), or Unknown",
-    },
-    author: {
-      type: "string",
-      description: "Author or creator if identifiable, or Unknown",
-    },
-    language: { type: "string", description: "Primary document language" },
-    source_language_code: {
-      type: "string",
-      description: "Primary document language as a lowercase ISO 639 code",
-    },
-    is_multilingual: {
-      type: "boolean",
-      description: "True when meaningful passages use more than one language",
-    },
-    primary_kind: {
-      type: "string",
-      description: "Concise lowercase semantic document kind",
-    },
-    tags: {
-      type: "array",
-      items: { type: "string" },
-      description: "3-6 concise lowercase topical tags",
-    },
-    suggested_roles: {
-      type: "array",
-      description: "Entity roles worth extracting from this document kind",
-      items: {
-        type: "object",
-        properties: {
-          role: { type: "string" },
-          question: { type: "string" },
-          entity_type: {
-            type: "string",
-            enum: ["person", "organization", "place", "other"],
-          },
-        },
-        required: ["role", "question", "entity_type"],
-      },
-    },
-    additional: {
-      type: "array",
-      description: "Other notable metadata as key/value pairs",
-      items: {
-        type: "object",
-        properties: { key: { type: "string" }, value: { type: "string" } },
-        required: ["key", "value"],
-      },
-    },
-    graphic_objects: {
-      type: "array",
-      description:
-        "Visually verified non-body-text objects, including signatures, redactions, stamps or seals, handwriting, photographs, logos, charts, and other graphics. Empty if none.",
-      items: {
-        type: "object",
-        properties: {
-          label: { type: "string" },
-          description: { type: "string" },
-          page_number: { type: "integer", description: "1-based page number" },
-          top_left_x: { type: "number" },
-          top_left_y: { type: "number" },
-          bottom_right_x: { type: "number" },
-          bottom_right_y: { type: "number" },
-          confidence: { type: "number", description: "0-1 confidence" },
-        },
-        required: [
-          "label",
-          "description",
-          "page_number",
-          "top_left_x",
-          "top_left_y",
-          "bottom_right_x",
-          "bottom_right_y",
-          "confidence",
-        ],
-      },
-    },
-  },
-  required: [
-    "pages",
-    "title",
-    "summary",
-    "date",
-    "author",
-    "language",
-    "source_language_code",
-    "is_multilingual",
-    "primary_kind",
-    "tags",
-    "suggested_roles",
-    "additional",
-    "graphic_objects",
-  ],
-};
-
-interface StructuredGraphicObject {
-  label?: string;
-  description?: string;
-  page_number?: number;
-  top_left_x?: number;
-  top_left_y?: number;
-  bottom_right_x?: number;
-  bottom_right_y?: number;
-  confidence?: number;
-}
-
-function structuredDetections(
-  content: string,
-  pages: Array<{ pageNumber: number; width?: number; height?: number }>
-) {
-  let parsed: { graphic_objects?: StructuredGraphicObject[] };
-  try {
-    parsed = JSON.parse(content) as { graphic_objects?: StructuredGraphicObject[] };
-  } catch {
-    return [];
-  }
-  const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-  return (parsed.graphic_objects ?? []).flatMap((object) => {
-    const pageNumber = Math.max(0, Math.round(object.page_number ?? 1) - 1);
-    const page = pages.find((candidate) => candidate.pageNumber === pageNumber);
-    const coordinates = [
-      object.top_left_x,
-      object.top_left_y,
-      object.bottom_right_x,
-      object.bottom_right_y,
-    ];
-    if (
-      !object.label?.trim() ||
-      coordinates.some((coordinate) => typeof coordinate !== "number")
-    ) {
-      return [];
-    }
-    const [rawLeft, rawTop, rawRight, rawBottom] = coordinates as number[];
-    const alreadyNormalized = coordinates.every(
-      (coordinate) => (coordinate ?? 0) >= 0 && (coordinate ?? 0) <= 1
-    );
-    if (!alreadyNormalized && (!page?.width || !page.height)) return [];
-    const left = alreadyNormalized ? rawLeft : rawLeft / page!.width!;
-    const top = alreadyNormalized ? rawTop : rawTop / page!.height!;
-    const right = alreadyNormalized ? rawRight : rawRight / page!.width!;
-    const bottom = alreadyNormalized ? rawBottom : rawBottom / page!.height!;
-    return [
-      {
-        pageNumber,
-        label: object.label.trim().toLowerCase().replace(/\s+/g, "_"),
-        description: (object.description ?? object.label).slice(0, 500),
-        confidence: clamp01(object.confidence ?? 0.5),
-        bbox: {
-          x: clamp01(Math.min(left, right)),
-          y: clamp01(Math.min(top, bottom)),
-          width: clamp01(Math.abs(right - left)),
-          height: clamp01(Math.abs(bottom - top)),
-        },
-      },
-    ];
-  });
-}
-
 
 async function armWatchdog(
   ctx: ActionCtx,
@@ -352,10 +168,35 @@ async function extractionSource(
   ctx: ActionCtx,
   document: Doc<"documents">
 ): Promise<string | { inlineText: string }> {
+  // Web clips keep their own markdown article — Interfaze does not reliably
+  // fetch a bare text URL, and the clip has no OCR pass behind it.
   if (document.textStorageId) {
     const blob = await ctx.storage.get(document.textStorageId);
     if (blob) return { inlineText: await blob.text() };
   }
+
+  // Everything else extracts from the text the scan already produced.
+  //
+  // This used to hand Interfaze the file URL, which re-ran the entire vision
+  // pipeline for every extraction: four extraction prompts against one document
+  // meant OCR'ing it four times, at roughly a hundred times the cost of reading
+  // the text we had already stored. Text in is also deterministic, so an
+  // unchanged re-run is eligible for the semantic cache.
+  const pages: { pageNumber: number; text: string }[] = await ctx.runQuery(
+    internal.pages.textByDocument,
+    { documentId: document._id }
+  );
+  const scanned = pages
+    .filter((page) => page.text.trim())
+    .map((page) => `--- Page ${page.pageNumber + 1} ---\n${page.text}`)
+    .join("\n\n");
+  if (scanned) return { inlineText: scanned };
+
+  // No scan yet. Falling back to the file keeps a pre-scan extraction working
+  // rather than failing outright, but it is the expensive path by definition.
+  console.warn(
+    `Extracting from the original file for ${document._id} — no scanned page text found`
+  );
   const url = await ctx.storage.getUrl(document.storageId);
   if (!url) throw new Error("File not found in storage");
   return url;
@@ -382,11 +223,11 @@ export const runDocumentUnderstanding = internalAction({
     const apiKey = process.env.INTERFAZE_API_KEY;
     if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
     const fileUrl = await requireFileUrl(ctx, document);
-    const csvPages = isCsvDocument(document)
-      ? await csvSearchPages(ctx, document)
-      : null;
+    const csv = isCsvDocument(document);
+    const csvPages = csv ? await csvSearchPages(ctx, document) : null;
     const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {});
     const kindNames = kinds.map((kind) => kind.name);
+    const log = usageLogger(ctx, { documentId: args.documentId });
 
     await ctx.runMutation(internal.processing.updateStatus, {
       documentId: args.documentId,
@@ -400,44 +241,42 @@ export const runDocumentUnderstanding = internalAction({
     await armWatchdog(ctx, args.documentId, "parse");
 
     try {
-      const result = await understandDocument(
-        fileUrl,
-        document.name,
-        apiKey,
-        {
-          log: usageLogger(ctx, { documentId: args.documentId }),
-          systemPrompt: isCsvDocument(document)
-            ? "You are a meticulous data-understanding system. Parse the complete CSV, preserve the meaning of its rows and columns, and use Unknown when metadata is uncertain."
-            : "You are a meticulous document-understanding system. Perform OCR and object detection over the complete document in one pass. Return complete verbatim page text in the original language plus only visually verified graphic objects. Be factual, never infer a visual object from nearby text, and use Unknown when metadata is uncertain.",
-          prompt: `${
-            isCsvDocument(document)
-              ? "Read and analyze the complete CSV dataset. Identify its columns, row semantics, subject, and notable structure. Return the requested metadata; pages and graphic_objects must be empty."
-              : "Read every page of the complete document once. Return each page's complete verbatim OCR text, the requested metadata, and every visually verified non-body-text object. Preserve Spanish and all other source languages exactly. Do not omit later pages."
-          }${
-            kindNames.length > 0
-              ? ` Existing document kinds: ${kindNames.join(", ")}. Use one when it fits; otherwise propose a concise new lowercase kind.`
-              : ""
-          }`,
-          responseSchema: {
-            name: "document_understanding",
-            schema: DOCUMENT_UNDERSTANDING_SCHEMA,
-          },
-          bypassCache: args.bypassCache,
-        }
-      );
+      // --- Scan -------------------------------------------------------------
+      // The dedicated OCR task, not a full model completion. The full model's
+      // OCR precontext is non-deterministic on the same file — repeat runs
+      // returned duplicate entries, a wrong entry count, and (in production)
+      // every page collapsed onto page 1. The task returns one clean result per
+      // document, every time, for ~1% of the cost. See docs/scan-precontext-plan.md.
+      const parsedPages =
+        csvPages ??
+        (
+          await ocrDocument(fileUrl, document.name, apiKey, {
+            log,
+            bypassCache: args.bypassCache,
+          })
+        ).pages;
 
-      const parsedPages = csvPages ?? result.pages;
       if (parsedPages.length === 0) {
         throw new Error(
-          "Interfaze returned neither OCR precontext nor structured page text"
+          "Interfaze returned no OCR text for this document — it may be an image-only scan the OCR pass could not read"
         );
       }
-      const detections = isCsvDocument(document)
-        ? []
-        : structuredDetections(result.content, parsedPages);
-      console.log(
-        `Document understanding returned ${parsedPages.length} parsed pages from ${csvPages ? "csv" : result.pageSource} and ${detections.length} stored visual objects`
-      );
+
+      // A page left blank by a successful OCR is a defect, not a blank page:
+      // it means pagination was misread and that page's text landed elsewhere.
+      const blankPages = parsedPages.filter((page) => !page.text.trim());
+      if (blankPages.length === parsedPages.length) {
+        throw new Error(
+          `OCR returned ${parsedPages.length} pages but no text on any of them`
+        );
+      }
+      if (blankPages.length > 0) {
+        console.warn(
+          `Scan produced ${blankPages.length}/${parsedPages.length} pages with no text ` +
+            `(pages ${blankPages.map((p) => p.pageNumber + 1).join(", ")}) — ` +
+            `possible pagination misread`
+        );
+      }
 
       await ctx.runMutation(internal.ingest.ingestParseResults, {
         documentId: args.documentId,
@@ -460,26 +299,9 @@ export const runDocumentUnderstanding = internalAction({
         ),
         pageCount: parsedPages.length,
       });
-      await ctx.runMutation(internal.metadata.saveMetadataResult, {
-        documentId: args.documentId,
-        raw: result.content,
-      });
-      const structured = JSON.parse(result.content) as {
-        source_language_code?: string;
-        is_multilingual?: boolean;
-      };
-      if (structured.source_language_code) {
-        await ctx.runMutation(internal.translations.setSourceLanguage, {
-          documentId: args.documentId,
-          sourceLanguageCode: structured.source_language_code,
-          sourceLanguageIsMixed: structured.is_multilingual,
-        });
-      }
-      await ctx.runMutation(internal.detections.saveDetections, {
-        documentId: args.documentId,
-        detections,
-      });
 
+      // Scan is done and the document is searchable. Everything below can fail
+      // without costing the user the text.
       await ctx.runMutation(internal.processing.updateJobStatus, {
         documentId: args.documentId,
         stage: "parse",
@@ -493,12 +315,154 @@ export const runDocumentUnderstanding = internalAction({
         status: "parsed",
       });
       await scheduleTranslation(ctx, args.documentId);
+
+      // --- Analyze ----------------------------------------------------------
+      // Text in, no file. Cheap, and an unchanged re-run hits the semantic
+      // cache, which is what makes Analyze independently re-runnable.
+      console.log(
+        `Scan stored ${parsedPages.length} pages and ` +
+          `${parsedPages.reduce((n, p) => n + p.blocks.length, 0)} blocks`
+      );
+
+      await analyzeAndStore(ctx, {
+        documentId: args.documentId,
+        pageTexts: parsedPages.map((page) => page.text),
+        apiKey,
+        csv,
+        kindNames,
+        log,
+        bypassCache: args.bypassCache,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await ctx.runMutation(internal.processing.markFailed, {
         documentId: args.documentId,
         errorMessage: stageMessage("Document understanding", error, message),
         errorCode: failureCodeOf(error),
+      });
+    }
+    return null;
+  },
+});
+
+/**
+ * Analyze: text in, structured metadata out. Shared by the upload pipeline and
+ * by the standalone retry action below, so a re-run sends exactly what the
+ * first run sent unless the user edited the prompt.
+ */
+async function analyzeAndStore(
+  ctx: ActionCtx,
+  options: {
+    documentId: Id<"documents">;
+    pageTexts: string[];
+    apiKey: string;
+    csv: boolean;
+    kindNames: string[];
+    log?: ReturnType<typeof usageLogger>;
+    bypassCache?: boolean;
+    promptOverride?: string;
+  }
+): Promise<void> {
+  const analysis = await analyzeDocumentText(options.pageTexts, options.apiKey, {
+    log: options.log,
+    bypassCache: options.bypassCache,
+    systemPrompt: analyzeSystemPrompt(options.csv),
+    prompt:
+      options.promptOverride?.trim() ||
+      buildAnalyzePrompt({ csv: options.csv, kindNames: options.kindNames }),
+    responseSchema: {
+      name: "document_analysis",
+      schema: DOCUMENT_UNDERSTANDING_SCHEMA,
+    },
+  });
+
+  await ctx.runMutation(internal.metadata.saveMetadataResult, {
+    documentId: options.documentId,
+    raw: analysis.content,
+  });
+  const structured = JSON.parse(analysis.content) as {
+    source_language_code?: string;
+    is_multilingual?: boolean;
+  };
+  if (structured.source_language_code) {
+    await ctx.runMutation(internal.translations.setSourceLanguage, {
+      documentId: options.documentId,
+      sourceLanguageCode: structured.source_language_code,
+      sourceLanguageIsMixed: structured.is_multilingual,
+    });
+  }
+}
+
+/**
+ * Analyze on its own, over the stored page text — no re-scan.
+ *
+ * Retrying Analyze must never re-read the original file: extractions, entities,
+ * and page geometry are all built on the stored scan, so replacing it behind
+ * the user's back would invalidate them. A failure here fails only the analyze
+ * job; the document keeps its scan and stays usable.
+ */
+export const runAnalyze = internalAction({
+  args: {
+    documentId: v.id("documents"),
+    promptOverride: v.optional(v.string()),
+    bypassCache: v.optional(v.boolean()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const document = await ctx.runQuery(api.documents.get, {
+      id: args.documentId,
+    });
+    if (!document) throw new Error("Document not found");
+
+    const apiKey = process.env.INTERFAZE_API_KEY;
+    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
+
+    await ctx.runMutation(internal.processing.updateJobStatus, {
+      documentId: args.documentId,
+      stage: "analyze",
+      status: "running",
+    });
+    await armWatchdog(ctx, args.documentId, "analyze");
+
+    try {
+      const pages: { pageNumber: number; text: string }[] = await ctx.runQuery(
+        internal.pages.textByDocument,
+        { documentId: args.documentId }
+      );
+      const pageTexts = pages
+        .sort((a, b) => a.pageNumber - b.pageNumber)
+        .map((page) => page.text);
+      if (pageTexts.length === 0 || pageTexts.every((text) => !text.trim())) {
+        throw new Error(
+          "No scanned text to analyze — run Scan before retrying Analyze"
+        );
+      }
+
+      const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {});
+      await analyzeAndStore(ctx, {
+        documentId: args.documentId,
+        pageTexts,
+        apiKey,
+        csv: isCsvDocument(document),
+        kindNames: kinds.map((kind) => kind.name),
+        log: usageLogger(ctx, { documentId: args.documentId }),
+        // An unchanged prompt would only hit the semantic cache, which is the
+        // whole reason the dialog invites an edit. Honor whatever it produced.
+        bypassCache: args.bypassCache,
+        promptOverride: args.promptOverride,
+      });
+
+      await ctx.runMutation(internal.processing.updateJobStatus, {
+        documentId: args.documentId,
+        stage: "analyze",
+        status: "completed",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await ctx.runMutation(internal.processing.markStageFailed, {
+        documentId: args.documentId,
+        stage: "analyze",
+        errorMessage: stageMessage("Analyze", e, msg),
       });
     }
     return null;

@@ -9,7 +9,9 @@
     "deploy": "npx @convex-dev/static-hosting deploy",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "bench": "tsx scripts/scan-bench.ts",
+    "bench:sample": "tsx scripts/make-sample-pdf.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
@@ -46,6 +48,7 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
     "tailwindcss": "^4.2.1",
+    "tsx": "^4.23.12",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.56.1",
     "vite": "^7.3.1",

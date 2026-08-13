@@ -5,6 +5,8 @@ import DocumentPage from "./pages/DocumentPage";
 import EntityPage from "./pages/EntityPage";
 import SearchPage from "./pages/SearchPage";
 import SettingsPage from "./pages/SettingsPage";
+// Prototype route, not linked from the UI — remove with the viewer decision.
+import ViewerPrototypePage from "./pages/ViewerPrototypePage";
 import { ProcessingBlockerBanner } from "./components/ProcessingBlockerBanner";
 import { ProcessingQueueBanner } from "./components/ProcessingQueueBanner";
 import { SiteFooter } from "./components/SiteFooter";
@@ -28,6 +30,7 @@ function App() {
           <Route path="/entity/:slug" element={<EntityPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/prototype/viewer/:id" element={<ViewerPrototypePage />} />
         </Routes>
       </div>
       {showFooter && <SiteFooter />}

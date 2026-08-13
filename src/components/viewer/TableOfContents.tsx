@@ -12,8 +12,21 @@ interface TocBlock {
   blockType: string;
 }
 
+/** One entry of the Analyze pass's outline (`documents.tableOfContents`). */
+interface OutlineEntry {
+  title: string;
+  level: number;
+  page: number;
+}
+
 interface TableOfContentsProps {
   blocks: TocBlock[];
+  /**
+   * Nested outline from Analyze. Preferred over SectionHeader blocks when
+   * present: it carries real depth, whereas block headers are flat and only
+   * indentable by hand.
+   */
+  outline?: OutlineEntry[];
   currentPage: number;
   totalPages: number;
   onNavigate: (page: number) => void;
@@ -31,6 +44,7 @@ interface SearchResult {
 
 export function TableOfContents({
   blocks,
+  outline,
   currentPage,
   totalPages,
   onNavigate,
@@ -46,13 +60,35 @@ export function TableOfContents({
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const headers = blocks
-    .filter((b) => b.blockType === "SectionHeader" && b.text.trim())
-    .map((b) => ({
-      id: b._id,
-      text: b.text.trim(),
-      pageNumber: b.pageNumber,
-    }));
+  // Analyze's outline wins when it exists — it read the whole document and
+  // knows a subsection from a chapter. SectionHeader blocks stay as the
+  // fallback for documents scanned before Analyze ran, or that have no
+  // structure worth outlining. `pageNumber` is 0-based throughout this
+  // component (blocks are); the outline stores 1-based pages, so convert once
+  // here and everything downstream keeps working unchanged.
+  const fromOutline = (outline ?? []).length > 0;
+  const headers = fromOutline
+    ? outline!.map((entry, index) => ({
+        id: `toc-${index}`,
+        text: entry.title,
+        pageNumber: entry.page - 1,
+        level: entry.level,
+      }))
+    : blocks
+        .filter((b) => b.blockType === "SectionHeader" && b.text.trim())
+        .map((b) => ({
+          id: b._id as string,
+          text: b.text.trim(),
+          pageNumber: b.pageNumber,
+          level: 1,
+        }));
+
+  /** Manual indent adjustments layer on top of the outline's own depth. */
+  const indentOf = useCallback(
+    (header: { id: string; level: number }) =>
+      indents[header.id] ?? header.level - 1,
+    [indents]
+  );
 
   const currentPage0 = currentPage - 1;
 
@@ -281,7 +317,7 @@ export function TableOfContents({
         <div className="flex flex-col">
           {headers.map((header, idx) => {
             const displayPage = header.pageNumber + 1;
-            const indent = indents[header.id] ?? 0;
+            const indent = indentOf(header);
             const matchCount = sectionCounts.get(header.id) ?? 0;
             const hasMatches = matchCount > 0;
             const isActive = idx === activeIdx;
@@ -420,6 +456,10 @@ export function TableOfContents({
               {currentPage}/{totalPages}
             </span>
           )}
+          {/* Editing rewrites block types, so it only applies to the
+              block-derived outline. Analyze's outline isn't backed by blocks;
+              re-running Analyze is how you change it. */}
+          {!fromOutline && (
           <button
             onClick={editing ? exitEdit : () => setEditing(true)}
             className={cn(
@@ -431,6 +471,7 @@ export function TableOfContents({
           >
             {editing ? "Done" : "Edit"}
           </button>
+          )}
         </div>
       </div>
 
@@ -470,7 +511,7 @@ export function TableOfContents({
         {headers.map((header, idx) => {
           const isActive = idx === activeIdx;
           const displayPage = header.pageNumber + 1;
-          const indent = indents[header.id] ?? 0;
+          const indent = indentOf(header);
           const isSelected = selected.has(header.id);
 
           return (
@@ -521,7 +562,10 @@ export function TableOfContents({
               <span
                 className={cn(
                   "flex-1 min-w-0 line-clamp-1",
-                  isActive && !editing && "line-clamp-2"
+                  isActive && !editing && "line-clamp-2",
+                  // Depth reads as hierarchy, not just indentation.
+                  header.level >= 3 && "text-xs text-muted-foreground",
+                  header.level === 1 && fromOutline && "font-medium"
                 )}
               >
                 {header.text}
@@ -553,7 +597,7 @@ export function TableOfContents({
                   <TocAction
                     title="Remove section"
                     variant="destructive"
-                    onClick={() => handleDemote(header.id)}
+                    onClick={() => handleDemote(header.id as Id<"blocks">)}
                   >
                     <path d="M3 3l8 8M11 3l-8 8" />
                   </TocAction>

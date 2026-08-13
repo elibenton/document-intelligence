@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
+import { renderEnqueueOptions, renderPool } from "./renderPool";
 
 // Interfaze accepts URLs in prompt text up to 80 MB. Keep headroom for its
 // fetch/redirect accounting and mirror the browser preflight's safe ceiling.
@@ -27,6 +28,15 @@ export function detectMediaType(mimeType: string, name = ""): string {
   if (mime === "application/pdf") return "pdf";
   if (mime === "text/csv" || mime === "application/csv" || ext === "csv") {
     return "csv";
+  }
+  if (
+    mime ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    ext === "docx"
+  ) {
+    // Interfaze reads .docx natively; page images come from convex/docxRender.
+    // Legacy binary .doc is a different format and stays unsupported.
+    return "docx";
   }
   if (mime === "text/html") return "webScrape";
   if (mime.startsWith("image/")) return "image";
@@ -73,7 +83,7 @@ export const createDocument = mutation({
         status: "failed",
         errorMessage: `Unsupported file type${
           args.mimeType ? ` (${args.mimeType})` : ""
-        } — upload a PDF, CSV, image, audio, or video file.`,
+        } — upload a PDF, DOCX, CSV, image, audio, or video file.`,
       });
       return documentId;
     }
@@ -113,7 +123,7 @@ export const createDocument = mutation({
     // Render page images independently for the viewer. Interfaze receives the
     // original whole PDF, so rendering is no longer on the analysis critical
     // path.
-    if (mediaType === "pdf") {
+    if (mediaType === "pdf" || mediaType === "docx") {
       await ctx.db.patch(documentId, {
         renderStatus: "queued",
         renderedPageCount: 0,
@@ -121,10 +131,12 @@ export const createDocument = mutation({
         renderAttempts: 0,
         renderScheduledAt: Date.now(),
       });
-      await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
-        documentId,
-        startPage: 0,
-      });
+      await renderPool.enqueueAction(
+        ctx,
+        internal.renderPages.renderBatch,
+        { documentId, startPage: 0 },
+        renderEnqueueOptions(documentId)
+      );
     }
 
     return documentId;

@@ -8,11 +8,16 @@
  */
 
 const ACCEPTED_MIME_PREFIXES = ["image/", "audio/", "video/"];
-const ACCEPTED_MIME_TYPES = ["application/pdf", "text/csv", "application/csv"];
+const ACCEPTED_MIME_TYPES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/csv",
+  "application/csv",
+];
 
 /** Extensions for the file picker's `accept` attribute. */
 export const ACCEPT_ATTR =
-  ".pdf,.csv,.png,.jpg,.jpeg,.webp,.gif,.tif,.tiff,.mp3,.m4a,.wav,.aac,.ogg,.flac,.mp4,.mov,.webm,.mkv";
+  ".pdf,.docx,.csv,.png,.jpg,.jpeg,.webp,.gif,.tif,.tiff,.mp3,.m4a,.wav,.aac,.ogg,.flac,.mp4,.mov,.webm,.mkv";
 
 /** Fallback for browsers/OSes that hand over an empty `file.type`. */
 const ACCEPTED_EXTENSIONS = new Set(
@@ -30,7 +35,7 @@ export function isSupportedUpload(file: File): boolean {
 
 /** Human-readable reason shown on the rejected upload row. */
 export const UNSUPPORTED_REASON =
-  "Unsupported file type — upload a PDF, CSV, image, audio, or video file. Web pages are captured with the browser clipper.";
+  "Unsupported file type — upload a PDF, DOCX, CSV, image, audio, or video file. Web pages are captured with the browser clipper.";
 
 export function isCsvDocument(doc: {
   mediaType?: string;

@@ -35,6 +35,7 @@ import type {
   ChatCompletionMessageParam,
   Precontext,
   ReasoningEffort,
+  TaskName,
 } from "interfaze";
 
 const INTERFAZE_MODEL = "interfaze-beta";
@@ -88,11 +89,14 @@ export interface ChatResult {
   precontext: Precontext[];
   /** True when Interfaze served this completion from its vcache. */
   vcache: boolean;
+  /** Output tokens billed — an empty `content` alongside a non-zero count is
+   *  a provider failure, not an empty document. */
+  completionTokens: number;
 }
 
 export interface DocumentUnderstandingResult extends ChatResult {
   pages: OcrPageResult[];
-  pageSource: "precontext" | "structured" | "none";
+  pageSource: "precontext" | "none";
 }
 
 export interface TranslationUnit {
@@ -157,7 +161,9 @@ export type FailureCode =
   | "insufficient_credits"
   | "invalid_api_key"
   | "rate_limited"
-  | "timeout";
+  | "timeout"
+  /** Provider billed for OCR output and returned an empty string. */
+  | "empty_ocr_response";
 
 /** Codes that no retry can clear — a human has to act before work resumes. */
 const TERMINAL_CODES: ReadonlySet<FailureCode> = new Set<FailureCode>([
@@ -285,13 +291,32 @@ export function fileUrlContent(
  * text file is not reliably fetched — inlining the (small) text is
  * deterministic. Capped to stay within prompt limits.
  */
-const MAX_INLINE_TEXT_CHARS = 200_000;
+// Interfaze caps a single inline text input at 250,000 bytes
+// (`LIMITS.maxInlineTextBytesPerFile`). Stay under it in *bytes*, not
+// characters — accented and non-Latin text runs two to three bytes per
+// character, so a character-based cap silently overshoots on exactly the
+// documents most likely to be long.
+const MAX_INLINE_TEXT_BYTES = 240_000;
 
 export function inlineTextContent(text: string): ChatCompletionContentPart {
-  const clipped =
-    text.length > MAX_INLINE_TEXT_CHARS
-      ? `${text.slice(0, MAX_INLINE_TEXT_CHARS)}\n\n[truncated]`
-      : text;
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(text);
+  let clipped = text;
+
+  if (bytes.byteLength > MAX_INLINE_TEXT_BYTES) {
+    // Decode a byte-truncated slice with the default (lenient) decoder so a
+    // split multi-byte character is dropped rather than corrupted.
+    clipped =
+      new TextDecoder().decode(bytes.slice(0, MAX_INLINE_TEXT_BYTES)) +
+      "\n\n[truncated]";
+    // Truncation is a silent correctness loss — an extraction simply will not
+    // see the tail of the document — so it must be visible in the logs.
+    console.warn(
+      `Inline text truncated to ${MAX_INLINE_TEXT_BYTES} bytes ` +
+        `(dropped ${bytes.byteLength - MAX_INLINE_TEXT_BYTES} bytes, ` +
+        `~${Math.round((1 - MAX_INLINE_TEXT_BYTES / bytes.byteLength) * 100)}% of the document)`
+    );
+  }
   return { type: "text", text: `Document content:\n\n${clipped}` };
 }
 
@@ -314,6 +339,11 @@ export async function chatCompletion(
     usage?: { log: UsageLogger; operation: string };
     /** Force a fresh provider run for an operator-requested retry. */
     bypassCache?: boolean;
+    /**
+     * Run a single built-in specialist instead of the whole model. Cannot be
+     * combined with `responseSchema` — the SDK throws on that pairing.
+     */
+    task?: TaskName;
   }
 ): Promise<ChatResult> {
   const startedAt = Date.now();
@@ -358,6 +388,7 @@ export async function chatCompletion(
   try {
     const res = await interfaze.chat.completions.create({
       messages,
+      ...(options.task ? { task: options.task } : {}),
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
       ...(options.reasoning
         ? { reasoning_effort: "high" as ReasoningEffort }
@@ -382,6 +413,7 @@ export async function chatCompletion(
       content: res.choices?.[0]?.message?.content ?? "",
       precontext: res.precontext ?? [],
       vcache: res.vcache,
+      completionTokens: res.usage?.completion_tokens ?? 0,
     };
   } catch (e) {
     const failure = classifyError(e);
@@ -577,15 +609,63 @@ function collectOcrResults(precontext: Precontext[]): OcrResult[] {
 }
 
 /**
+ * Fingerprint an OCR result by shape and content, cheaply.
+ *
+ * Only used to recognize *repeats* of the same result, so it does not need to
+ * be collision-proof — it needs to be identical for identical payloads and
+ * different for genuinely different pages. Section text lengths plus a short
+ * head of the first section separate real pages reliably.
+ */
+function ocrFingerprint(ocr: OcrResult): string {
+  const sections = ocr.sections ?? [];
+  return [
+    ocr.width,
+    ocr.height,
+    ocr.total_pages,
+    sections.length,
+    sections.map((s) => (s.text ?? "").length).join("."),
+    (sections[0]?.text ?? "").slice(0, 120),
+  ].join("|");
+}
+
+/**
+ * Drop repeated OCR results.
+ *
+ * A single completion can carry the *same* whole-document OCR result more than
+ * once (observed: two identical entries for a 3-page and a 12-page PDF). The
+ * per-page branch below reads each entry as one page, so leaving the repeats in
+ * merges every page's text onto page 0, duplicates it onto page 1, and leaves
+ * the rest blank — with page geometry scaled to the full stacked height. That
+ * shipped, and it scored 6.8% text fidelity against a document's own embedded
+ * text layer where the deduplicated path scores 96.5%.
+ */
+function dedupeOcrResults(ocrs: OcrResult[]): OcrResult[] {
+  if (ocrs.length < 2) return ocrs;
+  const seen = new Set<string>();
+  const unique: OcrResult[] = [];
+  for (const ocr of ocrs) {
+    const key = ocrFingerprint(ocr);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(ocr);
+  }
+  return unique;
+}
+
+/**
  * Normalize the OCR precontext into per-page groups.
  *
  * Whole PDFs arrive either as one OCR result per page, or as a single result
  * with one section per page. Section bounds are page-local. Rotated source
  * pages may be processed at an integer multiple along one axis, so each page
  * records the scale needed to return to its declared page dimensions.
+ *
+ * Pagination is inferred, not reported, so each branch is guarded: repeats are
+ * removed first, and the per-result branch is only trusted when the entry count
+ * actually matches the reported page count.
  */
 function ocrToPages(
-  ocrs: OcrResult[]
+  input: OcrResult[]
 ): {
   sections: OcrSection[];
   width?: number;
@@ -593,14 +673,16 @@ function ocrToPages(
   scaleX: number;
   scaleY: number;
 }[] {
+  const ocrs = dedupeOcrResults(input);
   if (ocrs.length === 0) return [];
   const total = ocrs.find((o) => typeof o.total_pages === "number")
     ?.total_pages;
 
-  if (ocrs.length > 1) {
-    const pageEntries =
-      total && ocrs.length > total ? ocrs.slice(0, total) : ocrs;
-    return pageEntries.map((o) => {
+  // One entry per page — but only when the count agrees with the document.
+  // A mismatch means these entries are not pages, and treating them as pages
+  // is what produced the duplication bug above.
+  if (ocrs.length > 1 && (total === undefined || ocrs.length === total)) {
+    return ocrs.map((o) => {
       const sections = o.sections ?? [];
       const extent = sections.reduce(
         (max, section) => {
@@ -622,7 +704,14 @@ function ocrToPages(
     });
   }
 
-  const only = ocrs[0];
+  // Distinct entries that do not line up with the page count are competing
+  // readings of the same document, not pages. Keep the most complete one
+  // rather than the first, so a partial repeat can never win.
+  const only = ocrs.reduce((best, candidate) =>
+    (candidate.sections ?? []).length > (best.sections ?? []).length
+      ? candidate
+      : best
+  );
   const sections = only.sections ?? [];
   if (total && total > 1 && sections.length === total) {
     const pageHeight =
@@ -671,9 +760,6 @@ function ocrToBlocks(ocrs: OcrResult[]): {
   const pageTexts: string[] = [];
 
   ocrToPages(ocrs).forEach((page, pageIndex) => {
-    pageTexts.push(
-      page.sections.map((s) => s.text ?? "").filter(Boolean).join("\n\n")
-    );
     if (typeof page.width === "number" && typeof page.height === "number") {
       pageDimensions.push({
         page: pageIndex,
@@ -682,10 +768,12 @@ function ocrToBlocks(ocrs: OcrResult[]): {
       });
     }
     let lineIndex = 0;
+    const lineTexts: string[] = [];
     for (const section of page.sections) {
       for (const line of section.lines ?? []) {
         const text = (line.text ?? "").trim();
         if (!text) continue;
+        lineTexts.push(text);
         const words = (line.words ?? [])
           .filter((w) => (w.text ?? "").trim())
           .map((w) => ({
@@ -704,6 +792,21 @@ function ocrToBlocks(ocrs: OcrResult[]): {
         });
       }
     }
+
+    // Page text is built from the very lines stored as blocks, so the two can
+    // never disagree. They used to be derived independently — page text from
+    // `section.text`, blocks from `section.lines` — and a real upload produced
+    // 442 populated blocks alongside twelve empty pages, leaving a document
+    // that rendered and highlighted but matched nothing in search.
+    //
+    // `section.text` is only a fallback for a section that reports text with no
+    // line geometry; joining lines is otherwise strictly better, because it is
+    // exactly what the reader sees highlighted.
+    const sectionText = page.sections
+      .map((s) => s.text ?? "")
+      .filter(Boolean)
+      .join("\n\n");
+    pageTexts.push(lineTexts.length > 0 ? lineTexts.join("\n") : sectionText);
   });
 
   return { blocks, pageDimensions, pageTexts };
@@ -737,60 +840,110 @@ export function ocrPrecontextToPages(
   }));
 }
 
-interface StructuredOcrPage {
-  page_number?: unknown;
-  text?: unknown;
+/**
+ * OCR a document with the dedicated `ocr` task.
+ *
+ * Measured against the full model completion on the same PDF, repeatedly:
+ *
+ *   task: "ocr"   12/12 pages, 0 blank, 96.5% word agreement with the
+ *                 document's own embedded text layer — every run, and
+ *                 identical across base64, file-URL, and URL-in-text.
+ *   full model    non-deterministic. One run returned the same whole-document
+ *                 OCR twice (10 blank pages, 6.8%); another returned 7 entries
+ *                 for a 12-page file (5 blank, 16.7%); production collapsed all
+ *                 12 pages onto page 1.
+ *
+ * The full model's *structured output* is fine — it is specifically the OCR
+ * precontext that is unreliable there — so analysis stays a completion and only
+ * page text moves here. It is also ~100x cheaper and ~3x faster.
+ */
+export async function ocrDocument(
+  fileUrl: string,
+  filename: string,
+  apiKey: string,
+  options?: { log?: UsageLogger; bypassCache?: boolean }
+): Promise<{ pages: OcrPageResult[]; precontext: Precontext[]; vcache: boolean }> {
+  const result = await chatCompletion(apiKey, {
+    task: "ocr",
+    content: [
+      { type: "text", text: "Extract all text and data." },
+      fileUrlContent(fileUrl, filename),
+    ],
+    bypassCache: options?.bypassCache,
+    usage: options?.log ? { log: options.log, operation: "ocr" } : undefined,
+  });
+
+  // Interfaze can bill a full OCR and return an empty string for it.
+  //
+  // Observed on a 17-page scanned order: `finish_reason: "stop"`, no refusal,
+  // no precontext, `content: ""` — and 8,790 completion tokens charged. It
+  // reproduces at every page count down to one page, survives cache bypass, and
+  // survives re-encoding the PDF, while the identical pages sent as images OCR
+  // perfectly. That is the provider dropping output it generated, and it must
+  // not be reported to the user as "this document has no text".
+  if (!result.content.trim() && result.completionTokens > 0) {
+    throw new InterfazeFailure(
+      `Interfaze billed ${result.completionTokens} tokens of OCR for this document and returned nothing. ` +
+        `This is a provider-side failure, not an empty document — the same pages read correctly as images.`,
+      { code: "empty_ocr_response" }
+    );
+  }
+
+  // A task returns its payload on message.content as `{ result }` rather than
+  // as precontext, so normalize it into the precontext shape everything
+  // downstream already understands.
+  let precontext: Precontext[] = [];
+  try {
+    const parsed = JSON.parse(result.content) as { result?: unknown };
+    const payload =
+      parsed && typeof parsed === "object" && "result" in parsed
+        ? parsed.result
+        : parsed;
+    if (payload && typeof payload === "object") {
+      precontext = [{ name: "ocr", result: payload }];
+    }
+  } catch {
+    // Leave precontext empty; the caller reports the failure in its own terms.
+  }
+
+  return {
+    pages: ocrPrecontextToPages(precontext),
+    precontext,
+    vcache: result.vcache,
+  };
 }
 
 /**
- * Fall back to the combined completion's required page text when Interfaze
- * omits OCR precontext. This intentionally creates one coarse block per page:
- * precontext remains the authoritative source for word-level geometry, while
- * structured text preserves reading, search, translation, and extraction.
+ * Analyze a document from its OCR text — no file, no vision.
+ *
+ * Text-in keeps this cheap and, because the input is a deterministic string,
+ * an unchanged re-run is eligible for Interfaze's semantic cache. That is what
+ * makes Analyze re-runnable without re-reading the document.
  */
-export function structuredContentToPages(content: string): OcrPageResult[] {
-  let parsed: { pages?: unknown };
-  try {
-    parsed = JSON.parse(content) as { pages?: unknown };
-  } catch {
-    return [];
+export async function analyzeDocumentText(
+  pageTexts: string[],
+  apiKey: string,
+  options: {
+    systemPrompt: string;
+    prompt: string;
+    responseSchema: { name: string; schema: Record<string, unknown> };
+    log?: UsageLogger;
+    bypassCache?: boolean;
   }
-  if (!Array.isArray(parsed.pages)) return [];
-
-  const pageText = new Map<number, string>();
-  for (const candidate of parsed.pages as StructuredOcrPage[]) {
-    const ordinal = candidate.page_number;
-    const text = typeof candidate.text === "string" ? candidate.text.trim() : "";
-    if (
-      typeof ordinal !== "number" ||
-      !Number.isInteger(ordinal) ||
-      ordinal < 1 ||
-      ordinal > 10_000 ||
-      !text
-    ) {
-      continue;
-    }
-    pageText.set(ordinal - 1, text);
-  }
-  if (pageText.size === 0) return [];
-
-  const pageCount = Math.max(...pageText.keys()) + 1;
-  return Array.from({ length: pageCount }, (_, pageNumber) => {
-    const text = pageText.get(pageNumber) ?? "";
-    return {
-      pageNumber,
-      text,
-      blocks: text
-        ? [
-            {
-              id: `p${pageNumber}_structured`,
-              block_type: "PageText",
-              text,
-              page: pageNumber,
-            },
-          ]
-        : [],
-    };
+): Promise<ChatResult> {
+  const document = pageTexts
+    .map((text, index) => `--- Page ${index + 1} ---\n${text}`)
+    .join("\n\n");
+  return chatCompletion(apiKey, {
+    systemPrompt: options.systemPrompt,
+    content: [
+      inlineTextContent(document),
+      { type: "text", text: options.prompt },
+    ],
+    responseSchema: options.responseSchema,
+    maxTokens: 8_192,
+    bypassCache: options.bypassCache,
+    usage: options.log ? { log: options.log, operation: "analyze" } : undefined,
   });
 }
 
@@ -825,19 +978,16 @@ export async function understandDocument(
       ? { log: options.log, operation: "document_understanding" }
       : undefined,
   });
-  const precontextPages = ocrPrecontextToPages(result.precontext);
-  const structuredPages = structuredContentToPages(result.content);
-  const pages =
-    precontextPages.length > 0 ? precontextPages : structuredPages;
+  // OCR precontext is the only source of page text. There used to be a
+  // fallback that read page text back out of the structured response, but it
+  // produced pages with one coarse block and no word geometry — which silently
+  // breaks highlighting, citations, and click-to-locate, the whole point of the
+  // scan. A scan with no OCR precontext is a failure, and says so.
+  const pages = ocrPrecontextToPages(result.precontext);
   return {
     ...result,
     pages,
-    pageSource:
-      precontextPages.length > 0
-        ? "precontext"
-        : structuredPages.length > 0
-          ? "structured"
-          : "none",
+    pageSource: pages.length > 0 ? "precontext" : "none",
   };
 }
 
