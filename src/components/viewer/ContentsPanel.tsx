@@ -20,6 +20,8 @@ interface ContentsPanelProps {
   onSearchChange: (query: string) => void;
   /** The query came from clicking an entity in the details panel. */
   isEntitySearch?: boolean;
+  /** A counter the page bumps on ⌘F/Ctrl+F; each bump focuses the search box. */
+  focusSignal?: number;
 }
 
 /**
@@ -36,6 +38,7 @@ export function ContentsPanel({
   searchQuery,
   onSearchChange,
   isEntitySearch,
+  focusSignal,
 }: ContentsPanelProps) {
   const headers = useMemo(
     () => buildTocHeaders(blocks, outline),
@@ -80,6 +83,7 @@ export function ContentsPanel({
         query={value}
         onQueryChange={setDraft}
         isEntitySearch={isEntitySearch}
+        focusSignal={focusSignal}
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         {searching ? (
@@ -113,12 +117,24 @@ function SearchBar({
   query,
   onQueryChange,
   isEntitySearch,
+  focusSignal,
 }: {
   query: string;
   onQueryChange: (query: string) => void;
   isEntitySearch?: boolean;
+  focusSignal?: number;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Selecting, not just focusing, so a second ⌘F types over the old term the
+  // way the browser's own find field does. A ⌘F that had to un-minimize the
+  // panel first arrives here as a mount with a non-zero signal, which autoFocus
+  // already covers — this effect is for the panel that was open all along.
+  useEffect(() => {
+    if (!focusSignal) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [focusSignal]);
 
   return (
     <div className="shrink-0 border-b px-3 py-2 pr-9">

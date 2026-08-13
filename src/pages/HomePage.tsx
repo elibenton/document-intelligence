@@ -5,7 +5,7 @@ import { Archive, ArrowLeft, Plus, Star, Tag, Trash2, X } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
-import { DropZone } from "@/components/documents/DropZone";
+import { AddFilesButton } from "@/components/documents/AddFilesButton";
 import { LibraryRow } from "@/components/documents/LibraryRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +31,7 @@ import {
   DEFAULT_SPLIT_RATIO,
   useProjectViews,
 } from "@/lib/views/useProjectViews";
+import { useUploads } from "@/hooks/uploadContext";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -313,7 +314,17 @@ export default function HomePage() {
   };
 
   const project = useQuery(api.projects.get, { id: projectId });
-  const documents = useQuery(api.documents.list, { projectId });
+  const allDocuments = useQuery(api.documents.list, { projectId });
+  // A file being ingested lives in the upload card, not here — it joins the
+  // library only once the pipeline has finished with it.
+  const { heldDocumentIds } = useUploads();
+  const documents = useMemo(
+    () =>
+      heldDocumentIds.size === 0
+        ? allDocuments
+        : allDocuments?.filter((doc) => !heldDocumentIds.has(doc._id)),
+    [allDocuments, heldDocumentIds]
+  );
   const entities = useQuery(api.entities.listAll, { projectId });
   const mergeSuggestions = useQuery(api.mergeSuggestions.listPending, {
     projectId,
@@ -517,10 +528,6 @@ export default function HomePage() {
             <SearchBar projectId={projectId} />
           </div>
 
-          <div className="mb-8">
-            <DropZone projectId={projectId} />
-          </div>
-
           <SplitPane
             ratio={views.splitRatio}
             defaultRatio={DEFAULT_SPLIT_RATIO}
@@ -536,19 +543,22 @@ export default function HomePage() {
                         onClear={clearSelection}
                       />
                     ) : (
-                      <ViewBar
-                        defs={DOCUMENT_PROPERTIES}
-                        config={views.library}
-                        onChange={views.setLibrary}
-                        rows={libraryRows}
-                        query={libraryQuery}
-                        onQueryChange={setLibraryQuery}
-                        onReset={() => {
-                          setLibraryQuery("");
-                          views.resetLibrary();
-                        }}
-                        isDefault={views.libraryIsDefault}
-                      />
+                      <div className="flex min-w-0 items-center gap-1">
+                        <AddFilesButton projectId={projectId} />
+                        <ViewBar
+                          defs={DOCUMENT_PROPERTIES}
+                          config={views.library}
+                          onChange={views.setLibrary}
+                          rows={libraryRows}
+                          query={libraryQuery}
+                          onQueryChange={setLibraryQuery}
+                          onReset={() => {
+                            setLibraryQuery("");
+                            views.resetLibrary();
+                          }}
+                          isDefault={views.libraryIsDefault}
+                        />
+                      </div>
                     )}
                   </div>
                 </div>
@@ -561,7 +571,8 @@ export default function HomePage() {
                   </div>
                 ) : documents.length === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">
-                    Your library is empty. Drop a file above to get started.
+                    Your library is empty. Drag files onto this window, paste
+                    them, or use Add files to get started.
                   </p>
                 ) : libraryResult.total === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">

@@ -4,8 +4,10 @@ import { AlertCircle, UploadCloud, X } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { useUpload } from "@/hooks/useUpload";
-import { UploadRow } from "@/components/documents/DropZone";
+import { useUploads, useProjectUploads } from "@/hooks/uploadContext";
+import { uploadWithConcurrency } from "@/lib/uploadQueue";
+import { UploadRow } from "@/components/documents/UploadRow";
+import { isSupportedUpload } from "@/lib/uploadTypes";
 
 function routeSegment(pathname: string, prefix: string): string | null {
   if (!pathname.startsWith(prefix)) return null;
@@ -77,27 +79,10 @@ async function filesFromDrop(dataTransfer: DataTransfer): Promise<File[]> {
   return nestedFiles.flat();
 }
 
-async function uploadWithConcurrency(
-  files: File[],
-  upload: (file: File) => Promise<Id<"documents"> | undefined>
-) {
-  let nextIndex = 0;
-  const workers = Array.from(
-    { length: Math.min(4, files.length) },
-    async () => {
-      while (nextIndex < files.length) {
-        const file = files[nextIndex++];
-        await upload(file);
-      }
-    }
-  );
-  await Promise.all(workers);
-}
-
 /**
- * Resolves the current project's identity from routes that sit beneath a
- * project. The project home is intentionally excluded because it already has
- * a visible DropZone.
+ * Resolves the current project's identity from any route that sits within a
+ * project, including the project home — there is no longer a dropzone parked
+ * at the top of the page, so this overlay is the only drop surface there too.
  */
 export function GlobalDropOverlay() {
   const location = useLocation();
@@ -107,6 +92,10 @@ export function GlobalDropOverlay() {
   const searchId =
     location.pathname === "/search" ? params.get("id") : null;
   const projectParam = params.get("project") as Id<"projects"> | null;
+  const projectRoute = routeSegment(
+    location.pathname,
+    "/p/"
+  ) as Id<"projects"> | null;
 
   const document = useQuery(
     api.documents.get,
@@ -121,14 +110,13 @@ export function GlobalDropOverlay() {
     entitySlug && !projectParam ? { slug: entitySlug } : "skip"
   );
 
-  const isProjectHome = /^\/p\/[^/]+\/?$/.test(location.pathname);
-  const projectId = isProjectHome
-    ? null
-    : (projectParam ??
-      document?.projectId ??
-      search?.projectId ??
-      entity?.projectId ??
-      null);
+  const projectId =
+    projectRoute ??
+    projectParam ??
+    document?.projectId ??
+    search?.projectId ??
+    entity?.projectId ??
+    null;
 
   return projectId ? (
     <ProjectDropOverlay key={projectId} projectId={projectId} />
@@ -140,7 +128,8 @@ function ProjectDropOverlay({
 }: {
   projectId: Id<"projects">;
 }) {
-  const { upload, uploads } = useUpload(projectId);
+  const { upload } = useUploads();
+  const uploads = useProjectUploads(projectId);
   const [isDragging, setIsDragging] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
@@ -181,7 +170,9 @@ function ProjectDropOverlay({
           if (files.length === 0) {
             throw new Error("No readable files were found.");
           }
-          return uploadWithConcurrency(files, upload);
+          return uploadWithConcurrency(files, (file) =>
+            upload(file, projectId)
+          );
         })
         .catch(() =>
           setDropError(
@@ -190,20 +181,38 @@ function ProjectDropOverlay({
         )
         .finally(() => setIsPreparing(false));
     };
+    // Ctrl/Cmd+V with files on the clipboard is a drop by another name — a
+    // screenshot, or files copied in Finder/Explorer. Clipboard payloads that
+    // carry no acceptable file (plain text, a copied cell range) fall through
+    // untouched, so ordinary pasting into inputs still works.
+    const onPaste = (event: ClipboardEvent) => {
+      const files = Array.from(event.clipboardData?.files ?? []).filter(
+        isSupportedUpload
+      );
+      if (files.length === 0) return;
+      event.preventDefault();
+      setDropError(null);
+      setIsPreparing(true);
+      void uploadWithConcurrency(files, (file) => upload(file, projectId))
+        .catch(() => setDropError("Those files couldn’t be read."))
+        .finally(() => setIsPreparing(false));
+    };
 
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("dragleave", onDragLeave);
     window.addEventListener("drop", onDrop);
+    window.addEventListener("paste", onPaste);
     window.addEventListener("blur", resetDrag);
     return () => {
       window.removeEventListener("dragenter", onDragEnter);
       window.removeEventListener("dragover", onDragOver);
       window.removeEventListener("dragleave", onDragLeave);
       window.removeEventListener("drop", onDrop);
+      window.removeEventListener("paste", onPaste);
       window.removeEventListener("blur", resetDrag);
     };
-  }, [upload]);
+  }, [upload, projectId]);
 
   return (
     <>

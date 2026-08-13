@@ -69,6 +69,10 @@ export default function DocumentPage() {
   const [showNewEntityForm, setShowNewEntityForm] = useState(false);
   const [researching, setResearching] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
+  // Bumped by ⌘F/Ctrl+F. Opens the contents panel if it was minimized and
+  // focuses its search box — the document's own find, in place of the
+  // browser's, which can only see the page that happens to be on screen.
+  const [findSignal, setFindSignal] = useState(0);
   const [languageView, setLanguageView] = useState<"translated" | "original">(
     "translated"
   );
@@ -170,6 +174,17 @@ export default function DocumentPage() {
     document?.mimeType.startsWith("audio/") ||
     document?.mimeType.startsWith("video/")
   );
+  useEffect(() => {
+    if (!showContentsTab) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "f" || e.altKey || !(e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      setFindSignal((n) => n + 1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showContentsTab]);
+
   useEffect(() => {
     if (isPdfDocument) {
       void ensureRendered({ documentId });
@@ -539,6 +554,7 @@ export default function DocumentPage() {
           leftLabel="Contents"
           sidebarLabel="Details"
           onViewerMetrics={handleViewerMetrics}
+          revealLeft={findSignal}
           left={
             showContentsTab ? (
               <div className={cn(FLOATING_SURFACE, "h-full overflow-hidden")}>
@@ -555,6 +571,7 @@ export default function DocumentPage() {
                   if (q !== selectedItem) setSelectedItem(null);
                 }}
                 isEntitySearch={!!selectedItem}
+                focusSignal={findSignal}
               />
               </div>
             ) : undefined

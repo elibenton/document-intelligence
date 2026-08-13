@@ -126,6 +126,25 @@ to say the first answer was wrong. Neither needs a labeling UI.
 sharded `apiUsageTotals` rows, never pruned. Don't put anything in `apiLogs`
 that must survive.
 
+## Do not merge Analyze and Extract
+
+Tempting, and measured to be wrong. They send substantially the same document
+text minutes apart and look like an obvious 40% saving. A/B on six rendered
+documents (1-30 pages, five kinds), merged call vs. the two-pass baseline:
+
+| | cost | extracted values |
+|---|---|---|
+| Two-pass (Analyze → Extract) | $0.6678 | 285 |
+| Merged single call | $0.6519 | 124 |
+
+**-2% cost, -57% extracted values.** Input does drop ~30%, but output rises and
+output bills at 2.3x input, so the saving cancels. The quality loss is the real
+finding: asked to propose extractions *and* answer them in one response, the
+model returns fewer and shallower values — verbatim 17-item demand lists become
+14 short paraphrases, and whole categories (52 geographic locations) are
+replaced by thinner ones. A focused second pass over the same text, with a
+schema derived from the first pass, extracts about twice as much.
+
 ## Cost shape (measured, 12-page born-digital English PDF)
 
 Scan $0.0021 → Analyze $0.0308 → Rename $0.0062 → Extract $0.0271 = **$0.066/doc**.

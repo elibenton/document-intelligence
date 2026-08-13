@@ -27,6 +27,11 @@ interface ViewerLayoutProps {
    * past. Drives useViewerZoom; see panelLayout for the ladder they share.
    */
   onViewerMetrics?: (viewerWidth: number, zoomFloor: number) => void;
+  /**
+   * A counter; every bump re-opens the left panel. ⌘F uses it to bring the
+   * search box back when the panel is minimized. Zero means "never asked".
+   */
+  revealLeft?: number;
 }
 
 const LEFT_DEFAULT = 300;
@@ -89,6 +94,7 @@ export function ViewerLayout({
   bottomLeft,
   bottomRight,
   onViewerMetrics,
+  revealLeft,
 }: ViewerLayoutProps) {
   // Lazy state initializer, not a ref: loadLayout() must run exactly once, and
   // reading a ref during render is what the hooks rules forbid.
@@ -216,6 +222,17 @@ export function ViewerLayout({
     setLeftHidden(false);
     if (layout.leftForced) setLeftPinned(true);
   }, [layout.leftCollapsed, layout.leftForced]);
+
+  // Same "user beats the ladder" pinning as toggleLeft, but read through a ref
+  // so the effect fires on the caller's bump alone and not every time the
+  // resolved layout changes.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  useEffect(() => {
+    if (!revealLeft) return;
+    setLeftHidden(false);
+    if (layoutRef.current.leftForced) setLeftPinned(true);
+  }, [revealLeft]);
 
   const toggleSidebar = useCallback(() => {
     if (!layout.sidebarCollapsed) {

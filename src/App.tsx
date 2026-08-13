@@ -9,6 +9,7 @@ import { ProcessingBlockerBanner } from "./components/ProcessingBlockerBanner";
 import { ProcessingQueueBanner } from "./components/ProcessingQueueBanner";
 import { SiteFooter } from "./components/SiteFooter";
 import { GlobalDropOverlay } from "./components/documents/GlobalDropOverlay";
+import { UploadProvider } from "@/components/upload/UploadProvider";
 
 function App() {
   const location = useLocation();
@@ -16,22 +17,24 @@ function App() {
   const showFooter = !location.pathname.startsWith("/documents/");
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground max-w-[1800px] mx-auto border-x">
-      <ProcessingBlockerBanner />
-      <ProcessingQueueBanner />
-      <GlobalDropOverlay />
-      <div className="flex-1">
-        <Routes>
-          <Route path="/" element={<ProjectsPage />} />
-          <Route path="/p/:projectId" element={<HomePage />} />
-          <Route path="/documents/:id" element={<DocumentPage />} />
-          <Route path="/entity/:slug" element={<EntityPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-        </Routes>
+    <UploadProvider>
+      <div className="min-h-screen flex flex-col bg-background text-foreground max-w-[1800px] mx-auto border-x">
+        <ProcessingBlockerBanner />
+        <ProcessingQueueBanner />
+        <GlobalDropOverlay />
+        <div className="flex-1">
+          <Routes>
+            <Route path="/" element={<ProjectsPage />} />
+            <Route path="/p/:projectId" element={<HomePage />} />
+            <Route path="/documents/:id" element={<DocumentPage />} />
+            <Route path="/entity/:slug" element={<EntityPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </div>
+        {showFooter && <SiteFooter />}
       </div>
-      {showFooter && <SiteFooter />}
-    </div>
+    </UploadProvider>
   );
 }
 

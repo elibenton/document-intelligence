@@ -98,6 +98,31 @@ export const get = query({
   },
 });
 
+/**
+ * Pipeline status for the handful of documents the upload overlay is still
+ * holding. The overlay keeps a file in its own card until ingest reaches a
+ * terminal state, and the library hides those rows until then, so it needs the
+ * stage of a few known ids — not a subscription per library row.
+ *
+ * A deleted document reports "missing" so the overlay releases the card
+ * instead of holding it forever.
+ */
+export const ingestStates = query({
+  args: { ids: v.array(v.id("documents")) },
+  handler: async (ctx, args) => {
+    return await Promise.all(
+      args.ids.map(async (id) => {
+        const doc = await ctx.db.get(id);
+        return {
+          _id: id,
+          status: doc?.status ?? "missing",
+          errorMessage: doc?.errorMessage,
+        };
+      })
+    );
+  },
+});
+
 /** Rotate every page while preserving any page-specific adjustment. */
 export const rotateDocument = mutation({
   args: {
