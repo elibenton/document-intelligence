@@ -2,6 +2,7 @@ import { internalMutation, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { OTHER_CATEGORY } from "./analyzePrompt";
+import { applyDisplayName, normalizeTitle } from "./rename";
 
 // ---------------------------------------------------------------------------
 // Metadata pass — default-runtime half.
@@ -27,6 +28,7 @@ export const saveMetadataResult = internalMutation({
       is_multilingual?: boolean;
       primary_kind?: string;
       primary_category?: string;
+      display_title?: string;
       document_date?: { value?: string; precision?: string; evidence?: string };
       tags?: string[];
       suggested_roles?: Array<{ role?: string; question?: string; entity_type?: string }>;
@@ -179,11 +181,18 @@ export const saveMetadataResult = internalMutation({
         : {}),
     });
 
-    // The document is now understood well enough to be named — hand that
-    // context to the rename pass (convex/rename.ts).
-    await ctx.scheduler.runAfter(0, internal.renameNode.runRenamePass, {
-      documentId: args.documentId,
-    });
+    // The title comes back on this same response now (TITLE_RULE in
+    // analyzePrompt.ts), written after primary_kind and before any date field.
+    // It used to be a second Interfaze call over a re-fetched excerpt, which
+    // re-sent ~4,000 characters Analyze already had in full.
+    //
+    // normalizeTitle still runs: the prompt forbids dates, but a date can be
+    // read straight out of the document text, and one leaked date in a column
+    // of dateless titles is the ragged edge the rule exists to prevent.
+    const displayTitle = normalizeTitle(parsed.display_title ?? "");
+    if (displayTitle) {
+      await applyDisplayName(ctx, args.documentId, displayTitle);
+    }
 
     // ...and understood well enough to extract from. This is the moment the
     // suggestions exist, so it's where the initial extraction starts; there is

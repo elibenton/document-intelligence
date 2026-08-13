@@ -14,6 +14,15 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
 - **Size ceilings by transport — this is the one people get wrong.** URL-in-prompt-*text* 80MB; base64 20MB; **binary file object 20MB**. We send documents as a **URL wrapped in a `file` content part** (`fileUrlContent` → `inputs.file`), which is the *file-object* transport and subject to the **20MB** ceiling even though no bytes are inlined by this app. That is why the PDF preflight gate is 18MB — **do not raise it to 80MB.** Switching OCR to URL-in-text would lift the ceiling but was measured at 11× the cost ($0.0238 vs $0.0021) for byte-identical results. Also: 5-min request timeout; 1M context; 32k output tokens; 50 rps.
 - **Don't re-upload for text work.** Extract goes text-in, chunked. Import `LIMITS.maxInlineTextBytesPerFile` (250,000) from the SDK rather than hardcoding it.
 - **Never cap `maxTokens` defensively.** Output is billed per token *emitted*, so a cap can never save money — it can only lose a completed response and make you pay twice. The API ceiling is 32,000. The only justified cap is where a short output is the actual spec (e.g. a title).
+- **Schema property order is load-bearing.** Structured-output generation
+  follows declaration order, so the order in `buildDocumentUnderstandingSchema`
+  encodes a reasoning chain: `kind_evidence` → `primary_kind` →
+  `primary_category` → `display_title` → dates. The title is written *after* the
+  kind so it can name the document by a type the model just derived from a
+  quote, and *before* any date field so no date exists in context — that is how
+  "never put a date in a title" survives without the separate call that used to
+  enforce it by withholding the date from its input. Reordering these fields
+  changes behavior, not just style.
 - **Keep extraction as ONE merged schema.** `extractionSchema.ts` compiles all suggested extractions into a single call. A "one call per field" refactor would multiply the per-document bill by the field count.
 - **Non-streaming only.** Streaming hardcodes `vcache: false` (`dist/index.js:247`), so a stream can never report a cache hit. Usage is *preserved when present* but is absent in practice because the SDK never sets `stream_options.include_usage` — don't "fix" this by patching the accumulator.
 - **`vcache` invalidation is undocumented.** Several comments bank on an unchanged text-in re-run hitting cache. The docs say only "the same file or a very similar prompt" — no key composition, no TTL. It is a reasonable bet, not a guarantee. Log the hit rate rather than assuming it.

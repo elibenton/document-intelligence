@@ -354,6 +354,7 @@ export const runDocumentUnderstanding = internalAction({
           categories,
           log,
           bypassCache: args.bypassCache,
+          fileName: document.name,
         });
       } finally {
         // Translation is queued *after* Analyze, not before it.
@@ -399,6 +400,7 @@ async function analyzeAndStore(
     log?: ReturnType<typeof usageLogger>;
     bypassCache?: boolean;
     promptOverride?: string;
+    fileName?: string;
   }
 ): Promise<void> {
   const categoryDefs: CategoryDef[] = options.categories
@@ -414,6 +416,7 @@ async function analyzeAndStore(
         csv: options.csv,
         kindNames: options.kindNames,
         categories: categoryDefs,
+        fileName: options.fileName,
       }),
     responseSchema: {
       name: "document_analysis",
@@ -500,6 +503,7 @@ export const runAnalyze = internalAction({
         // whole reason the dialog invites an edit. Honor whatever it produced.
         bypassCache: args.bypassCache,
         promptOverride: args.promptOverride,
+        fileName: document.name,
       });
 
       await ctx.runMutation(internal.processing.updateJobStatus, {

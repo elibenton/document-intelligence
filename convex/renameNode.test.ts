@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTitle } from "./renameNode";
+import { normalizeTitle } from "./rename";
 
 describe("normalizeTitle", () => {
   it("leaves a well-formed title alone", () => {

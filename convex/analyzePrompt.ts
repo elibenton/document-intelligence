@@ -82,16 +82,48 @@ const DATE_RULE =
   "Truncate to what the text actually establishes — a document that gives only a month is a month, not the first of that month. " +
   'If the document does not state its own date, or you would be choosing between candidates, return precision "unknown" with an empty value. Returning unknown is correct and expected; guessing is not.';
 
+/**
+ * The library title rule.
+ *
+ * This was its own Interfaze call (convex/renameNode.ts) working from derived
+ * facts plus a 4,000-character excerpt. Analyze already holds the full document
+ * text and has just committed to `primary_kind` from quoted evidence, so the
+ * excerpt was strictly redundant and the kind arrived as an opaque fact rather
+ * than something the model had reasoned to.
+ *
+ * The one thing the standalone call had that this does not: it withheld the
+ * document's date from its own input. That property is preserved structurally —
+ * `display_title` is declared before every date field, so no date exists in
+ * context when the title is written. `normalizeTitle` still strips dates as a
+ * backstop, because a date can also be read straight out of the document text.
+ */
+const TITLE_RULE =
+  "Write display_title: the name this document carries in the library. " +
+  "Exactly two parts, in this order: the unique thing the document concerns, then what the document is. " +
+  "Lead with the specific identifier a reader would recognize and search for — the case name, the parties, the address, the person, the organization, the event. Follow it with the document's type: use the primary_kind you just assigned when it is specific, a general type otherwise. " +
+  'Examples: "Roe v. SFB Management Complaint", "1240 Mission St Conditional Use Permit", "Hernandez Deposition Transcript", "SFMTA Board Minutes". ' +
+  "Under 60 characters, and shorter whenever the document allows. No subtitle, no second clause after a comma or colon, no summary of what is inside. " +
+  "Never put a date or a year in display_title, in any form. The library shows the document's date in its own column, so a date in the title is duplicated noise. " +
+  "Prefer a case or matter name over a docket or file number. Use a number only when there is no name to use. " +
+  "Never invent parties, places, or identifiers. When the unique element is genuinely not established, name the document by its type alone rather than guessing at one. " +
+  "Title Case. No file extension, no quotes, no trailing period. Do not describe the file format, and do not restate the original filename when it is meaningless (a scanner code, a hash, IMG_1234).";
+
 export function buildAnalyzePrompt(options: {
   csv: boolean;
   kindNames: string[];
   categories: CategoryDef[];
+  /** Original upload filename — sometimes the best identifier in the document,
+   *  often meaningless. TITLE_RULE says which is which. */
+  fileName?: string;
 }): string {
   const categoryRule = buildCategoryRule(options.categories);
   const typeRule = `${TYPE_RULE} ${buildKindReuseClause(options.kindNames)}`.trim();
+  const fileNameFact = options.fileName
+    ? ` Original filename: "${options.fileName}".`
+    : "";
   return options.csv
-    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure. ${typeRule} ${categoryRule} ${DATE_RULE}`
-    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward. ${typeRule} ${categoryRule} ${DATE_RULE}`;
+    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE}`
+    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE}`;
 }
 
 /**
@@ -144,6 +176,7 @@ export const forDocument = query({
     const categories = await ctx.db.query("documentCategories").collect();
     return buildAnalyzePrompt({
       csv: isCsv(document.name, document.mimeType, document.mediaType),
+      fileName: document.name,
       kindNames: kinds.map((kind) => kind.name),
       categories: categories
         .sort((a, b) => a.order - b.order)
@@ -183,6 +216,40 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
       summary: {
         type: "string",
         description: "A factual 2-3 sentence summary of the complete document",
+      },
+      // Declared before primary_kind so the model locates its evidence before
+      // committing to an answer — see TYPE_RULE. Grounds primary_kind the
+      // same way document_date.evidence grounds document_date: a quote that
+      // can be checked, not a description that sounds right.
+      kind_evidence: {
+        type: "string",
+        description:
+          "The exact text — a caption, title block, form name, heading, or certification/signature line — where the document states its own type. Quoted verbatim from the document. Empty string only if the document never states its own type and primary_kind had to be inferred.",
+      },
+      // Decided from kind_evidence — see TYPE_RULE. The specific secondary
+      // type, not a generic bucket. primary_category (below) is derived from
+      // this, not the other way around.
+      primary_kind: {
+        type: "string",
+        description:
+          'The precise, specific name of this document type, read from kind_evidence — the exact named or numbered form, statute-named instrument, or standard document type when the document has one ("irs form 211", "writ of mandate", "certificate of incorporation"), matching the last element of the first document_types path. Only a generic term ("letter", "report") when nothing more specific applies. Lowercase.',
+      },
+      primary_category: {
+        type: "string",
+        enum: [...categoryKeys, OTHER_CATEGORY],
+        description:
+          "The single broad bucket primary_kind belongs to. See the category rule in the instruction for precedence when several fit.",
+      },
+      // Written *after* primary_kind so it can name the document by the type
+      // the model just derived from a quote, and *before* any date field so the
+      // date does not exist in context yet. The standalone rename call kept
+      // dates out of titles by withholding the date from its input entirely
+      // ("an instruction not to use a fact competes with the fact itself");
+      // property order is how that withholding survives the merge.
+      display_title: {
+        type: "string",
+        description:
+          "The name this document carries in the library. See the title rule in the instruction.",
       },
       date: {
         type: "string",
@@ -229,29 +296,6 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
       is_multilingual: {
         type: "boolean",
         description: "True when meaningful passages use more than one language",
-      },
-      // Declared before primary_kind so the model locates its evidence before
-      // committing to an answer — see TYPE_RULE. Grounds primary_kind the
-      // same way document_date.evidence grounds document_date: a quote that
-      // can be checked, not a description that sounds right.
-      kind_evidence: {
-        type: "string",
-        description:
-          "The exact text — a caption, title block, form name, heading, or certification/signature line — where the document states its own type. Quoted verbatim from the document. Empty string only if the document never states its own type and primary_kind had to be inferred.",
-      },
-      // Decided from kind_evidence — see TYPE_RULE. The specific secondary
-      // type, not a generic bucket. primary_category (below) is derived from
-      // this, not the other way around.
-      primary_kind: {
-        type: "string",
-        description:
-          'The precise, specific name of this document type, read from kind_evidence — the exact named or numbered form, statute-named instrument, or standard document type when the document has one ("irs form 211", "writ of mandate", "certificate of incorporation"), matching the last element of the first document_types path. Only a generic term ("letter", "report") when nothing more specific applies. Lowercase.',
-      },
-      primary_category: {
-        type: "string",
-        enum: [...categoryKeys, OTHER_CATEGORY],
-        description:
-          "The single broad bucket primary_kind belongs to. See the category rule in the instruction for precedence when several fit.",
       },
       // A document type is a path, not a word: "Writ of Mandate" is a kind of
       // "Legal Document", and both are true of the same file. Multi-level and

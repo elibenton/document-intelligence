@@ -1,17 +1,23 @@
 "use node";
 
 /**
- * Rename pass — Node-runtime half.
+ * Rename pass — the recordings-only path.
  *
  * Uploads arrive named whatever the scanner or download folder called them
- * ("SKM_C224e24081215120.pdf"). Once the metadata pass has established what the
- * document IS, that context is enough to write a real title, so this runs
- * immediately after it. The result lands in `documents.displayName`; the
- * uploaded `name` is never touched.
+ * ("SKM_C224e24081215120.pdf"), so a real title has to be written from what the
+ * document turns out to be. For documents that is now a field on the Analyze
+ * response itself (`display_title` — see TITLE_RULE in analyzePrompt.ts), which
+ * removed a second Interfaze call over an excerpt Analyze already had in full.
+ *
+ * **Recordings skip the metadata pass entirely** (`processingNode.ts`), so there
+ * is no Analyze response to carry a title for them. This standalone call is
+ * their only route to one, and is scheduled after `transcribe`. Deleting it
+ * would leave every recording showing its raw filename.
  *
  * The Interfaze call lives here under "use node" (the SDK needs the Node
- * runtime); the mutation that persists the title (saveDisplayName) stays in
- * rename.ts on the default runtime.
+ * runtime); `normalizeTitle` and the persistence helper stay in rename.ts on
+ * the default runtime, because metadata.ts needs them too and cannot import a
+ * value from a "use node" module.
  */
 
 import { internalAction } from "./_generated/server";
@@ -20,6 +26,7 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { chatCompletion } from "./interfaze";
 import { usageLogger } from "./apiLogs";
+import { normalizeTitle } from "./rename";
 import type { Id } from "./_generated/dataModel";
 
 /**
@@ -27,7 +34,6 @@ import type { Id } from "./_generated/dataModel";
  * for under 60; this is the backstop, not the target — a title that hits it
  * has already ignored the instruction.
  */
-const MAX_TITLE_CHARS = 70;
 
 /** How much page/transcript text to hand the model as extra grounding. */
 const MAX_CONTEXT_CHARS = 4000;
@@ -76,58 +82,6 @@ interface DocumentMetadata {
   author?: string;
   language?: string;
   additional?: Array<{ key?: string; value?: string }>;
-}
-
-const MONTH_WORD =
-  "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
-
-/**
- * Date-shaped fragments, removed from a title wherever they appear.
- *
- * The prompt forbids dates; this is the enforcement. Both are needed — the
- * instruction because a title built around a date reads badly even before it
- * is stripped, and the strip because a single leaked date in a column of
- * dateless titles is exactly the ragged edge the rule exists to prevent.
- *
- * Deliberately narrow. A bare four-digit number is left alone: "1240 Mission
- * St" and "Fund 2000" are not dates, and there is no way to tell a stray year
- * from a street number without understanding the title. Only years wearing
- * date clothing — bracketed, or attached to a month or a separator — go.
- */
-const DATE_FRAGMENTS: RegExp[] = [
-  // Bracketed or parenthesized: "(2019)", "[03/14/2019]"
-  /[([][^)\]]*\b(?:19|20)\d{2}\b[^)\]]*[)\]]/gi,
-  // Numeric: "03/14/2019", "3-14-19", "2019-03-14"
-  /\b\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}\b/g,
-  // Written, with or without a day: "March 14, 2019", "14 March 2019", "Mar 2019"
-  new RegExp(
-    `\\b(?:\\d{1,2}\\s+)?${MONTH_WORD}\\.?\\s+(?:\\d{1,2}(?:st|nd|rd|th)?,?\\s+)?(?:19|20)\\d{2}\\b`,
-    "gi"
-  ),
-  // A month name qualifying nothing else: "Minutes of March 14"
-  new RegExp(`\\b${MONTH_WORD}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, "gi"),
-  // A year hanging off a separator: "Complaint - 2019", "Minutes, 2019"
-  /\s*[-–—,:]\s*(?:19|20)\d{2}\b/g,
-];
-
-/** Separators and empty brackets left behind once a date is cut out. */
-function tidyPunctuation(value: string): string {
-  return value
-    .replace(/\(\s*\)|\[\s*\]/g, "")
-    .replace(/\s*([-–—,:])\s*(?=[-–—,:])/g, "")
-    .replace(/\s{2,}/g, " ")
-    .replace(/^[\s\-–—,:.]+|[\s\-–—,:.]+$/g, "")
-    .trim();
-}
-
-/** Clean up the model's answer into something safe to render as a title. */
-export function normalizeTitle(raw: string): string {
-  let cleaned = raw.replace(/\s+/g, " ").replace(/^["'\s]+|["'\s.]+$/g, "").trim();
-  for (const fragment of DATE_FRAGMENTS) cleaned = cleaned.replace(fragment, " ");
-  cleaned = tidyPunctuation(cleaned);
-  return cleaned.length > MAX_TITLE_CHARS
-    ? `${cleaned.slice(0, MAX_TITLE_CHARS).trimEnd()}…`
-    : cleaned;
 }
 
 /**
