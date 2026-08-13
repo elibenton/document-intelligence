@@ -121,9 +121,10 @@ function boundsToBbox(
   };
 }
 
-function sectionCoordinateMax(section: OcrSection) {
+function sectionCoordinateBounds(section: OcrSection) {
   let maxX = 0;
   let maxY = 0;
+  let minY = Infinity;
   const include = (bounds: OcrBounds | undefined) => {
     for (const point of [
       bounds?.top_left,
@@ -132,14 +133,100 @@ function sectionCoordinateMax(section: OcrSection) {
       bounds?.bottom_left,
     ]) {
       if (typeof point?.x === "number") maxX = Math.max(maxX, point.x);
-      if (typeof point?.y === "number") maxY = Math.max(maxY, point.y);
+      if (typeof point?.y === "number") {
+        maxY = Math.max(maxY, point.y);
+        minY = Math.min(minY, point.y);
+      }
     }
   };
   for (const line of section.lines ?? []) {
     include(line.bounds);
     for (const word of line.words ?? []) include(word.bounds);
   }
-  return { maxX, maxY };
+  return { maxX, maxY, minY: Number.isFinite(minY) ? minY : 0 };
+}
+
+interface PageGroup {
+  sections: OcrSection[];
+  width?: number;
+  height?: number;
+  scaleX: number;
+  scaleY: number;
+}
+
+/**
+ * Whether one entry's sections are whole pages stacked into it.
+ *
+ * Interfaze returns a run of pages as a single entry: one section per page,
+ * every section's bounds page-local, and `height` reporting the *stacked*
+ * image rather than the page. The same 12-page application came back this way
+ * twice, differently — once as six 2-page entries (height 3168), once as one
+ * 12-page entry (height 19008) — against a real page height of 1584. Read as
+ * one page each, every page of the document lands on top of page 1: 843 lines
+ * with ten page headers all within y 45-130 of each other.
+ *
+ * Two independent tells have to agree, because a wrong split silently blanks
+ * pages and this function has the regression history for it:
+ *
+ *  - The declared height is the section count times the height the coordinates
+ *    actually occupy. Both observed payloads divide out to 1584, and 1224x1584
+ *    is exactly the source PDF's letter aspect, which is the corroboration
+ *    that this arithmetic means what it looks like it means.
+ *  - Every section starts near the top. Sections that are regions of one page
+ *    tile down it, so the second one begins below the middle; sections that are
+ *    pages all begin at their own page's top margin. This is what separates a
+ *    stack from a sparse page whose content happens to sit in its top half.
+ */
+function sectionsArePages(entry: OcrResult, sections: OcrSection[]): boolean {
+  if (sections.length < 2 || !entry.height) return false;
+  const bounds = sections.map(sectionCoordinateBounds);
+  const extent = Math.max(...bounds.map((b) => b.maxY));
+  if (extent <= 0) return false;
+
+  const stacked = extent * sections.length;
+  if (Math.abs(entry.height - stacked) > entry.height * 0.1) return false;
+
+  const pageHeight = entry.height / sections.length;
+  return bounds.every((b) => b.minY < pageHeight / 2);
+}
+
+/** One OCR entry expanded into the page or pages it actually covers. */
+function expandEntry(entry: OcrResult): PageGroup[] {
+  const sections = entry.sections ?? [];
+
+  if (sectionsArePages(entry, sections)) {
+    const pageHeight = entry.height! / sections.length;
+    return sections.map((section) => {
+      const bounds = sectionCoordinateBounds(section);
+      return {
+        sections: [section],
+        width: entry.width,
+        height: pageHeight,
+        scaleX: coordinateScale(bounds.maxX, entry.width),
+        scaleY: coordinateScale(bounds.maxY, pageHeight),
+      };
+    });
+  }
+
+  const extent = sections.reduce(
+    (max, section) => {
+      const current = sectionCoordinateBounds(section);
+      return {
+        maxX: Math.max(max.maxX, current.maxX),
+        maxY: Math.max(max.maxY, current.maxY),
+      };
+    },
+    { maxX: 0, maxY: 0 }
+  );
+  return [
+    {
+      sections,
+      width: entry.width,
+      height: entry.height,
+      scaleX: coordinateScale(extent.maxX, entry.width),
+      scaleY: coordinateScale(extent.maxY, entry.height),
+    },
+  ];
 }
 
 /** OCR may rasterize a rotated axis at an integer multiple of page pixels. */
@@ -213,15 +300,7 @@ function dedupeOcrResults(ocrs: OcrResult[]): OcrResult[] {
  * removed first, and the per-result branch is only trusted when the entry count
  * actually matches the reported page count.
  */
-function ocrToPages(
-  input: OcrResult[]
-): {
-  sections: OcrSection[];
-  width?: number;
-  height?: number;
-  scaleX: number;
-  scaleY: number;
-}[] {
+function ocrToPages(input: OcrResult[]): PageGroup[] {
   const ocrs = dedupeOcrResults(input);
   if (ocrs.length === 0) return [];
   const total = ocrs.find((o) => typeof o.total_pages === "number")
@@ -231,26 +310,16 @@ function ocrToPages(
   // A mismatch means these entries are not pages, and treating them as pages
   // is what produced the duplication bug above.
   if (ocrs.length > 1 && (total === undefined || ocrs.length === total)) {
-    return ocrs.map((o) => {
-      const sections = o.sections ?? [];
-      const extent = sections.reduce(
-        (max, section) => {
-          const current = sectionCoordinateMax(section);
-          return {
-            maxX: Math.max(max.maxX, current.maxX),
-            maxY: Math.max(max.maxY, current.maxY),
-          };
-        },
-        { maxX: 0, maxY: 0 }
-      );
-      return {
-        sections,
-        width: o.width,
-        height: o.height,
-        scaleX: coordinateScale(extent.maxX, o.width),
-        scaleY: coordinateScale(extent.maxY, o.height),
-      };
-    });
+    const expanded = ocrs.map(expandEntry);
+    // An entry that stacks pages tells us the payload is not one-entry-per-page
+    // after all, so a sibling entry with no sections is padding rather than a
+    // blank page. Left in, each one appends an empty page: the 12-section entry
+    // above arrived with eleven such siblings, which would have stored 23 pages
+    // for a 12-page document.
+    const stacked = expanded.some((group) => group.length > 1);
+    return expanded
+      .filter((_, index) => !stacked || (ocrs[index].sections ?? []).length > 0)
+      .flat();
   }
 
   // Distinct entries that do not line up with the page count are competing
@@ -266,37 +335,20 @@ function ocrToPages(
     const pageHeight =
       typeof only.height === "number" ? only.height / total : undefined;
     return sections.map((section) => {
-      const extent = sectionCoordinateMax(section);
+      const bounds = sectionCoordinateBounds(section);
       return {
         sections: [section],
         width: only.width,
         height: pageHeight,
-        scaleX: coordinateScale(extent.maxX, only.width),
-        scaleY: coordinateScale(extent.maxY, pageHeight),
+        scaleX: coordinateScale(bounds.maxX, only.width),
+        scaleY: coordinateScale(bounds.maxY, pageHeight),
       };
     });
   }
-  return [
-    {
-      sections,
-      width: only.width,
-      height: only.height,
-      scaleX: coordinateScale(
-        sections.reduce(
-          (max, section) => Math.max(max, sectionCoordinateMax(section).maxX),
-          0
-        ),
-        only.width
-      ),
-      scaleY: coordinateScale(
-        sections.reduce(
-          (max, section) => Math.max(max, sectionCoordinateMax(section).maxY),
-          0
-        ),
-        only.height
-      ),
-    },
-  ];
+  // One entry left, and `total_pages` did not vouch for a split. It may still
+  // be a stack — the 12-section payload above reaches this line whenever its
+  // empty siblings dedupe away — so it gets the same evidence test.
+  return expandEntry(only);
 }
 
 function ocrToBlocks(ocrs: OcrResult[]): {

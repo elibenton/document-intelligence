@@ -43,6 +43,37 @@ function ocrResult(pageTexts: string[], pageHeight = 1584, width = 1224) {
   };
 }
 
+/**
+ * The other stacked shape: one section per page, but each section's bounds
+ * *page-local* rather than tiled down the stack, so every page's lines sit on
+ * top of each other. Only `height` gives the stack away.
+ *
+ * This is what a 12-page ABC application actually returned — twice, with
+ * different groupings (six 2-page entries, then one 12-page entry), against a
+ * real page of 1224x1584.
+ */
+function stackedResult(pageTexts: string[], pageHeight = 1584, width = 1224) {
+  return {
+    width,
+    height: pageHeight * pageTexts.length,
+    sections: pageTexts.map((text) => ({
+      text,
+      lines: [
+        {
+          text,
+          average_confidence: 0.99,
+          bounds: {
+            top_left: { x: 100, y: 60 },
+            top_right: { x: 500, y: 60 },
+            bottom_right: { x: 500, y: pageHeight - 30 },
+            bottom_left: { x: 100, y: pageHeight - 30 },
+          },
+        },
+      ],
+    })),
+  };
+}
+
 const pre = (...results: unknown[]): Precontext[] =>
   results.map((result) => ({ name: "ocr", result }));
 
@@ -140,6 +171,89 @@ describe("ocrPrecontextToPages", () => {
 
     expect(pages).toHaveLength(1);
     expect(pages[0].text).toBe("summary only, no lines");
+  });
+
+  it("splits entries that each stack several pages page-local", () => {
+    // Observed: a 12-page document as six entries of two pages each, height
+    // 3168 against a real 1584. Read as one page per entry, both pages' lines
+    // land on top of each other and the back half of the document is blank.
+    const entries = [0, 2, 4, 6, 8, 10].map((first) =>
+      stackedResult([`page ${first}`, `page ${first + 1}`])
+    );
+    const pages = ocrPrecontextToPages(pre(...entries));
+
+    expect(pages).toHaveLength(12);
+    expect(pages.map((p) => p.text)).toEqual(
+      Array.from({ length: 12 }, (_, i) => `page ${i}`)
+    );
+    expect(pages.every((p) => p.height === 1584)).toBe(true);
+  });
+
+  it("drops padding entries when another entry turns out to be a stack", () => {
+    // The same document's other reading: every page in one entry (height
+    // 19008) alongside empty siblings. Counting those as pages stored 23 pages
+    // for a 12-page document.
+    const everything = stackedResult(
+      Array.from({ length: 12 }, (_, i) => `page ${i}`)
+    );
+    const padding = { width: 1600, height: 2071, sections: [] };
+    const pages = ocrPrecontextToPages(
+      pre(everything, padding, structuredClone(padding), structuredClone(padding))
+    );
+
+    expect(pages).toHaveLength(12);
+    expect(pages.map((p) => p.text)).toEqual(
+      Array.from({ length: 12 }, (_, i) => `page ${i}`)
+    );
+    expect(pages.every((p) => p.height === 1584)).toBe(true);
+  });
+
+  it("keeps a sparse single page whole rather than splitting its sections", () => {
+    // The false positive the split has to survive: two sections on one page
+    // whose content happens to sit in its top half, so the height arithmetic
+    // alone would read them as two stacked pages. They tile down the page
+    // instead of both starting at its top, which is what separates them.
+    const sparse = {
+      total_pages: 1,
+      width: 1224,
+      height: 1584,
+      sections: [
+        {
+          text: "header",
+          lines: [
+            {
+              text: "header",
+              bounds: {
+                top_left: { x: 100, y: 100 },
+                top_right: { x: 500, y: 100 },
+                bottom_right: { x: 500, y: 130 },
+                bottom_left: { x: 100, y: 130 },
+              },
+            },
+          ],
+        },
+        {
+          text: "title",
+          lines: [
+            {
+              text: "title",
+              bounds: {
+                top_left: { x: 100, y: 700 },
+                top_right: { x: 500, y: 700 },
+                bottom_right: { x: 500, y: 800 },
+                bottom_left: { x: 100, y: 800 },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const pages = ocrPrecontextToPages(pre(sparse));
+
+    expect(pages).toHaveLength(1);
+    expect(pages[0].text).toBe("header\ntitle");
+    expect(pages[0].height).toBe(1584);
   });
 
   it("returns nothing when precontext carries no OCR", () => {
