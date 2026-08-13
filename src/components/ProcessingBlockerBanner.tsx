@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { AlertTriangle, ExternalLink, RefreshCw } from "lucide-react";
 import { api } from "../../convex/_generated/api";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 
 /**
  * Global banner for failures that stop ALL document processing rather than

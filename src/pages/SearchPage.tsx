@@ -38,20 +38,23 @@ export default function SearchPage() {
   const q = searchParams.get("q")?.trim() ?? "";
 
   const start = useMutation(api.search.start);
-  const [startedId, setStartedId] = useState<Id<"searches"> | null>(null);
+  // Tagged with the query it was started for, so a run belonging to a previous
+  // q is discarded during render instead of being cleared by a setState in the
+  // effect below.
+  const [started, setStarted] = useState<{ q: string; id: Id<"searches"> } | null>(null);
   // Guard StrictMode double-effects and q changes: one run per query value
   const startedFor = useRef<string | null>(null);
 
   useEffect(() => {
     if (idParam || !q || !projectParam || startedFor.current === q) return;
     startedFor.current = q;
-    setStartedId(null);
     void start({ query: q, projectId: projectParam }).then((id) => {
-      setStartedId(id);
+      setStarted({ q, id });
       navigate(`/search?id=${id}`, { replace: true });
     });
   }, [idParam, q, projectParam, start, navigate]);
 
+  const startedId = started && started.q === q ? started.id : null;
   const searchId = idParam ?? startedId;
   const search = useQuery(api.search.get, searchId ? { id: searchId } : "skip");
   const queryText = search?.query ?? q;
@@ -62,7 +65,7 @@ export default function SearchPage() {
     if (!queryText || !projectId) return;
     startedFor.current = queryText;
     const id = await start({ query: queryText, projectId, force: true });
-    setStartedId(id);
+    setStarted({ q: queryText, id });
     navigate(`/search?id=${id}`, { replace: true });
   }
 

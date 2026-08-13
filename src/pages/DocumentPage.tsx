@@ -17,7 +17,7 @@ import { ExtractionSetup } from "@/components/documents/ExtractionSetup";
 import { ViewerLayout } from "@/components/viewer/ViewerLayout";
 import { TableOfContents } from "@/components/viewer/TableOfContents";
 import { PageOverlays } from "@/components/viewer/PageOverlays";
-import { findPersonMentions } from "@/components/viewer/PersonHighlight";
+import { findPersonMentions } from "@/components/viewer/personMentions";
 import type { EntityHover } from "@/components/viewer/EntityHighlights";
 import { PipelineProgress } from "@/components/documents/PipelineProgress";
 import { DocumentActions } from "@/components/documents/DocumentActions";

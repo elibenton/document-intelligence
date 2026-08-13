@@ -95,29 +95,29 @@ export function releasePdf(url: string) {
 
 /** Subscribe a component to the shared document for `url`. */
 export function usePdfDocument(url: string | null | undefined) {
-  const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Each result is tagged with the url it came from, so a stale result can be
+  // discarded during render rather than cleared by a setState in the effect.
+  const [loaded, setLoaded] = useState<{ url: string; pdf: PDFDocumentProxy } | null>(null);
+  const [failed, setFailed] = useState<{ url: string; message: string } | null>(null);
 
   useEffect(() => {
-    if (!url) {
-      setPdf(null);
-      return;
-    }
+    if (!url) return;
     let cancelled = false;
-    setError(null);
     acquirePdf(url)
       .then((doc) => {
-        if (!cancelled) setPdf(doc);
+        if (!cancelled) setLoaded({ url, pdf: doc });
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setFailed({ url, message: e instanceof Error ? e.message : String(e) });
       });
     return () => {
       cancelled = true;
-      setPdf(null);
       releasePdf(url);
     };
   }, [url]);
 
-  return { pdf, error };
+  return {
+    pdf: loaded && loaded.url === url ? loaded.pdf : null,
+    error: failed && failed.url === url ? failed.message : null,
+  };
 }

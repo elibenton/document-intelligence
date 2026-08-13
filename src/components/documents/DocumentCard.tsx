@@ -3,7 +3,7 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/ca
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { parseStageLabel } from "./DocStatusIndicator";
+import { parseStageLabel } from "./docStatus";
 import { DocTypeIcon } from "./DocTypeIcon";
 import { DocumentActions } from "./DocumentActions";
 import type { Doc } from "../../../convex/_generated/dataModel";

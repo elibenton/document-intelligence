@@ -1,12 +1,4 @@
-import {
-  FileText,
-  Film,
-  Globe,
-  Image,
-  Mic,
-  Table,
-  type LucideIcon,
-} from "lucide-react";
+import { FileText, Film, Globe, Image, Mic, Table } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const SPREADSHEET_MIMES = new Set([
@@ -16,29 +8,28 @@ const SPREADSHEET_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
 
-export function docTypeIcon(doc: {
-  mediaType?: string;
-  mimeType?: string;
-}): LucideIcon {
+type DocTypeKind = "spreadsheet" | "image" | "audio" | "video" | "web" | "file";
+
+function docTypeKind(doc: { mediaType?: string; mimeType?: string }): DocTypeKind {
   const mime = doc.mimeType ?? "";
   switch (doc.mediaType) {
     case "csv":
-      return Table;
+      return "spreadsheet";
     case "image":
-      return Image;
+      return "image";
     case "audio":
-      return Mic;
+      return "audio";
     case "video":
-      return Film;
+      return "video";
     case "webScrape":
-      return Globe;
+      return "web";
   }
-  if (mime.startsWith("image/")) return Image;
-  if (mime.startsWith("audio/")) return Mic;
-  if (mime.startsWith("video/")) return Film;
-  if (mime === "text/html") return Globe;
-  if (SPREADSHEET_MIMES.has(mime)) return Table;
-  return FileText;
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (mime === "text/html") return "web";
+  if (SPREADSHEET_MIMES.has(mime)) return "spreadsheet";
+  return "file";
 }
 
 /** Media-type icon for a document: PDF, image, audio, video, web clip, … */
@@ -51,10 +42,22 @@ export function DocTypeIcon({
   mimeType?: string;
   className?: string;
 }) {
-  const Icon = docTypeIcon({ mediaType, mimeType });
-  return (
-    <Icon
-      className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground", className)}
-    />
-  );
+  // Each branch names its icon statically. Resolving to a component variable
+  // and rendering <Icon /> would read shorter but makes the element type
+  // dynamic, which defeats React's ability to keep the node across renders.
+  const cls = cn("h-3.5 w-3.5 shrink-0 text-muted-foreground", className);
+  switch (docTypeKind({ mediaType, mimeType })) {
+    case "spreadsheet":
+      return <Table className={cls} />;
+    case "image":
+      return <Image className={cls} />;
+    case "audio":
+      return <Mic className={cls} />;
+    case "video":
+      return <Film className={cls} />;
+    case "web":
+      return <Globe className={cls} />;
+    case "file":
+      return <FileText className={cls} />;
+  }
 }

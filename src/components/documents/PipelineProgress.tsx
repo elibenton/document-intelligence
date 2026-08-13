@@ -4,7 +4,7 @@ import { Check, RotateCw, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { Spinner } from "@/components/ui/spinner";
-import { isAudioVideo, parseStageLabel } from "./DocStatusIndicator";
+import { isAudioVideo, parseStageLabel } from "./docStatus";
 import { cn } from "@/lib/utils";
 import { isCsvDocument } from "@/lib/uploadTypes";
 import { languageName } from "@/lib/languages";

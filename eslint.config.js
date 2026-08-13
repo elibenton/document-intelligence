@@ -6,7 +6,9 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // convex/_generated is written by `convex dev`; linting it only produces
+  // warnings about disable directives we do not control and cannot keep.
+  globalIgnores(['dist', 'convex/_generated']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

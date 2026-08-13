@@ -529,7 +529,7 @@ export default function HomePage() {
   const reviewing =
     (reviewQueue ?? []).find((doc) => doc._id === reviewingId) ?? null;
 
-  const [selected, setSelected] = useState<Id<"documents">[]>([]);
+  const [selectedRaw, setSelected] = useState<Id<"documents">[]>([]);
   // The last row checked on its own — the anchor a shift-click extends from.
   const selectionAnchor = useRef<number | null>(null);
   const sourcesRef = useRef<HTMLDivElement>(null);
@@ -581,14 +581,15 @@ export default function HomePage() {
     });
   }, [documents, sourceQuery, sourceSort, sourceTypeFilter]);
 
-  // Drop anything that left the list — archived, deleted, or filtered out —
-  // so the toolbar never counts rows the user can no longer see.
-  useEffect(() => {
-    if (selected.length === 0) return;
+  // Drop anything that left the list — archived, deleted, or filtered out — so
+  // the toolbar never counts rows the user can no longer see. Derived rather
+  // than pruned in an effect: the stale ids never reach a render this way.
+  const selected = useMemo(() => {
+    if (selectedRaw.length === 0) return selectedRaw;
     const visible = new Set(visibleDocuments.map((doc) => doc._id));
-    if (selected.every((id) => visible.has(id))) return;
-    setSelected((current) => current.filter((id) => visible.has(id)));
-  }, [selected, visibleDocuments]);
+    if (selectedRaw.every((id) => visible.has(id))) return selectedRaw;
+    return selectedRaw.filter((id) => visible.has(id));
+  }, [selectedRaw, visibleDocuments]);
 
   // A click anywhere outside the Sources column drops the selection — the
   // same way a file list does. The Tag popover is portalled to the body, so

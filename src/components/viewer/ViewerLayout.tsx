@@ -42,7 +42,9 @@ function saveLayout(state: LayoutState) {
 }
 
 export function ViewerLayout({ viewer, sidebar }: ViewerLayoutProps) {
-  const initial = useRef(loadLayout()).current;
+  // Lazy state initializer, not a ref: loadLayout() must run exactly once, and
+  // reading a ref during render is what the hooks rules forbid.
+  const [initial] = useState(loadLayout);
   const [sidebarWidth, setSidebarWidth] = useState(initial.sidebarWidth);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initial.sidebarCollapsed);
 

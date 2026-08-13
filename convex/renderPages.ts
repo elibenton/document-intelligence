@@ -347,13 +347,12 @@ export const renderBatch = internalAction({
         });
       }
       return null;
-    } catch (error) {
-      // Do not write "failed" here. One attempt's death is not a verdict: the
-      // pool retries, and renderPool's onComplete records the terminal state
-      // once retries are exhausted. Writing it here would flash a failure the
-      // pool is about to recover from, disarm the watchdog, and burn an
-      // attempt on every retry.
-      throw error;
+      // Deliberately no catch: errors propagate untouched. Do not write
+      // "failed" here. One attempt's death is not a verdict — the pool
+      // retries, and renderPool's onComplete records the terminal state once
+      // retries are exhausted. Writing it here would flash a failure the pool
+      // is about to recover from, disarm the watchdog, and burn an attempt on
+      // every retry.
     } finally {
       if (pdf) await pdf.destroy();
     }
