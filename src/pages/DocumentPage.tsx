@@ -175,6 +175,21 @@ export default function DocumentPage() {
     (document?.mediaType === "pdf" ||
       document?.mediaType === "docx" ||
       document?.mimeType === "application/pdf");
+  /**
+   * How many pages the viewer lays out.
+   *
+   * `document.pageCount` is written by the parse pass, so a document whose
+   * Scan or Analyze failed carries none — and the viewer was then drawing
+   * exactly one page of a 20-page PDF while the file itself was fine. Page
+   * layout is not the parse pass's to decide: the renderer already counted the
+   * pages with pdf.js (`renderExpectedPages`) and committed a `pages` row for
+   * each, so fall through to those. All three agree whenever more than one
+   * exists.
+   */
+  const totalPages =
+    document?.pageCount ??
+    document?.renderExpectedPages ??
+    (pages?.length || undefined);
   const isRecording = Boolean(
     document &&
       (document.mediaType === "audio" ||
@@ -559,7 +574,7 @@ export default function DocumentPage() {
                 blocks={blocks ?? []}
                 outline={document.tableOfContents}
                 currentPage={currentPage}
-                totalPages={document.pageCount ?? 0}
+                totalPages={totalPages ?? 0}
                 onNavigate={scrollToPage}
                 searchQuery={searchQuery}
                 onSearchChange={(q) => {
@@ -580,7 +595,7 @@ export default function DocumentPage() {
                 onZoomChange={chooseZoom}
                 onFitWidth={fitToWidth}
                 currentPage={currentPage}
-                totalPages={document.pageCount ?? 0}
+                totalPages={totalPages ?? 0}
               />
             )
           }
@@ -618,7 +633,7 @@ export default function DocumentPage() {
                   documentId={documentId}
                   pdfUrl={url}
                   pages={pages ?? []}
-                  totalPages={document.pageCount ?? 1}
+                  totalPages={totalPages ?? 1}
                   zoom={zoom}
                   documentRotation={document.viewerRotation ?? 0}
                   onVisiblePageChange={handleVisiblePageChange}
