@@ -151,10 +151,6 @@ export default defineSchema({
     // nothing writes or reads this. Kept only because rows in the wild still
     // carry it and the schema has to keep validating them.
     reviewSkippedAt: v.optional(v.number()),
-    // Deprecated. Archiving is gone — nothing reads or writes this. The field
-    // stays only so the schema keeps validating rows that still carry it; run
-    // `documents:stripArchivedAt` once, then delete this line and that mutation.
-    archivedAt: v.optional(v.number()),
     uploadedAt: v.number(),
     completedAt: v.optional(v.number()),
     // Debounce for page-image rendering (pageImages.ensureRendered)

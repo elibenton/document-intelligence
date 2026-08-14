@@ -596,33 +596,3 @@ async function sweepOrphanEntities(
   return remaining;
 }
 
-/**
- * One-shot removal of the deprecated `archivedAt` field.
- *
- * Convex refuses to deploy a schema that no longer declares a field some row
- * still carries, so the data has to go before the field can. Run this once
- * (`npx convex run documents:stripArchivedAt`), then delete both the field from
- * the schema and this mutation.
- */
-export const stripArchivedAt = internalMutation({
-  args: { cursor: v.optional(v.union(v.string(), v.null())) },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const page = await ctx.db.query("documents").paginate({
-      numItems: 256,
-      cursor: args.cursor ?? null,
-    });
-    for (const doc of page.page) {
-      if (doc.archivedAt !== undefined) {
-        await ctx.db.patch(doc._id, { archivedAt: undefined });
-      }
-    }
-    if (!page.isDone) {
-      await ctx.scheduler.runAfter(0, internal.documents.stripArchivedAt, {
-        cursor: page.continueCursor,
-      });
-    }
-    return null;
-  },
-});
-
