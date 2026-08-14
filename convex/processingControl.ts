@@ -3,7 +3,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { components } from "./_generated/api";
 import { v } from "convex/values";
 import { processingPool, PROCESSING_MAX_PARALLELISM } from "./processingPool";
-import { authedMutation, authedQuery } from "./authz";
+import { adminMutation, authedQuery } from "./authz";
 
 const CONTROL_KEY = "global";
 
@@ -66,7 +66,7 @@ export const getInternal = internalQuery({
   },
 });
 
-export const setPaused = authedMutation({
+export const setPaused = adminMutation({
   args: { paused: v.boolean() },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -123,7 +123,7 @@ export const resumeAfterProviderBlock = internalMutation({
   },
 });
 
-export const cancelWaiting = authedMutation({
+export const cancelWaiting = adminMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {

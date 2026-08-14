@@ -110,12 +110,27 @@ const adminOnly = customCtx(async (ctx: QueryCtx) => {
   return { user };
 });
 
-/**
- * Queries only, deliberately. Read-only is enforced by the wrapper set rather
- * than by discipline: there is no `adminMutation`, and adding one is a design
- * change, not a convenience.
- */
 export const adminQuery = customQuery(query, adminOnly);
+
+/**
+ * The design change the comment above used to forbid, made deliberately.
+ *
+ * `adminQuery` was read-only on purpose, so that "the admin can look but not
+ * touch" was enforced by which wrappers existed rather than by anyone
+ * remembering. That held while the only admin surface was a usage dashboard.
+ *
+ * It stopped holding when the processing queue turned out to be shared
+ * infrastructure. `setPaused` and `cancelWaiting` act on one workpool that
+ * every account's documents run through — pausing it stops everyone's uploads,
+ * and `cancelAll` discards everyone's queued work. Those are operator
+ * controls wearing a user control's clothes, and the honest fix is an operator
+ * wrapper rather than leaving them reachable by anyone with a session.
+ *
+ * Keep this list short. A mutation belongs here only when it acts on something
+ * shared by every account; anything scoped to one user's own data belongs on
+ * `authedMutation` behind an ownership walk instead.
+ */
+export const adminMutation = customMutation(mutation, adminOnly);
 
 /**
  * Whether the caller is the owner. Any signed-in user may ask; the answer is a

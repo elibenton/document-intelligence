@@ -122,8 +122,15 @@ export default function SettingsPage() {
           {/* Provider health — loud when a provider is down or out of credits */}
           <ProviderAlert />
 
-          <SectionHeading>Processing</SectionHeading>
-          <ProcessingQueueControls />
+          {/* Operator-only: pausing and cancelling act on the one workpool
+              every account's documents run through, so these are not the
+              reader's controls to hold. The server refuses them either way. */}
+          {isAdmin && (
+            <>
+              <SectionHeading>Processing</SectionHeading>
+              <ProcessingQueueControls />
+            </>
+          )}
 
           <SectionHeading>Language</SectionHeading>
           <div className="rounded-lg border bg-card p-4 mb-8">

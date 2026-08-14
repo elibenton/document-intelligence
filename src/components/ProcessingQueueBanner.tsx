@@ -6,6 +6,11 @@ import { Button } from "@/components/ui/button";
 
 export function ProcessingQueueBanner() {
   const control = useQuery(api.processingControl.get);
+  // Everyone sees the banner, because a paused queue explains why their upload
+  // is sitting still — that is the whole point of it. Only the operator gets
+  // the button: one workpool serves every account, so resuming is a decision
+  // about everyone's documents, not the reader's own.
+  const isAdmin = useQuery(api.authz.isAdmin);
   const setPaused = useMutation(api.processingControl.setPaused);
   const [resuming, setResuming] = useState(false);
 
@@ -25,22 +30,24 @@ export function ProcessingQueueBanner() {
           Processing queue paused. Waiting jobs are saved; jobs that were already
           running will finish.
         </p>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={resuming}
-          onClick={async () => {
-            setResuming(true);
-            try {
-              await setPaused({ paused: false });
-            } finally {
-              setResuming(false);
-            }
-          }}
-        >
-          <CirclePlay data-icon="inline-start" />
-          {resuming ? "Resuming…" : "Resume"}
-        </Button>
+        {isAdmin && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={resuming}
+            onClick={async () => {
+              setResuming(true);
+              try {
+                await setPaused({ paused: false });
+              } finally {
+                setResuming(false);
+              }
+            }}
+          >
+            <CirclePlay data-icon="inline-start" />
+            {resuming ? "Resuming…" : "Resume"}
+          </Button>
+        )}
       </div>
     </div>
   );
