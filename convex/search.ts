@@ -77,6 +77,17 @@ async function defaultLanguageCode(ctx: QueryCtx): Promise<string> {
 // Tier 1: reactive typeahead suggestions
 // ---------------------------------------------------------------------------
 
+/** How many rows each section of the typeahead shows. Library leads, so it
+ *  gets the most room; the other two are there to be scanned, not read. */
+const DOCUMENT_SUGGESTIONS = 5;
+const ENTITY_SUGGESTIONS = 3;
+const PAGE_SUGGESTIONS = 3;
+
+/** The name a document is shown under: the rename pass's title, else the file's. */
+function titleOf(doc: { name: string; displayName?: string }): string {
+  return doc.displayName?.trim() || doc.name;
+}
+
 export const suggest = query({
   args: { q: v.string(), projectId: v.id("projects") },
   handler: async (ctx, args) => {
@@ -90,14 +101,36 @@ export const suggest = query({
       .withSearchIndex("search_name", (s) =>
         s.search("name", q).eq("projectId", args.projectId)
       )
-      .take(5);
+      .take(ENTITY_SUGGESTIONS);
 
-    const documents = await ctx.db
-      .query("documents")
-      .withSearchIndex("search_name", (s) =>
-        s.search("name", q).eq("projectId", args.projectId)
-      )
-      .take(4);
+    // Both of a document's names are searchable, through one index each.
+    // `displayName` — the title the rename pass wrote, and the only name most
+    // of the UI shows — leads, because it is what someone typing "Roe" means.
+    // `name`, the upload filename, follows for the reader who remembers the
+    // file they dropped in.
+    const [titleMatches, filenameMatches] = await Promise.all([
+      ctx.db
+        .query("documents")
+        .withSearchIndex("search_displayName", (s) =>
+          s.search("displayName", q).eq("projectId", args.projectId)
+        )
+        .take(DOCUMENT_SUGGESTIONS),
+      ctx.db
+        .query("documents")
+        .withSearchIndex("search_name", (s) =>
+          s.search("name", q).eq("projectId", args.projectId)
+        )
+        .take(DOCUMENT_SUGGESTIONS),
+    ]);
+
+    const documents: Doc<"documents">[] = [];
+    const seenDocuments = new Set<Id<"documents">>();
+    for (const doc of [...titleMatches, ...filenameMatches]) {
+      if (documents.length >= DOCUMENT_SUGGESTIONS) break;
+      if (seenDocuments.has(doc._id)) continue;
+      seenDocuments.add(doc._id);
+      documents.push(doc);
+    }
 
     const targetLanguageCode = await defaultLanguageCode(ctx);
     const translatedPageHits = await ctx.db
@@ -117,7 +150,7 @@ export const suggest = query({
       .take(15);
 
     const docNames = new Map<Id<"documents">, string>();
-    for (const doc of documents) docNames.set(doc._id, doc.name);
+    for (const doc of documents) docNames.set(doc._id, titleOf(doc));
     const inProject = new Map<Id<"documents">, boolean>();
     const pages = [];
     const mergedPageHits = [
@@ -131,14 +164,14 @@ export const suggest = query({
     ];
     const seenPages = new Set<string>();
     for (const page of mergedPageHits) {
-      if (pages.length >= 5) break;
+      if (pages.length >= PAGE_SUGGESTIONS) break;
       const key = `${page.documentId}:${page.pageNumber}`;
       if (seenPages.has(key)) continue;
       let name = docNames.get(page.documentId);
       if (name === undefined || !inProject.has(page.documentId)) {
         const doc = await ctx.db.get(page.documentId);
         inProject.set(page.documentId, doc?.projectId === args.projectId);
-        name = doc?.name ?? "Unknown document";
+        name = doc ? titleOf(doc) : "Unknown document";
         docNames.set(page.documentId, name);
       }
       if (!inProject.get(page.documentId)) continue;
@@ -159,9 +192,13 @@ export const suggest = query({
         type: e.type,
         mentionCount: e.mentionCount,
       })),
+      // `name` is the title the rest of the UI shows; `filename` rides along
+      // only when it differs, so a document matched on its upload name shows
+      // why it is in the list.
       documents: documents.map((d) => ({
         documentId: d._id,
-        name: d.name,
+        name: titleOf(d),
+        filename: titleOf(d) === d.name ? undefined : d.name,
         mediaType: d.mediaType,
         mimeType: d.mimeType,
       })),

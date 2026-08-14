@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "convex/react";
 import {
@@ -12,6 +12,7 @@ import {
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import SearchBar from "@/components/search/SearchBar";
+import { useSearchHotkey } from "@/components/search/useSearchHotkey";
 import { ResearchAnswerWithEvidence } from "@/components/search/ResearchEvidenceCarousel";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -36,6 +37,11 @@ export default function SearchPage() {
   const idParam = searchParams.get("id") as Id<"searches"> | null;
   const projectParam = searchParams.get("project") as Id<"projects"> | null;
   const q = searchParams.get("q")?.trim() ?? "";
+
+  // This page carries the bar in its header, so — like the project home —
+  // ⌘K focuses that one rather than opening a modal over it.
+  const [searchFocus, setSearchFocus] = useState(0);
+  useSearchHotkey(useCallback(() => setSearchFocus((n) => n + 1), []));
 
   const start = useMutation(api.search.start);
   // Tagged with the query it was started for, so a run belonging to a previous
@@ -86,7 +92,9 @@ export default function SearchPage() {
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div className="flex-1">
-          {projectId && <SearchBar projectId={projectId} />}
+          {projectId && (
+            <SearchBar projectId={projectId} focusSignal={searchFocus} />
+          )}
         </div>
       </header>
 

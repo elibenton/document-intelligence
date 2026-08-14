@@ -67,6 +67,8 @@ type Item =
       kind: "document";
       documentId: string;
       name: string;
+      /** The upload filename, present only when it differs from the title. */
+      filename?: string;
       mediaType?: string;
       mimeType: string;
     }
@@ -101,13 +103,25 @@ const SUGGESTED_QUESTION_SETS = [
   ],
 ] as const;
 
+/** Briefly worn by the input after ⌘K, so the bar is findable on the page. */
+const FLASH_CLASSES = ["ring-2", "ring-primary/60", "shadow-md"];
+
 const DEFAULT_RECENT_COUNT = 5;
 const RECENT_COUNT_STEP = 5;
 
 export default function SearchBar({
   projectId,
+  focusSignal,
+  onNavigate,
 }: {
   projectId: Id<"projects">;
+  /**
+   * A counter the page bumps on ⌘K. Each bump focuses and selects the input,
+   * and flashes a ring so the bar is findable when it was already on screen.
+   */
+  focusSignal?: number;
+  /** Fired just before a result navigates — lets a host modal close itself. */
+  onNavigate?: () => void;
 }) {
   const navigate = useNavigate();
   const [value, setValue] = useState("");
@@ -118,6 +132,20 @@ export default function SearchBar({
   const [recentCount, setRecentCount] = useState(DEFAULT_RECENT_COUNT);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // The ring is a transient on the DOM node, not React state: nothing else
+  // renders from it, and a state flag here would re-render the whole dropdown
+  // twice per ⌘K just to add and remove a class.
+  useEffect(() => {
+    if (!focusSignal) return;
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+    input.classList.add(...FLASH_CLASSES);
+    const timer = setTimeout(() => input.classList.remove(...FLASH_CLASSES), 900);
+    return () => clearTimeout(timer);
+  }, [focusSignal]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(value), 150);
@@ -157,11 +185,14 @@ export default function SearchBar({
         })),
       ];
     }
+    // Library first: a typed word is most often the name of a document the
+    // user already has in mind. Entities and page hits follow as ways in when
+    // it wasn't. Section headings come from this order (see firstOfKind).
     const list: Item[] = [{ kind: "ask" }];
-    for (const e of suggestions?.entities ?? [])
-      list.push({ kind: "entity", ...e });
     for (const d of suggestions?.documents ?? [])
       list.push({ kind: "document", ...d, documentId: d.documentId as string });
+    for (const e of suggestions?.entities ?? [])
+      list.push({ kind: "entity", ...e });
     for (const p of suggestions?.pages ?? [])
       list.push({ kind: "page", ...p, documentId: p.documentId as string });
     return list;
@@ -187,6 +218,7 @@ export default function SearchBar({
   function go(item: Item) {
     setOpen(false);
     inputRef.current?.blur();
+    onNavigate?.();
     switch (item.kind) {
       case "ask":
         navigate(
@@ -387,8 +419,15 @@ export default function SearchBar({
                         mediaType={item.mediaType}
                         mimeType={item.mimeType}
                       />
-                      <span className="text-sm truncate">
-                        <Highlight text={item.name} query={debounced} />
+                      <span className="min-w-0">
+                        <span className="block text-sm truncate">
+                          <Highlight text={item.name} query={debounced} />
+                        </span>
+                        {item.filename && (
+                          <span className="block text-xs text-muted-foreground truncate">
+                            <Highlight text={item.filename} query={debounced} />
+                          </span>
+                        )}
                       </span>
                     </>
                   )}

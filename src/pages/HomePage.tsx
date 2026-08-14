@@ -15,6 +15,7 @@ import {
   type MergeSuggestion,
 } from "@/components/entities/MergeSuggestions";
 import SearchBar from "@/components/search/SearchBar";
+import { useSearchHotkey } from "@/components/search/useSearchHotkey";
 import { ListGroup } from "@/components/views/ListGroup";
 import { PropertyChips } from "@/components/views/PropertyChips";
 import { ViewBar } from "@/components/views/ViewBar";
@@ -313,6 +314,11 @@ export default function HomePage() {
     projectId: Id<"projects">;
   };
 
+  // The search bar is already on this page, so ⌘K walks the user to it —
+  // focused and briefly ringed — instead of stacking a modal copy over it.
+  const [searchFocus, setSearchFocus] = useState(0);
+  useSearchHotkey(useCallback(() => setSearchFocus((n) => n + 1), []));
+
   const project = useQuery(api.projects.get, { id: projectId });
   const allDocuments = useQuery(api.documents.list, { projectId });
   // A file being ingested lives in the upload card, not here — it joins the
@@ -525,7 +531,7 @@ export default function HomePage() {
           <div ref={heroSentinelRef} aria-hidden className="h-px" />
 
           <div className="mb-8">
-            <SearchBar projectId={projectId} />
+            <SearchBar projectId={projectId} focusSignal={searchFocus} />
           </div>
 
           <SplitPane
