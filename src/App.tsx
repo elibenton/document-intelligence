@@ -9,6 +9,7 @@ import DocumentPage from "./pages/DocumentPage";
 import EntityPage from "./pages/EntityPage";
 import SearchPage from "./pages/SearchPage";
 import SettingsPage from "./pages/SettingsPage";
+import AdminPage from "./pages/AdminPage";
 import ProjectSettingsPage from "./pages/ProjectSettingsPage";
 import { ProcessingBlockerBanner } from "./components/ProcessingBlockerBanner";
 import { ProcessingQueueBanner } from "./components/ProcessingQueueBanner";
@@ -88,6 +89,10 @@ export default function App() {
                     <Route path="/entity/:slug" element={<EntityPage />} />
                     <Route path="/search" element={<SearchPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
+                    {/* Gated on the server by adminQuery, not by this route.
+                        A non-admin who types the URL gets a thrown error, which
+                        is the correct outcome. */}
+                    <Route path="/admin" element={<AdminPage />} />
                   </Route>
                   {/* The document viewer is a fixed-height workspace of its
                       own, so it sits outside that shell and gets no footer. */}

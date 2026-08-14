@@ -1,0 +1,234 @@
+import { useState } from "react";
+import { useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
+import { PageShell, SectionHeading } from "@/components/ui/page-shell";
+import { StatCard } from "@/components/settings/StatCard";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+
+/**
+ * Deployment spend, for the owner.
+ *
+ * A route of its own rather than a section of SettingsPage, and the reason is
+ * enforcement rather than layout: on a shared page `admin.usage` would have to
+ * return null for non-admins instead of throwing, because a thrown useQuery
+ * breaks the whole page for everyone. Softening the refusal to keep a page from
+ * breaking is how a boundary rots. Here it can throw.
+ */
+
+const WINDOWS = [7, 30] as const;
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toLocaleString();
+}
+
+const usd = (n: number) => `$${n.toFixed(2)}`;
+const pct = (part: number, whole: number) =>
+  whole === 0 ? "—" : `${((part / whole) * 100).toFixed(1)}%`;
+
+export default function AdminPage() {
+  const [days, setDays] = useState<number>(30);
+  const data = useQuery(api.admin.usage, { days });
+
+  return (
+    <PageShell
+      title="Usage"
+      subtitle="What this deployment is spending."
+      back={{ to: "/settings", label: "Back to settings" }}
+      actions={
+        <div className="flex items-center gap-1">
+          {WINDOWS.map((w) => (
+            <Button
+              key={w}
+              size="sm"
+              variant={w === days ? "secondary" : "ghost"}
+              aria-pressed={w === days}
+              onClick={() => setDays(w)}
+            >
+              {w} days
+            </Button>
+          ))}
+        </div>
+      }
+    >
+      {data === undefined ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {Array.from({ length: 6 }, (_, i) => (
+            <Skeleton key={i} className="h-20 rounded-lg" />
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-8">
+          <section>
+            <SectionHeading>Lifetime</SectionHeading>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <StatCard
+                label="API calls"
+                value={data.lifetime.calls.toLocaleString()}
+              />
+              <StatCard
+                label="Input tokens"
+                value={formatTokens(data.lifetime.promptTokens)}
+              />
+              <StatCard
+                label="Output tokens"
+                value={formatTokens(data.lifetime.completionTokens)}
+              />
+              <StatCard
+                label="Estimated cost"
+                value={usd(data.lifetime.costUsd)}
+              />
+              <StatCard
+                label="Cache hit rate"
+                value={pct(
+                  data.lifetime.cacheHits,
+                  data.lifetime.cacheMeasuredCalls
+                )}
+                hint={`${data.lifetime.cacheMeasuredCalls.toLocaleString()} measured`}
+              />
+            </div>
+          </section>
+
+          <section>
+            <SectionHeading>Last {days} days</SectionHeading>
+            {data.window.truncated && (
+              <Alert className="mb-3">
+                Showing the most recent 5,000 calls. Totals below are a floor,
+                not the full window.
+              </Alert>
+            )}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <StatCard
+                label="API calls"
+                value={data.window.calls.toLocaleString()}
+              />
+              <StatCard label="Cost" value={usd(data.window.costUsd)} />
+              <StatCard
+                label="Errors"
+                value={data.window.errors.toLocaleString()}
+                hint={pct(data.window.errors, data.window.calls)}
+              />
+              <StatCard
+                label="Documents touched"
+                value={data.window.documentsTouched.toLocaleString()}
+              />
+              <StatCard
+                label="Input tokens"
+                value={formatTokens(data.window.promptTokens)}
+              />
+              <StatCard
+                label="Output tokens"
+                value={formatTokens(data.window.completionTokens)}
+              />
+            </div>
+          </section>
+
+          <section>
+            <SectionHeading>By operation</SectionHeading>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                    <th className="py-2 pr-4 font-medium">Operation</th>
+                    <th className="py-2 pr-4 font-medium text-right">Calls</th>
+                    <th className="py-2 pr-4 font-medium text-right">Cost</th>
+                    <th className="py-2 pr-4 font-medium text-right">Errors</th>
+                    <th className="py-2 pr-4 font-medium text-right">Cut off</th>
+                    <th className="py-2 pr-4 font-medium text-right">p50</th>
+                    <th className="py-2 font-medium text-right">p95</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byOperation.map((op) => (
+                    <tr key={op.operation} className="border-b border-border/50">
+                      <td className="py-2 pr-4">{op.operation}</td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {op.calls.toLocaleString()}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {usd(op.costUsd)}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {op.errors > 0 ? (
+                          <span className="text-destructive">{op.errors}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {op.truncatedOutputs > 0 ? (
+                          <span className="text-warning">
+                            {op.truncatedOutputs}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">
+                        {(op.p50DurationMs / 1000).toFixed(1)}s
+                      </td>
+                      <td className="py-2 text-right tabular-nums text-muted-foreground">
+                        {(op.p95DurationMs / 1000).toFixed(1)}s
+                      </td>
+                    </tr>
+                  ))}
+                  {data.byOperation.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="py-4 text-center text-muted-foreground"
+                      >
+                        No calls in this window.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <SectionHeading>By day</SectionHeading>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                    <th className="py-2 pr-4 font-medium">Day</th>
+                    <th className="py-2 pr-4 font-medium text-right">Calls</th>
+                    <th className="py-2 font-medium text-right">Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byDay.map((d) => (
+                    <tr key={d.day} className="border-b border-border/50">
+                      <td className="py-2 pr-4 tabular-nums">{d.day}</td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {d.calls.toLocaleString()}
+                      </td>
+                      <td className="py-2 text-right tabular-nums">
+                        {usd(d.costUsd)}
+                      </td>
+                    </tr>
+                  ))}
+                  {data.byDay.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="py-4 text-center text-muted-foreground"
+                      >
+                        No calls in this window.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+    </PageShell>
+  );
+}

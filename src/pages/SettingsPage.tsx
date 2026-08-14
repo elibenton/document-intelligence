@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { CircleAlert, CircleCheck, Languages } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import ProviderAlert from "@/components/settings/ProviderAlert";
+import { StatCard } from "@/components/settings/StatCard";
 import { ProcessingQueueControls } from "@/components/settings/ProcessingQueueControls";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -56,16 +57,6 @@ function formatTime(ts: number): string {
     : `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${time}`;
 }
 
-function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded-lg border bg-card p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-xl font-semibold mt-1">{value}</p>
-      {hint && <p className="text-xs text-muted-foreground mt-0.5">{hint}</p>}
-    </div>
-  );
-}
-
 const healthPill: Record<string, { label: string; cls: string }> = {
   ok: { label: "Healthy", cls: "bg-emerald-500/10 text-success" },
   quota_exhausted: { label: "Out of credits", cls: "bg-destructive/15 text-destructive" },
@@ -87,6 +78,7 @@ function HealthPill({ status }: { status?: string }) {
 
 export default function SettingsPage() {
   const totals = useQuery(api.apiLogs.totals);
+  const isAdmin = useQuery(api.authz.isAdmin);
   const logs = useQuery(api.apiLogs.list);
   const health = useQuery(api.providerHealth.list);
   const settings = useQuery(api.settings.get);
@@ -185,6 +177,16 @@ export default function SettingsPage() {
 
           {/* Usage summary */}
           <SectionHeading>Usage</SectionHeading>
+          {/* Tidiness only — the server is the gate. A non-admin who types
+              /admin gets a thrown error either way. */}
+          {isAdmin && (
+            <p className="-mt-4 mb-4 text-sm text-muted-foreground">
+              <Link to="/admin" className="font-medium text-foreground underline">
+                Usage across the deployment
+              </Link>{" "}
+              — spend by operation and by day.
+            </p>
+          )}
           {totals === undefined ? (
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
               <Skeleton className="h-20" />
