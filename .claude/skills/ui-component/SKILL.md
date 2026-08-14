@@ -68,8 +68,12 @@ npx tsc -b && npm run lint
 `npm run lint` has **2 known pre-existing errors** in `src/components/viewer/`.
 The gate is "still exactly 2", not "clean".
 
-Then run the app (`preview_start` with the `app` config in `.claude/launch.json`)
-and, for anything interactive:
+Then run the app (`preview_start` with the `app` config in `.claude/launch.json`).
+Confirm the page renders and the console is clean — always. Then, **only if you
+added or changed something that manages focus** (a dialog, popover, combobox,
+menu, tab set, or a new `src/components/ui/` primitive), drive the keyboard.
+Moving existing controls around — routing, layout, restructuring — does not earn
+a keyboard pass:
 
 - Tab and Shift-Tab through every control — focus ring visible at each stop
 - Enter / Space do what a click does

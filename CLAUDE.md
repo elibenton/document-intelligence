@@ -168,11 +168,19 @@ paired modifiers (`--text-sm--line-height` and friends) are emitted as real
 custom properties and read at use site, so marking it `inline` erases every
 line-height, tracking and weight in the scale with no error.
 
-**Verification is keyboard-first.** A change to anything interactive is
-unverified until it has been driven Tab / Shift-Tab / Enter / Escape, with the
-focus ring visible at every stop and focus back on the trigger after close.
-`npx tsc -b` and `npm run lint` catch the import rules; nothing but doing it
-catches a broken focus trap. `src/` lints clean as of the viewer render-phase
+**Verification is keyboard-first — for overlays.** Adding or changing something
+that *manages focus* — a dialog, popover, combobox, menu, tab set, or a new
+primitive in `src/components/ui/` — is unverified until it has been driven
+Tab / Shift-Tab / Enter / Escape, with the focus ring visible at every stop and
+focus back on the trigger after close. `npx tsc -b` and `npm run lint` catch the
+import rules; nothing but doing it catches a broken focus trap.
+
+The scope is deliberate and was narrowed after it cost more than it found. This
+does *not* apply to routing, layout or structural work that moves existing
+controls around without changing their behaviour: the React Router framework-mode
+migration triggered a full pass that confirmed a tab order nobody had touched.
+If the diff contains no `role=`, no focus management and no new primitive, the
+keyboard pass is not the gate — the browser check that the page still renders is. `src/` lints clean as of the viewer render-phase
 fixes; keep it there. Still treat a repo-wide count as a smell rather than a
 gate — it drifts while another session or your editor is writing, so "is it
 still exactly N" answers the wrong question. The gate is that the file *you*
