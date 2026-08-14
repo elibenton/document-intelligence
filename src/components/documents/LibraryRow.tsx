@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Link } from "react-router";
 import { CircleAlert } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -55,6 +56,9 @@ export function LibraryRow({
     anySelected ? "opacity-0" : "group-hover/check:opacity-0"
   );
 
+  // Set by a shift-click so the change handler that follows it stands aside.
+  const shiftHandled = useRef(false);
+
   return (
     <div
       className={cn(
@@ -101,11 +105,24 @@ export function LibraryRow({
             // Shift-click extends from the last row checked on its own, the
             // way a file list does. Handled on click, not change: only the
             // click event carries the modifier keys.
+            //
+            // It deliberately does *not* preventDefault. Doing so reverted the
+            // browser's own toggle on the row you clicked, and because that row
+            // is the range's endpoint it was already in the new selection — so
+            // its box rendered unchecked while being counted as selected. The
+            // flag instead tells onChange to stand aside, which leaves the
+            // anchor where it was without fighting the DOM.
             onClick={(event) => {
               if (!event.shiftKey) return;
-              if (onShiftClick(index)) event.preventDefault();
+              if (onShiftClick(index)) shiftHandled.current = true;
             }}
-            onChange={(event) => onCheckedChange(event.target.checked, index)}
+            onChange={(event) => {
+              if (shiftHandled.current) {
+                shiftHandled.current = false;
+                return;
+              }
+              onCheckedChange(event.target.checked, index);
+            }}
             className={cn(
               "col-start-1 row-start-1 size-3.5 cursor-pointer accent-primary transition-opacity",
               !anySelected &&
