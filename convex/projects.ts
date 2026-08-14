@@ -1,8 +1,10 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 
+import { beginDocumentTeardown } from "./documents";
 import { slugify } from "./slug";
 
 // ---------------------------------------------------------------------------
@@ -121,12 +123,17 @@ export const create = mutation({
     const name = args.name.trim();
     if (!name) throw new Error("Project name is required");
 
-    return await ctx.db.insert("projects", {
+    // The slug comes back with the id because the caller navigates straight to
+    // /p/:slug, and re-deriving it client-side would miss the -2 suffix that
+    // allocateSlug may have just added.
+    const slug = await allocateSlug(ctx, name);
+    const id = await ctx.db.insert("projects", {
       name,
-      slug: await allocateSlug(ctx, name),
+      slug,
       description: args.description,
       createdAt: Date.now(),
     });
+    return { id, slug };
   },
 });
 
@@ -154,3 +161,169 @@ export const update = mutation({
     await ctx.db.patch(args.id, patch);
   },
 });
+
+// ---------------------------------------------------------------------------
+// Delete a project and everything inside it
+// ---------------------------------------------------------------------------
+
+/**
+ * Rows deleted per transaction. Documents are far lower than the rest because
+ * each one frees storage and schedules its own cascade.
+ */
+const PROJECT_DOCUMENT_BATCH = 4;
+const PROJECT_ROW_BATCH = 64;
+
+/** Phases of `drainProjectDeletion`, in the order they run. */
+const PROJECT_PHASE = {
+  documents: 0,
+  entities: 1,
+  searches: 2,
+  views: 3,
+  done: 4,
+} as const;
+
+/**
+ * Delete a project and every document, entity, search and view inside it.
+ *
+ * The project row goes immediately so the picker updates, and the contents are
+ * drained a bounded batch per transaction — a project is an unbounded amount of
+ * data, and a single-transaction delete would roll back on its limits and leave
+ * the project permanently undeletable.
+ *
+ * Documents are handed to the same teardown a single delete uses, so each one
+ * cancels its queued work, frees its files, and cascades its own derived rows.
+ */
+export const remove = mutation({
+  args: { id: v.id("projects") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.id);
+    if (!project) return null;
+    await ctx.db.delete(args.id);
+    await ctx.scheduler.runAfter(0, internal.projects.drainProjectDeletion, {
+      projectId: args.id,
+      phase: PROJECT_PHASE.documents,
+    });
+    return null;
+  },
+});
+
+export const drainProjectDeletion = internalMutation({
+  args: { projectId: v.id("projects"), phase: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { projectId } = args;
+    let more = false;
+
+    if (args.phase === PROJECT_PHASE.documents) {
+      const docs = await ctx.db
+        .query("documents")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .take(PROJECT_DOCUMENT_BATCH);
+      for (const doc of docs) await beginDocumentTeardown(ctx, doc._id);
+      more = docs.length === PROJECT_DOCUMENT_BATCH;
+    } else if (args.phase === PROJECT_PHASE.entities) {
+      more = await drainProjectEntities(ctx, projectId);
+    } else if (args.phase === PROJECT_PHASE.searches) {
+      const searches = await ctx.db
+        .query("searches")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .take(PROJECT_ROW_BATCH);
+      for (const row of searches) await ctx.db.delete(row._id);
+      more = searches.length === PROJECT_ROW_BATCH;
+    } else if (args.phase === PROJECT_PHASE.views) {
+      const views = await ctx.db
+        .query("projectViews")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .take(PROJECT_ROW_BATCH);
+      for (const row of views) await ctx.db.delete(row._id);
+      more = views.length === PROJECT_ROW_BATCH;
+    } else {
+      return null;
+    }
+
+    const next = more ? args.phase : args.phase + 1;
+    if (next >= PROJECT_PHASE.done) return null;
+    await ctx.scheduler.runAfter(0, internal.projects.drainProjectDeletion, {
+      projectId,
+      phase: next,
+    });
+    return null;
+  },
+});
+
+/**
+ * Entities belonging to this project, with the rows that point at them.
+ *
+ * Most of an entity's dependents are document-scoped and will already have gone
+ * with their documents; this sweep exists for what survives that — a `starred`
+ * entity the document cascade deliberately spares, and any legacy row whose
+ * document link was never set. Deleting the entity without them would leave a
+ * dangling `v.id("entities")`, which Convex does not police.
+ *
+ * Runs alongside the document cascades rather than after them. That is safe:
+ * conflicting transactions are retried, and every read here is re-done on retry.
+ */
+async function drainProjectEntities(
+  ctx: MutationCtx,
+  projectId: Id<"projects">
+): Promise<boolean> {
+  const entities = await ctx.db
+    .query("entities")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .take(8);
+
+  for (const entity of entities) {
+    let deferred = false;
+
+    const sourceRels = await ctx.db
+      .query("relationships")
+      .withIndex("by_source", (q) => q.eq("sourceEntityId", entity._id))
+      .take(PROJECT_ROW_BATCH);
+    for (const rel of sourceRels) await ctx.db.delete(rel._id);
+    deferred ||= sourceRels.length === PROJECT_ROW_BATCH;
+
+    const targetRels = await ctx.db
+      .query("relationships")
+      .withIndex("by_target", (q) => q.eq("targetEntityId", entity._id))
+      .take(PROJECT_ROW_BATCH);
+    for (const rel of targetRels) await ctx.db.delete(rel._id);
+    deferred ||= targetRels.length === PROJECT_ROW_BATCH;
+
+    const roles = await ctx.db
+      .query("entityRoles")
+      .withIndex("by_entity", (q) => q.eq("entityId", entity._id))
+      .take(PROJECT_ROW_BATCH);
+    for (const role of roles) await ctx.db.delete(role._id);
+    deferred ||= roles.length === PROJECT_ROW_BATCH;
+
+    const mentions = await ctx.db
+      .query("mentions")
+      .withIndex("by_entity", (q) => q.eq("entityId", entity._id))
+      .take(PROJECT_ROW_BATCH);
+    for (const mention of mentions) await ctx.db.delete(mention._id);
+    deferred ||= mentions.length === PROJECT_ROW_BATCH;
+
+    const asSource = await ctx.db
+      .query("mergeSuggestions")
+      .withIndex("by_source_and_target", (q) =>
+        q.eq("sourceEntityId", entity._id)
+      )
+      .take(PROJECT_ROW_BATCH);
+    for (const s of asSource) await ctx.db.delete(s._id);
+    deferred ||= asSource.length === PROJECT_ROW_BATCH;
+
+    const asTarget = await ctx.db
+      .query("mergeSuggestions")
+      .withIndex("by_target", (q) => q.eq("targetEntityId", entity._id))
+      .take(PROJECT_ROW_BATCH);
+    for (const s of asTarget) await ctx.db.delete(s._id);
+    deferred ||= asTarget.length === PROJECT_ROW_BATCH;
+
+    // Still has dependents that didn't fit this batch — leave the entity in
+    // place and finish it on the next pass, so nothing is ever orphaned.
+    if (!deferred) await ctx.db.delete(entity._id);
+  }
+
+  return entities.length > 0;
+}

@@ -181,8 +181,8 @@ export const retryBlocked = mutation({
       .withIndex("by_status", (q) => q.eq("status", "failed"))
       .take(100);
 
-    const blocked = failed.filter(
-      (d) => d.archivedAt === undefined && BLOCKING_FAILURE_CODES.has(d.errorCode ?? "")
+    const blocked = failed.filter((d) =>
+      BLOCKING_FAILURE_CODES.has(d.errorCode ?? "")
     );
 
     // Retrying is the user telling us the block is cleared, so lift the pause
@@ -408,7 +408,12 @@ export const updateJobStatus = internalMutation({
         ...(args.status === "running" ? { startedAt: Date.now() } : {}),
         ...(args.status === "completed" ? { completedAt: Date.now() } : {}),
       });
-    } else {
+    } else if ((await ctx.db.get(args.documentId)) !== null) {
+      // Only insert for a document that still exists. A stage still running
+      // when its document was deleted would otherwise re-create the job row the
+      // cascade just removed, and that zombie is read by the queue estimator's
+      // global pending/running scan — skewing the position and ETA shown for
+      // every other document, forever.
       await ctx.db.insert("processingJobs", {
         documentId: args.documentId,
         stage: args.stage,

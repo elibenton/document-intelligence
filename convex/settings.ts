@@ -111,7 +111,6 @@ export const backfillTranslations = internalMutation({
       cursor: args.cursor,
     });
     for (const document of page.page) {
-      if (document.archivedAt !== undefined) continue;
       await ctx.runMutation(internal.translations.queueTranslation, {
         documentId: document._id,
         languageCode: args.languageCode,

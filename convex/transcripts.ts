@@ -54,6 +54,10 @@ export const ingestTranscript = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // Runs before the first call that touches the document row, so nothing else
+    // would stop a transcript landing for a document deleted mid-transcription.
+    if ((await ctx.db.get(args.documentId)) === null) return null;
+
     // Replace any previous transcript for this document
     const existing = await ctx.db
       .query("transcriptSegments")

@@ -50,6 +50,13 @@ export const ingestGraph = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
+    // This mutation writes entities, mentions, roles and edges without ever
+    // touching the document row, so it is not covered by the "patch throws on a
+    // deleted id" rollback every other ingest path relies on. Deleting a
+    // document during the reasoning call would otherwise land a whole graph —
+    // and inflated counts on surviving entities — for a document that is gone.
+    if ((await ctx.db.get(args.documentId)) === null) return;
+
     // Re-run safety: replace this document's relationships
     const existing = await ctx.db
       .query("relationships")

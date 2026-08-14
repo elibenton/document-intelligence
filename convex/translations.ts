@@ -305,6 +305,13 @@ export const savePageChunk = internalMutation({
     if (!(await isCurrent(ctx, args.targetLanguageCode, args.translationVersion))) {
       return false;
     }
+    // Read before writing: the document row is only touched at the end of this
+    // mutation, and only conditionally, so nothing else would stop an in-flight
+    // chunk leaving a translation row behind for a document that was deleted
+    // mid-translation.
+    const document = await ctx.db.get(args.documentId);
+    if (!document) return false;
+
     const existing = await ctx.db
       .query("pageTranslations")
       .withIndex("by_document_and_target_and_page", (q) =>
@@ -346,8 +353,7 @@ export const savePageChunk = internalMutation({
     };
     if (existing) await ctx.db.replace(existing._id, value);
     else await ctx.db.insert("pageTranslations", value);
-    const document = await ctx.db.get(args.documentId);
-    if (document && (!document.sourceLanguageCode || document.sourceLanguageCode === "und")) {
+    if (!document.sourceLanguageCode || document.sourceLanguageCode === "und") {
       await ctx.db.patch(args.documentId, { sourceLanguageCode: args.sourceLanguageCode });
     }
     return true;
