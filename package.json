@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "react-router dev",
     "build": "react-router typegen && tsc -b && react-router build",
-    "deploy": "npx @convex-dev/static-hosting deploy --dist ./build/client",
+    "deploy": "npx @convex-dev/static-hosting upload --build --dist ./build/client",
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview"
