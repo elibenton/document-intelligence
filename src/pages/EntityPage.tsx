@@ -5,17 +5,13 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { QuotePreview } from "@/components/entities/QuotePreview";
+import { ProjectSearchDialog } from "@/components/search/ProjectSearchDialog";
 import {
   ConnectionTimeline,
   CounterpartyStrip,
   GroupedConnections,
 } from "@/components/entities/EntityConnections";
-
-const toSlug = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
+import { entitySlug } from "@/lib/entitySlug";
 
 export default function EntityPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -31,7 +27,7 @@ export default function EntityPage() {
   // Prefer the resolved entity's own project for outbound links.
   const linkProjectId = entity?.projectId ?? projectParam ?? null;
   const entityLink = (name: string) =>
-    `/entity/${toSlug(name)}${linkProjectId ? `?project=${linkProjectId}` : ""}`;
+    `/entity/${entitySlug(name)}${linkProjectId ? `?project=${linkProjectId}` : ""}`;
   const documents = useQuery(
     api.entities.documentsForEntity,
     entity ? { entityId: entity._id } : "skip"
@@ -81,6 +77,7 @@ export default function EntityPage() {
 
   return (
     <div className="flex flex-col">
+      {linkProjectId && <ProjectSearchDialog projectId={linkProjectId} />}
       <header className="border-b px-6 py-4">
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
           <Link

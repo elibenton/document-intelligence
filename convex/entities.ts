@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 
 // ---------------------------------------------------------------------------
 // Get a single entity
@@ -46,6 +47,20 @@ export const setStarred = mutation({
 // including their global documentCount for cross-doc display.
 // ---------------------------------------------------------------------------
 
+/**
+ * The type to group an entity under, preferring the stable vocabulary.
+ *
+ * An entity carries both a legacy `type` and a stable `types[]`. Only the
+ * latter is maintained, so the first current type in it wins; the legacy value
+ * is the fallback for rows written before `types[]` existed.
+ */
+function displayType(entity: Doc<"entities">): string {
+  const current = entity.types?.find(
+    (t) => t === "person" || t === "organization"
+  );
+  return current ?? entity.types?.[0] ?? entity.type;
+}
+
 export const byDocument = query({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
@@ -67,12 +82,35 @@ export const byDocument = query({
       [...entityIds].map((id) => ctx.db.get(id as typeof mentions[0]["entityId"]))
     );
 
+    // The role each entity plays in *this* document — "declarant", "attorney",
+    // "respondent". Read in one indexed pass rather than per entity, and a
+    // human's answer wins over the pass's when both exist.
+    const roles = await ctx.db
+      .query("entityRoles")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    const roleByEntity = new Map<string, string>();
+    for (const row of roles) {
+      const existing = roleByEntity.get(row.entityId);
+      if (!existing || row.source === "human") {
+        roleByEntity.set(row.entityId, row.role);
+      }
+    }
+
     return entities
       .filter((e) => e !== null)
       .map((e) => ({
         _id: e._id,
         name: e.name,
-        type: e.type,
+        // The type the sidebar groups by, preferring the stable vocabulary.
+        //
+        // `resolveEntity` unions a new type into `types[]` but never rewrites
+        // the legacy `type` — despite the schema comment claiming they stay in
+        // sync. So an entity the extraction path first saw as a "place", which
+        // the graph pass has since resolved as an organization, still carries
+        // `type: "places"` and would group under a heading nothing writes to.
+        type: displayType(e),
+        role: roleByEntity.get(e._id),
         documentCount: e.documentCount,
         mentionCount: e.mentionCount,
         localMentionCount: localCounts.get(e._id) ?? 0,

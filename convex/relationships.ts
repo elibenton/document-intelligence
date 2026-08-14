@@ -1,7 +1,11 @@
 import { internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { resolveEntity, recountEntity } from "./entityResolution";
-import type { Id } from "./_generated/dataModel";
+import {
+  resolveEntity,
+  recountEntity,
+  LEGACY_TO_STABLE,
+} from "./entityResolution";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   canonicalizeRelation,
   relationLabel,
@@ -12,19 +16,35 @@ import {
 // Mutation: resolve names to entities and store relationship rows
 // ---------------------------------------------------------------------------
 
-export const ingestRelationships = internalMutation({
+/**
+ * Store one document's graph: the entities it names, then how they connect.
+ *
+ * Entities are resolved first and completely, so an entity that participates in
+ * no relationship still lands — a person named once is still someone the reader
+ * asked to see. The relationship loop then looks names up in that map rather
+ * than resolving them itself, which is why an endpoint the model never listed
+ * is dropped upstream instead of creating an untyped row here.
+ */
+export const ingestGraph = internalMutation({
   args: {
     documentId: v.id("documents"),
+    entities: v.array(
+      v.object({
+        name: v.string(),
+        /** Legacy `type` value — "people" | "organization" | project-declared. */
+        type: v.string(),
+        role: v.optional(v.string()),
+      })
+    ),
     relationships: v.array(
       v.object({
         sourceName: v.string(),
-        sourceType: v.string(),
         targetName: v.string(),
-        targetType: v.string(),
         relationType: v.string(),
         quote: v.string(),
         pageNumber: v.optional(v.number()),
         eventDate: v.optional(v.string()),
+        place: v.optional(v.string()),
         confidence: v.number(),
       })
     ),
@@ -37,7 +57,28 @@ export const ingestRelationships = internalMutation({
       .collect();
     for (const rel of existing) await ctx.db.delete(rel._id);
 
-    if (args.relationships.length === 0) return;
+    if (args.entities.length === 0) return;
+
+    // Re-run safety for entities, which is subtler than for relationships.
+    //
+    // entities.byDocument is mention-driven, so an entity keeps appearing in
+    // this document's sidebar for exactly as long as it has a mention here —
+    // regardless of whether the current pass named it. Leaving the old rows in
+    // place meant every entity a previous vocabulary produced ("United States",
+    // typed `places`) survived a re-run that no longer believes in it.
+    //
+    // Mentions are re-derived from blocks below, so dropping them is not a loss
+    // of anything a human wrote. Counts are fixed up at the end, once the new
+    // mentions exist, rather than twice per entity.
+    const staleMentions = await ctx.db
+      .query("mentions")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    const touched = new Set<Id<"entities">>();
+    for (const mention of staleMentions) {
+      touched.add(mention.entityId);
+      await ctx.db.delete(mention._id);
+    }
 
     const blocks = await ctx.db
       .query("blocks")
@@ -60,65 +101,78 @@ export const ingestRelationships = internalMutation({
     // entity was missing from its sidebar — entities.byDocument is
     // mention-driven — and absent from its documentCount.
     const resolved = new Map<string, Id<"entities">>();
-    const resolve = async (
-      name: string,
-      legacyType: string
-    ): Promise<Id<"entities">> => {
-      const key = name.toLowerCase();
-      const cached = resolved.get(key);
-      if (cached) return cached;
+    for (const entity of args.entities) {
+      const key = entity.name.toLowerCase();
+      if (resolved.has(key)) continue;
 
-      const stableType =
-        { people: "person", organization: "organization", places: "place" }[
-          legacyType
-        ] ?? "other";
+      const stableType = LEGACY_TO_STABLE[entity.type] ?? entity.type;
       const { entityId } = await resolveEntity(ctx, {
-        name,
+        name: entity.name,
         stableType,
         documentId: args.documentId,
       });
 
-      // Idempotent: template extraction may already have recorded this
-      // entity's mentions for this document, and this mutation re-runs on
-      // every relationship rebuild.
-      const existingHere = await ctx.db
-        .query("mentions")
-        .withIndex("by_entity", (q) =>
-          q.eq("entityId", entityId).eq("documentId", args.documentId)
-        )
-        .first();
-      if (!existingHere) {
-        const matchingBlocks = blocks.filter((b) =>
-          b.text.toLowerCase().includes(key)
-        );
-        for (const block of matchingBlocks) {
-          const pageId = pageIdByNumber.get(block.pageNumber);
-          if (!pageId) continue;
-          await ctx.db.insert("mentions", {
+      // The contextual role this entity plays in this document, when the pass
+      // named one. Never overwrites a human's answer, and never duplicates: a
+      // re-run of the same document must not stack three "witness" rows.
+      if (entity.role) {
+        const already = await ctx.db
+          .query("entityRoles")
+          .withIndex("by_entity_and_document", (q) =>
+            q.eq("entityId", entityId).eq("documentId", args.documentId)
+          )
+          .collect();
+        if (!already.some((r) => r.role === entity.role)) {
+          await ctx.db.insert("entityRoles", {
             entityId,
             documentId: args.documentId,
-            pageId,
-            pageNumber: block.pageNumber,
-            text: block.text,
+            role: entity.role,
             confidence: 1.0,
-            blockId: block.blockId,
-            bbox: block.bbox,
+            source: "ai",
           });
         }
-        if (matchingBlocks.length > 0) await recountEntity(ctx, entityId);
       }
-      resolved.set(key, entityId);
-      return entityId;
-    };
 
-    // Dedupe identical (source, target, type) triples within this batch
+      // Unconditional: this document's mentions were just cleared, so there is
+      // nothing left to be idempotent about, and a stale gate here is what let
+      // an entity keep a previous run's evidence.
+      const matchingBlocks = blocks.filter((b) =>
+        b.text.toLowerCase().includes(key)
+      );
+      for (const block of matchingBlocks) {
+        const pageId = pageIdByNumber.get(block.pageNumber);
+        if (!pageId) continue;
+        await ctx.db.insert("mentions", {
+          entityId,
+          documentId: args.documentId,
+          pageId,
+          pageNumber: block.pageNumber,
+          text: block.text,
+          confidence: 1.0,
+          blockId: block.blockId,
+          bbox: block.bbox,
+        });
+      }
+      touched.add(entityId);
+      resolved.set(key, entityId);
+    }
+
+    // Dedupe identical (source, target, type, date, place) rows within this
+    // batch.
+    //
+    // The date is part of the key because leaving it out made two meetings
+    // between the same pair on different dates collapse into one row, and the
+    // survivor was whichever the model happened to emit first — silently
+    // discarding the second date. Place is in the key for the same reason. The
+    // quote is deliberately *not*: the model often supports one fact with two
+    // different sentences, and those are duplicates worth collapsing.
     const seen = new Set<string>();
     for (const rel of args.relationships) {
-      const sourceId = await resolve(rel.sourceName, rel.sourceType);
-      const targetId = await resolve(rel.targetName, rel.targetType);
-      if (sourceId === targetId) continue;
+      const sourceId = resolved.get(rel.sourceName.toLowerCase());
+      const targetId = resolved.get(rel.targetName.toLowerCase());
+      if (!sourceId || !targetId || sourceId === targetId) continue;
 
-      const dedupKey = `${sourceId}:${targetId}:${rel.relationType}`;
+      const dedupKey = `${sourceId}:${targetId}:${rel.relationType}:${rel.eventDate ?? ""}:${rel.place ?? ""}`;
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
 
@@ -131,8 +185,15 @@ export const ingestRelationships = internalMutation({
         quote: rel.quote || undefined,
         pageNumber: rel.pageNumber,
         eventDate: rel.eventDate,
+        place: rel.place,
       });
     }
+
+    // Counts last, once for each entity this run touched — which includes the
+    // ones it dropped. An entity that lost its only mentions here has to see
+    // its documentCount fall, or it keeps claiming a document that no longer
+    // names it.
+    for (const entityId of touched) await recountEntity(ctx, entityId);
   },
 });
 // ---------------------------------------------------------------------------
@@ -151,6 +212,97 @@ export const ingestRelationships = internalMutation({
  * index reads combined, and the client would otherwise re-derive it on every
  * render.
  */
+/**
+ * Types worth showing in the document panel.
+ *
+ * Extraction still produces places and — via the suggested-extraction path,
+ * which types entities by JSON schema key — rows typed `dates`, `parties` and
+ * worse. Filtering here rather than at extraction keeps the change reversible
+ * and the underlying data intact: this is a display decision until the
+ * vocabulary itself is narrowed.
+ */
+const SHOWN_TYPES = new Set(["person", "organization"]);
+
+function isShownType(entity: Doc<"entities">): boolean {
+  // `types[]` is the stable vocabulary and wins when present; `type` is the
+  // legacy value, which for rows minted by suggested extraction is an
+  // arbitrary schema key that maps to nothing.
+  const stable = entity.types?.length
+    ? entity.types
+    : [LEGACY_TO_STABLE[entity.type] ?? entity.type];
+  return stable.some((t) => SHOWN_TYPES.has(t));
+}
+
+/**
+ * Every relationship a single document asserts, between people and organizations.
+ *
+ * `forEntity` answers "what touches this person" and phrases each row from that
+ * person's side. A document has no such subject, so both endpoints are named
+ * and the row is always read left-to-right — which means an inverting phrase
+ * ("X employs Y" for the canonical `employed_by`) swaps the endpoints here
+ * rather than flipping the label.
+ *
+ * `hidden` is returned rather than silently dropped: a panel that quietly shows
+ * a third of what it found reads as "this document has few connections".
+ */
+export const byDocument = query({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("relationships")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .take(200);
+
+    const connections = [];
+    let hidden = 0;
+    for (const rel of rows) {
+      const source = await ctx.db.get(rel.sourceEntityId);
+      const target = await ctx.db.get(rel.targetEntityId);
+      if (!source || !target) continue;
+      if (!isShownType(source) || !isShownType(target)) {
+        hidden++;
+        continue;
+      }
+
+      const canonical = canonicalizeRelation(rel.relationType);
+      const [from, to] = canonical.invert ? [target, source] : [source, target];
+
+      connections.push({
+        _id: rel._id,
+        canonicalId: canonical.id,
+        canonicalKnown: canonical.known,
+        /** Read from the source's side: "paid", "employed by". */
+        label: relationLabel(canonical.id, "outgoing"),
+        /**
+         * The same fact read from the target's side: "was paid by". The
+         * sidebar lists a connection beneath both endpoints, and a row filed
+         * under the person who *received* the money must not say "paid".
+         */
+        inverseLabel: relationLabel(canonical.id, "incoming"),
+        /** As the document worded it — provenance, not a grouping key. */
+        relationType: rel.relationType,
+        confidence: rel.confidence,
+        quote: rel.quote,
+        pageNumber: rel.pageNumber,
+        eventDate: rel.eventDate,
+        place: rel.place,
+        source: { _id: from._id, name: from.name, type: from.type },
+        target: { _id: to._id, name: to.name, type: to.type },
+      });
+    }
+
+    // Same ordering as forEntity: strongest relation first, then most recent.
+    connections.sort((a, b) => {
+      const byRelation =
+        relationSortIndex(a.canonicalId) - relationSortIndex(b.canonicalId);
+      if (byRelation !== 0) return byRelation;
+      return (b.eventDate ?? "").localeCompare(a.eventDate ?? "");
+    });
+
+    return { connections, hidden };
+  },
+});
+
 export const forEntity = query({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {

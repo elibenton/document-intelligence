@@ -83,6 +83,22 @@ const DATE_RULE =
   'If the document does not state its own date, or you would be choosing between candidates, return precision "unknown" with an empty value. Returning unknown is correct and expected; guessing is not.';
 
 /**
+ * The place rule.
+ *
+ * Deliberately the same bargain as DATE_RULE: place the document from what it
+ * says about itself, not from what it is about. A contract dispute over a
+ * Nairobi warehouse, filed in London, is placed in London — the warehouse is a
+ * fact in the document, not the document's own location. Getting that backwards
+ * would make the field mean two different things in two different documents,
+ * which is worse than it being empty.
+ */
+const PLACE_RULE =
+  "Place the document only from a place the document states about itself: a letterhead address, dateline, filing venue or court location, issuing office, place of signing, or registration seat. " +
+  "Do not place it from the locations it discusses — a report about a site elsewhere is placed where the report was issued, not where the site is. " +
+  "Name the place as the document names it, most specific first, and do not add administrative levels the text does not give. " +
+  "If the document does not place itself, or you would be choosing between candidates, return an empty value. Returning unknown is correct and expected; guessing is not.";
+
+/**
  * The library title rule.
  *
  * This was its own Interfaze call (convex/renameNode.ts) working from derived
@@ -122,8 +138,8 @@ export function buildAnalyzePrompt(options: {
     ? ` Original filename: "${options.fileName}".`
     : "";
   return options.csv
-    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE}`
-    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE}`;
+    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE}`
+    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE}`;
 }
 
 /**
@@ -284,6 +300,29 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
         },
         required: ["value", "precision", "evidence"],
       },
+      // Declared after document_date, so the model has already been through one
+      // round of "state it or decline" before it is asked to place the
+      // document, and after display_title, so a place cannot leak into the
+      // title. Structured for the same reason document_date is: the evidence
+      // string is what makes declining cheaper than guessing.
+      place: {
+        type: "object",
+        description:
+          "Where the document situates itself. See the place rule in the instruction — unknown is a correct answer.",
+        properties: {
+          value: {
+            type: "string",
+            description:
+              'The place as the document names it, most specific first: "Geneva, Switzerland", "San Francisco County". Empty string when the document never places itself.',
+          },
+          evidence: {
+            type: "string",
+            description:
+              "The exact text the place was read from, quoted from the document. Empty when unknown.",
+          },
+        },
+        required: ["value", "evidence"],
+      },
       author: {
         type: "string",
         description: "Author or creator if identifiable, or Unknown",
@@ -298,58 +337,10 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
         description: "True when meaningful passages use more than one language",
       },
       // A document type is a path, not a word: "Writ of Mandate" is a kind of
-      // "Legal Document", and both are true of the same file. Multi-level and
-      // multi-select, so the type filter can be broad or exact.
-       // Scanned batches routinely staple unrelated documents together. Analyze
-      // reads the whole text, so it is the only pass positioned to say where one
-      // document ends. These are *suggestions*: nothing splits without the user.
-       // The pills in the extraction review queue. `suggested_roles` above is the
-      // per-entity-role version this generalizes: these are whole extraction
-      // prompts the user can run, edit, or discard.
-      suggested_extractions: {
-        type: "array",
-        description:
-          "3-6 extractions worth running on this specific document, most valuable first. Base them on what this document actually contains, not on what its kind usually contains.",
-        items: {
-          type: "object",
-          properties: {
-            label: {
-              type: "string",
-              description: "Short pill label, 1-3 words, e.g. 'Parties' or 'Dates'",
-            },
-            prompt: {
-              type: "string",
-              description:
-                "The full extraction prompt to run, written so the user can edit it directly",
-            },
-            rationale: {
-              type: "string",
-              description: "One sentence on why this document warrants it",
-            },
-          },
-          required: ["label", "prompt", "rationale"],
-        },
-      },
       tags: {
         type: "array",
         items: { type: "string" },
         description: "3-6 concise lowercase topical tags",
-      },
-      suggested_roles: {
-        type: "array",
-        description: "Entity roles worth extracting from this document kind",
-        items: {
-          type: "object",
-          properties: {
-            role: { type: "string" },
-            question: { type: "string" },
-            entity_type: {
-              type: "string",
-              enum: ["person", "organization", "place", "other"],
-            },
-          },
-          required: ["role", "question", "entity_type"],
-        },
       },
       // Flat-with-level rather than nested children: JSON Schema can't express a
       // recursive tree without $ref, and a depth number rebuilds the same shape
@@ -396,8 +387,6 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
       "document_date",
       "primary_category",
       "tags",
-      "suggested_roles",
-      "suggested_extractions",
       "table_of_contents",
       "additional",
     ],

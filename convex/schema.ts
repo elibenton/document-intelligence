@@ -98,18 +98,15 @@ export default defineSchema({
     // inferred from content; see the dating rule in convex/analyzePrompt.ts.
     documentDate: v.optional(v.string()),
     documentDatePrecision: v.optional(v.string()), // "day" | "month" | "year"
-    // Per-document extraction suggestions from the understanding pass. These
-    // must not be inferred back from a broad shared kind such as "report":
-    // two reports can require entirely different entities.
-    suggestedRoles: v.optional(
-      v.array(
-        v.object({
-          role: v.string(),
-          question: v.string(),
-          entityType: v.string(),
-        })
-      )
-    ),
+    // Where the document situates itself — written, issued, filed, or about.
+    // As the document names it ("Geneva, Switzerland"), not resolved to an
+    // entity or coordinates: this is the free "where" that rides along on the
+    // Analyze response, and the same bargain as documentDate applies — absent
+    // means the document never placed itself, and guessing is not wanted.
+    documentPlace: v.optional(v.string()),
+    // The quote the place was read from. Present for the same reason
+    // document_date.evidence is: it makes guessing feel expensive.
+    documentPlaceEvidence: v.optional(v.string()),
     tags: v.optional(v.array(v.string())),
     // Detailed metadata extractor output (JSON string), human-editable
     metadata: v.optional(v.string()),
@@ -125,17 +122,6 @@ export default defineSchema({
      // Analyze's guess at where this file contains more than one document.
     // Suggestions only — splitting is a user action and would need provenance
     // (a parent document id on the pieces), which does not exist yet.
-     // Extraction pills for the review queue: label, the editable prompt behind
-    // it, and why this document warrants it.
-    suggestedExtractions: v.optional(
-      v.array(
-        v.object({
-          label: v.string(),
-          prompt: v.string(),
-          rationale: v.string(),
-        })
-      )
-    ),
     tableOfContents: v.optional(
       v.array(
         v.object({
@@ -219,6 +205,14 @@ export default defineSchema({
     .searchIndex("search_name", {
       searchField: "name",
       filterFields: ["projectId"],
+    })
+    // The two names are searched separately because they are different things:
+    // `name` is the upload filename, `displayName` is the title the rename pass
+    // wrote and the UI actually shows. A search index takes one field, and the
+    // title is the one people type, so it gets its own and leads the results.
+    .searchIndex("search_displayName", {
+      searchField: "displayName",
+      filterFields: ["projectId"],
     }),
 
   // The enforced primary-category taxonomy ("legal" | "government" | ...),
@@ -240,19 +234,15 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_key", ["key"]),
 
-  // Semantic document kinds with their default extraction templates.
-  // Grows organically: the AI proposes new kinds, humans own them.
+  // Semantic document kinds. Grows organically: the AI proposes new kinds,
+  // humans own them, and Analyze is shown the existing list so it reuses a
+  // name rather than inventing a synonym. These used to carry a default
+  // extraction template (templateRoles); roles now come per document from the
+  // graph pass, which is strictly better — two reports can involve entirely
+  // different people.
   documentKinds: defineTable({
     name: v.string(),
     source: v.string(), // "ai" | "human"
-    // Default extraction template: what to look for and the question to ask
-    templateRoles: v.array(
-      v.object({
-        role: v.string(), // contextual role, e.g. "witness", "filer"
-        question: v.string(), // the question Interfaze asks during extraction
-        entityType: v.string(), // stable type: "person" | "organization" | "place" | "other"
-      })
-    ),
   }).index("by_name", ["name"]),
 
   // Contextual roles an entity plays in a specific document
@@ -267,6 +257,26 @@ export default defineSchema({
     .index("by_entity", ["entityId"])
     .index("by_document", ["documentId"])
     .index("by_entity_and_document", ["entityId", "documentId"]),
+
+  // Entity types a project cares about beyond person and organization.
+  //
+  // The base two are universal and live in code (convex/relationshipsNode.ts).
+  // These are per-project additions — "vessels", "bank accounts" — declared by
+  // the user and folded into the extraction schema's type enum at call time,
+  // the same way primary_category's enum is built from live documentCategories.
+  // Declaring one changes what NEW documents extract; nothing is backfilled.
+  projectEntityTypes: defineTable({
+    projectId: v.id("projects"),
+    /** Lowercase slug. This is the value stored in entities.types[]. */
+    key: v.string(),
+    /** What the group is called in the sidebar. */
+    label: v.string(),
+    /** Told to the model verbatim, so it reads as a definition. */
+    description: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_project_and_key", ["projectId", "key"]),
 
   // Fuzzy entity-match suggestions awaiting human confirmation.
   // Accepting merges `sourceEntityId` into `targetEntityId` and teaches an alias;
@@ -491,13 +501,6 @@ export default defineSchema({
   }).index("by_key", ["key"]),
 
   // Structured extraction results from Interfaze structured-output extraction
-  extractions: defineTable({
-    documentId: v.id("documents"),
-    schemaUsed: v.string(), // JSON string of the schema that was used
-    results: v.string(), // JSON string of extraction_schema_json
-    pageRange: v.optional(v.string()), // which pages were extracted
-    extractedAt: v.number(),
-  }).index("by_document", ["documentId"]),
 
   // Deduplicated entities (people, organizations, custom types).
   // Entities are per-project: the same real-world person in two projects is
@@ -580,29 +583,6 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 
-  // Web-research dossiers for an entity, produced by convex/research.ts
-  research: defineTable({
-    documentId: v.id("documents"),
-    entityName: v.string(),
-    query: v.string(),
-    content: v.string(), // JSON dossier matching DOSSIER_SCHEMA
-    citations: v.array(v.string()), // source URLs
-    searchResults: v.optional(
-      v.array(
-        v.object({
-          title: v.string(),
-          url: v.string(),
-          snippet: v.string(),
-        })
-      )
-    ),
-    model: v.string(),
-    status: v.string(), // "pending" | "completed" | "failed"
-    errorMessage: v.optional(v.string()),
-    createdAt: v.number(),
-  })
-    .index("by_document", ["documentId"])
-    .index("by_document_entity", ["documentId", "entityName"]),
 
   // One row per external AI provider: is it actually usable right now?
   //
@@ -675,6 +655,10 @@ export default defineSchema({
     quote: v.optional(v.string()),
     pageNumber: v.optional(v.number()), // 0-indexed page where the quote appears
     eventDate: v.optional(v.string()), // when the relationship occurred, if stated (ISO-ish)
+    // Where this particular event happened, as the quote names it. Distinct
+    // from documents.documentPlace, which is where the document itself is
+    // from: a London-filed report can describe a meeting in Geneva.
+    place: v.optional(v.string()),
   })
     .index("by_source", ["sourceEntityId"])
     .index("by_target", ["targetEntityId"])

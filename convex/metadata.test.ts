@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeDocumentDate, sanitizeTableOfContents } from "./metadata";
+import {
+  sanitizeDocumentDate,
+  sanitizeDocumentPlace,
+  sanitizeTableOfContents,
+} from "./metadata";
 
 describe("sanitizeTableOfContents", () => {
   it("keeps a well-formed outline as-is", () => {
@@ -122,6 +126,51 @@ describe("sanitizeDocumentDate", () => {
     ).toBeNull();
     expect(
       sanitizeDocumentDate({ value: "2030", precision: "year" }, NOW)
+    ).toBeNull();
+  });
+});
+
+describe("sanitizeDocumentPlace", () => {
+  it("keeps a place the document stated, with its evidence", () => {
+    expect(
+      sanitizeDocumentPlace({
+        value: "Geneva, Switzerland",
+        evidence: "Done at Geneva, Switzerland, this 8th day of August",
+      })
+    ).toEqual({
+      documentPlace: "Geneva, Switzerland",
+      documentPlaceEvidence: "Done at Geneva, Switzerland, this 8th day of August",
+    });
+  });
+
+  it("keeps a place with no evidence quote", () => {
+    expect(sanitizeDocumentPlace({ value: "San Francisco County" })).toEqual({
+      documentPlace: "San Francisco County",
+      documentPlaceEvidence: undefined,
+    });
+  });
+
+  it("collapses whitespace a line break left in the middle of a place", () => {
+    expect(
+      sanitizeDocumentPlace({ value: "  London,\n  England " })?.documentPlace
+    ).toBe("London, England");
+  });
+
+  it("drops the refusal words Analyze reaches for instead of an empty value", () => {
+    for (const value of ["Unknown", "n/a", "None", "not stated", "unspecified"]) {
+      expect(sanitizeDocumentPlace({ value })).toBeNull();
+    }
+    expect(sanitizeDocumentPlace({ value: "" })).toBeNull();
+    expect(sanitizeDocumentPlace(undefined)).toBeNull();
+  });
+
+  it("drops prose where a place name belongs", () => {
+    // A sentence in this field is the model narrating rather than declining.
+    expect(
+      sanitizeDocumentPlace({
+        value:
+          "The document does not state where it was written, though it discusses properties in several counties across the state and refers to a filing office.",
+      })
     ).toBeNull();
   });
 });

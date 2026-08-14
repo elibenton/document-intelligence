@@ -10,11 +10,7 @@ import { isCsvDocument } from "@/lib/uploadTypes";
 import { languageName } from "@/lib/languages";
 import { Button } from "@/components/ui/button";
 import { FLOATING_SURFACE } from "@/components/viewer/surfaces";
-import {
-  AnalyzeRetryDialog,
-  ExtractRetryDialog,
-  type TemplateRole,
-} from "./StageRetryDialog";
+import { AnalyzeRetryDialog } from "./StageRetryDialog";
 
 type StepStatus = "pending" | "running" | "completed" | "failed" | "waiting";
 
@@ -163,14 +159,13 @@ export function PipelineProgress({
   const documentId = document._id as Id<"documents">;
   const retryPipeline = useAction(api.processing.runFullPipeline);
   const retryAnalyze = useAction(api.processing.runAnalyze);
-  const retryExtract = useAction(api.processing.runTemplateExtraction);
+  const retryRelationships = useAction(api.processing.runRelationships);
   const [retrying, setRetrying] = useState(false);
-  const [dialog, setDialog] = useState<"analyze" | "extract" | null>(null);
+  const [dialog, setDialog] = useState<"analyze" | null>(null);
   const analyzePrompt = useQuery(
     api.analyzePrompt.forDocument,
     dialog === "analyze" ? { documentId } : "skip"
   );
-  const kinds = useQuery(api.kinds.list, dialog === "extract" ? {} : "skip");
   const jobs = useQuery(api.processingJobs.byDocument, { documentId });
   const estimate = useQuery(api.processingJobs.estimateByDocument, { documentId });
   const pages = useQuery(
@@ -182,8 +177,8 @@ export function PipelineProgress({
 
   const jobByStage = new Map((jobs ?? []).map((j) => [j.stage, j]));
   const parseJob = jobByStage.get("parse") ?? jobByStage.get("transcribe");
-  const extractJob = jobByStage.get("extract");
   const analyzeJob = jobByStage.get("analyze");
+  const relationshipsJob = jobByStage.get("relationships");
 
   const failed = document.status === "failed";
 
@@ -206,17 +201,6 @@ export function PipelineProgress({
     parseStatus === "completed" ||
     ["parsed", "extracting", "completed"].includes(document.status);
 
-  // Extract waits on the human confirming the template after parse
-  let extractStatus: StepStatus = jobStatus(extractJob, "pending");
-  if (
-    !extractJob ||
-    extractJob.status === "pending" ||
-    extractJob.status === "canceled"
-  ) {
-    if (document.status === "completed") extractStatus = "completed";
-    else if (parseDone && !failed) extractStatus = "waiting";
-  }
-
   const recording = isAudioVideo(document);
   const csv = isCsvDocument(document);
   const pageTotal = document.pageCount ?? pages?.length;
@@ -238,6 +222,16 @@ export function PipelineProgress({
     setRetrying(true);
     try {
       await retryPipeline({ documentId });
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  async function runRelationshipsRetry() {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await retryRelationships({ documentId });
     } finally {
       setRetrying(false);
     }
@@ -324,20 +318,29 @@ export function PipelineProgress({
                   : "pending",
     },
     {
-      key: "extract",
-      label: "Extract",
-      retry: parseDone
-        ? { label: "Re-run extract…", onActivate: () => setDialog("extract") }
-        : undefined,
+      key: "relationships",
+      label: "Entities",
+      // Enrichment, not a gate: this stage records its own failure and the
+      // document stays completed either way (convex/processing.ts jobComplete).
+      // Documents processed before this stage existed have no job and sit at
+      // "pending" — which is the truth, not a stall.
       detail:
-        extractStatus === "waiting"
-          ? "Confirm what to pull out"
-          : extractStatus === "running"
-            ? "Finding entities"
+        relationshipsJob?.status === "running"
+          ? "Finding people, organizations and their connections"
+          : relationshipsJob?.status === "completed"
+            ? "Mapped"
             : undefined,
-      status: extractStatus,
-      startedAt: extractJob?.startedAt,
-      completedAt: extractJob?.completedAt,
+      status: jobStatus(relationshipsJob, "pending"),
+      // The only way back after a failed run.
+      retry:
+        parseDone
+          ? {
+              label: "Re-run connections",
+              onActivate: () => void runRelationshipsRetry(),
+            }
+          : undefined,
+      startedAt: relationshipsJob?.startedAt,
+      completedAt: relationshipsJob?.completedAt,
     },
   ];
 
@@ -526,35 +529,8 @@ export function PipelineProgress({
         />
       )}
 
-      {dialog === "extract" && kinds !== undefined && (
-        <ExtractRetryDialog
-          defaultRoles={extractDefaultRoles(document, kinds)}
-          onClose={() => setDialog(null)}
-          onRun={async (roles) => {
-            await retryExtract({ documentId, roles });
-          }}
-        />
-      )}
     </div>
   );
-}
-
-/**
- * The template a retry starts from: what this document's analysis suggested,
- * falling back to the saved template for its kind. This is now the only place
- * that precedence lives; the upload review panel that duplicated it is gone,
- * along with the review step it belonged to.
- */
-function extractDefaultRoles(
-  document: Doc<"documents">,
-  kinds: Doc<"documentKinds">[]
-): TemplateRole[] {
-  if (document.suggestedRoles && document.suggestedRoles.length > 0) {
-    return document.suggestedRoles.map((role) => ({ ...role }));
-  }
-  const template = kinds.find((k) => k.name === document.primaryKind)
-    ?.templateRoles;
-  return template ? template.map((r) => ({ ...r })) : [];
 }
 
 /**

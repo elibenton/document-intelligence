@@ -1,6 +1,5 @@
 import {
   action,
-  internalAction,
   internalMutation,
   mutation,
 } from "./_generated/server";
@@ -8,7 +7,6 @@ import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { buildExtractionSchema } from "./extractionSchema";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 
@@ -19,12 +17,6 @@ import { vOnCompleteArgs } from "@convex-dev/workpool";
 
 export const CANCELED_MESSAGE =
   "Processing was stopped before this job started.";
-
-const templateRoleValidator = v.object({
-  role: v.string(),
-  question: v.string(),
-  entityType: v.string(),
-});
 
 
 /** Public retry hook for the transcript UI */
@@ -259,113 +251,51 @@ export const retryBlocked = mutation({
 // Extract entities from an already-parsed document
 // ---------------------------------------------------------------------------
 
-export const runExtraction = action({
-  args: {
-    documentId: v.id("documents"),
-    pageSchema: v.string(),
-    pageRange: v.optional(v.string()),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const shouldEnqueue: boolean = await ctx.runMutation(
-      internal.processing.createJob,
-      {
-        documentId: args.documentId,
-        stage: "extract",
-      }
-    );
-    if (!shouldEnqueue) return null;
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-    const workId = await processingPool.enqueueAction(
-      ctx,
-      internal.processingNode.runExtract,
-      args,
-      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "extract" })
-    );
-    await ctx.runMutation(internal.processing.attachWorkId, {
-      documentId: args.documentId,
-      stage: "extract",
-      workId,
-    });
-    return null;
-  },
-});
+
+
 
 /**
- * Run Analyze's suggestions as soon as Analyze produces them.
+ * Relationship mapping, queued like every other stage.
  *
- * This replaces the extraction review queue. A document used to stop after
- * Analyze and wait for the user to confirm what to pull out of it; now the
- * suggested set just runs, and the user adds more from the document page if
- * the first pass missed something. Nothing here is destructive — extractions
- * accumulate — so the confirmation step was buying caution nobody wanted.
+ * It used to be a bare `ctx.runAction` at the tail of template extraction, and
+ * that cost two things. Template extraction only runs when a human opens the
+ * extract dialog, so a document uploaded and processed normally never mapped a
+ * single relationship. And a bare runAction has no `onComplete`, so the Convex
+ * 10-minute kill left the job row on "running" forever — the exact failure mode
+ * processingPool.ts was written to eliminate.
  *
- * Internal and self-guarding rather than public: it fires from the tail of the
- * pipeline, so it has to be safe to reach twice (an Analyze retry runs it
- * again) and safe to reach on a document that has since moved on.
+ * Scheduled after Extract rather than awaited inside it: relationship mapping
+ * is an enrichment pass, and a document whose extraction succeeded must not be
+ * failed by it.
+ *
+ * Public because that same isolation leaves it without a retry path. A stage
+ * that fails without failing its document is invisible to `retryBlocked`,
+ * which only sweeps documents whose own status is "failed" — so the Connections
+ * step needs its own re-run, the way Analyze and Extract have theirs.
+ * `createJob` returning false is what keeps a second click from stacking runs.
  */
-export const runInitialExtraction = internalAction({
+export const runRelationships = action({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const document = await ctx.runQuery(api.documents.get, {
-      id: args.documentId,
-    });
-    if (!document) return null;
-
-    // Only from the state Analyze leaves behind. A document that is already
-    // extracting, has completed, or has failed is not waiting on this — and
-    // re-running Analyze on a finished document shouldn't silently redo its
-    // extractions.
-    if (document.status !== "parsed") return null;
-
-    const pageSchema = buildExtractionSchema(document.suggestedExtractions ?? []);
-    if (pageSchema === null) return null;
-
     const shouldEnqueue: boolean = await ctx.runMutation(
       internal.processing.createJob,
-      { documentId: args.documentId, stage: "extract" }
+      { documentId: args.documentId, stage: "relationships" }
     );
     if (!shouldEnqueue) return null;
     const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
     const workId = await processingPool.enqueueAction(
       ctx,
-      internal.processingNode.runExtract,
-      { documentId: args.documentId, pageSchema },
-      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "extract" })
+      internal.relationshipsNode.extract,
+      { documentId: args.documentId },
+      processingEnqueueOptions(paused, {
+        documentId: args.documentId,
+        stage: "relationships",
+      })
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
-      stage: "extract",
-      workId,
-    });
-    return null;
-  },
-});
-
-export const runTemplateExtraction = action({
-  args: {
-    documentId: v.id("documents"),
-    roles: v.array(templateRoleValidator),
-    saveToKind: v.optional(v.string()),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const shouldEnqueue: boolean = await ctx.runMutation(
-      internal.processing.createJob,
-      { documentId: args.documentId, stage: "extract" }
-    );
-    if (!shouldEnqueue) return null;
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-    const workId = await processingPool.enqueueAction(
-      ctx,
-      internal.processingNode.runTemplateExtraction,
-      args,
-      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "extract" })
-    );
-    await ctx.runMutation(internal.processing.attachWorkId, {
-      documentId: args.documentId,
-      stage: "extract",
+      stage: "relationships",
       workId,
     });
     return null;
@@ -562,7 +492,7 @@ export const jobComplete = internalMutation({
     if (!doc) return null;
     // A canceled extract leaves a document that is still fully parsed; only an
     // interrupted parse leaves it unusable.
-    if (canceled && stage === "extract") {
+    if (canceled && (stage === "extract" || stage === "relationships")) {
       if (doc.status === "extracting") {
         await ctx.db.patch(documentId, {
           status: "parsed",

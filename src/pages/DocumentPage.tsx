@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useParams, useSearchParams, Link, useNavigate } from "react-router-dom";
 import { Folder } from "lucide-react";
-import { useQuery, useAction, useMutation } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
 import {
@@ -26,7 +26,14 @@ import type { EntityHover } from "@/components/viewer/EntityHighlights";
 import { PipelineProgress } from "@/components/documents/PipelineProgress";
 import { DocumentActions } from "@/components/documents/DocumentActions";
 import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
+import {
+  EntityConnectionList,
+  type DocumentConnection,
+} from "@/components/documents/EntityConnectionList";
+import { ENTITY_TYPE_LABELS, entityTypeKey } from "@/lib/views/entityProperties";
+import { entitySlug } from "@/lib/entitySlug";
 import { DocTypePills } from "@/components/documents/DocTypePills";
+import { ProjectSearchDialog } from "@/components/search/ProjectSearchDialog";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,11 +52,15 @@ export default function DocumentPage() {
   const url = document?.url ?? undefined;
   const blocks = useQuery(api.blocks.byDocument, { documentId });
   const pages = useQuery(api.pages.byDocument, { documentId });
-  const extractions = useQuery(api.extractions.byDocument, { documentId });
-  const runExtraction = useAction(api.processing.runExtraction);
-  const runResearch = useAction(api.research.runResearch);
-  const researchDossiers = useQuery(api.researchQueries.byDocument, { documentId });
+  const addEntityType = useMutation(api.projectEntityTypes.create);
   const documentEntities = useQuery(api.entities.byDocument, { documentId });
+  const projectEntityTypes = useQuery(
+    api.projectEntityTypes.list,
+    document?.projectId ? { projectId: document.projectId } : "skip"
+  );
+  const documentConnections = useQuery(api.relationships.byDocument, {
+    documentId,
+  });
   const detections = useQuery(api.detections.byDocument, { documentId });
   const translatedPages = useQuery(api.translations.pagesByDocument, {
     documentId,
@@ -62,12 +73,15 @@ export default function DocumentPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [showBlocks, setShowBlocks] = useState(false);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  /** Entity names whose connections are showing beneath them. */
+  const [expandedEntities, setExpandedEntities] = useState<Set<string>>(
+    new Set()
+  );
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [customTitle, setCustomTitle] = useState("");
   const [customDescription, setCustomDescription] = useState("");
   const [customExtracting, setCustomExtracting] = useState(false);
   const [showNewEntityForm, setShowNewEntityForm] = useState(false);
-  const [researching, setResearching] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   // Bumped by ⌘F/Ctrl+F. Opens the contents panel if it was minimized and
   // focuses its search box — the document's own find, in place of the
@@ -191,55 +205,44 @@ export default function DocumentPage() {
     }
   }, [isPdfDocument, ensureRendered, documentId]);
 
-  // Parse people from extraction results
-  const people = useMemo(() => {
-    const peopleExtraction = extractions?.find((e) => {
-      try {
-        const schema = JSON.parse(e.schemaUsed);
-        return schema?.properties?.people;
-      } catch {
-        return false;
-      }
-    });
-    if (!peopleExtraction) return [];
-    try {
-      const parsed = JSON.parse(peopleExtraction.results);
-      return Array.isArray(parsed?.people) ? (parsed.people as string[]) : [];
-    } catch {
-      return [];
-    }
-  }, [extractions]);
-
-  // All entity groups: people first, then custom extractions
+  /**
+   * The sidebar's entity groups, read from the entities table.
+   *
+   * This used to parse `extractions` JSON and group by whichever schema key
+   * produced each list — so the panel showed headings like "Parties", "Dates"
+   * and "Key Terms", varying document to document, with a person and a date
+   * rendered as the same kind of thing. The entity rows carry a real type, and
+   * one pass now writes them (convex/relationshipsNode.ts), so the grouping is
+   * the type: People, then Organizations, then anything a project declared.
+   */
   const entityGroups = useMemo(() => {
-    if (!extractions) return people.length > 0 ? [{ id: "people", title: "People", items: people }] : [];
-    const groups: { id: string; title: string; items: string[] }[] = [];
-
-    // People always first
-    if (people.length > 0) {
-      groups.push({ id: "people", title: "People", items: people });
+    if (!documentEntities) return [];
+    const byType = new Map<string, string[]>();
+    for (const entity of documentEntities) {
+      const key = entityTypeKey(entity.type);
+      const names = byType.get(key);
+      if (names) names.push(entity.name);
+      else byType.set(key, [entity.name]);
     }
-
-    // Custom extractions
-    for (const e of extractions) {
-      try {
-        const schema = JSON.parse(e.schemaUsed);
-        if (schema?.properties?.people) continue; // skip built-in people
-        const keys = Object.keys(schema?.properties ?? {});
-        const key = keys[0] ?? "Unknown";
-        const results = JSON.parse(e.results);
-        const val = results?.[key];
-        groups.push({
-          id: e._id,
-          title: key.replace(/_/g, " "),
-          items: Array.isArray(val) ? val : [],
-        });
-      } catch {
-        // ignore
-      }
-    }
-    return groups;
-  }, [extractions, people]);
+    // Known types in their declared order, then project types alphabetically —
+    // so People and Organizations never move around beneath the reader.
+    const known = Object.keys(ENTITY_TYPE_LABELS).filter((key) =>
+      byType.has(key)
+    );
+    const extra = [...byType.keys()]
+      .filter((key) => !(key in ENTITY_TYPE_LABELS))
+      .sort();
+    // A project-declared type carries its own label ("Vessels"); the raw key
+    // is only ever shown if the type was deleted while its entities remain.
+    const declared = new Map(
+      (projectEntityTypes ?? []).map((t) => [t.key, t.label])
+    );
+    return [...known, ...extra].map((key) => ({
+      id: key,
+      title: ENTITY_TYPE_LABELS[key] ?? declared.get(key) ?? key,
+      items: byType.get(key) ?? [],
+    }));
+  }, [documentEntities, projectEntityTypes]);
 
   // Precompute mention counts per entity item across all groups
   const mentionData = useMemo(() => {
@@ -280,6 +283,30 @@ export default function DocumentPage() {
     return [...seen.values()];
   }, [entityGroups]);
 
+  // Connections filed under the entity they belong to, so the sidebar can show
+  // what a document says about a person directly beneath their name. A
+  // connection lands under both of its endpoints — read from each one's side.
+  const connectionsByEntity = useMemo(() => {
+    const map = new Map<Id<"entities">, DocumentConnection[]>();
+    for (const connection of documentConnections?.connections ?? []) {
+      for (const end of [connection.source, connection.target]) {
+        const existing = map.get(end._id);
+        if (existing) existing.push(connection);
+        else map.set(end._id, [connection]);
+      }
+    }
+    return map;
+  }, [documentConnections]);
+
+  /** lowercase name → the role this entity plays in this document. */
+  const roleByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entity of documentEntities ?? []) {
+      if (entity.role) map.set(entity.name.toLowerCase(), entity.role);
+    }
+    return map;
+  }, [documentEntities]);
+
   // Cross-document entity lookup: lowercase name → { entityId, documentCount }
   const crossDocMap = useMemo(() => {
     const map = new Map<string, { entityId: Id<"entities">; documentCount: number }>();
@@ -292,16 +319,6 @@ export default function DocumentPage() {
     }
     return map;
   }, [documentEntities]);
-
-  // Index research dossiers by entity name for quick lookup
-  const researchByEntity = useMemo(() => {
-    const map = new Map<string, Doc<"research">>();
-    if (!researchDossiers) return map;
-    for (const d of researchDossiers) {
-      map.set(d.entityName, d);
-    }
-    return map;
-  }, [researchDossiers]);
 
   if (document === undefined) {
     return (
@@ -325,60 +342,32 @@ export default function DocumentPage() {
     );
   }
 
-  async function handleCustomExtract() {
-    const title = customTitle.trim();
-    const desc = customDescription.trim();
-    if (!title) return;
-
-    const key = title.toLowerCase().replace(/\s+/g, "_");
-    const schema = JSON.stringify({
-      type: "object",
-      properties: {
-        [key]: {
-          type: "array",
-          items: { type: "string" },
-          ...(desc ? { description: desc } : {}),
-        },
-      },
-      required: [key],
-    });
-
+  /**
+   * Declare a type this project should look for from now on.
+   *
+   * This used to run a one-off extraction against this document alone, whose
+   * results became entities typed by the JSON key the form generated — which is
+   * where "dates" and "parties" entities came from. A declared type instead
+   * joins the graph pass's enum for every document read afterwards.
+   */
+  async function handleAddEntityType() {
+    if (!document?.projectId || !customTitle.trim() || !customDescription.trim()) {
+      return;
+    }
     setCustomExtracting(true);
     try {
-      await runExtraction({ documentId, pageSchema: schema });
+      await addEntityType({
+        projectId: document.projectId,
+        label: customTitle.trim(),
+        description: customDescription.trim(),
+      });
       setCustomTitle("");
       setCustomDescription("");
       setShowNewEntityForm(false);
     } catch (err) {
-      console.error("Custom extraction failed:", err);
+      console.error("Adding entity type failed:", err);
     } finally {
       setCustomExtracting(false);
-    }
-  }
-
-  async function handleResearch(entityName: string) {
-    // Gather some document context from nearby mentions
-    const mentions = mentionData.get(entityName) ?? [];
-    const contextSnippets = mentions
-      .slice(0, 3)
-      .map((m) => m.snippet)
-      .join(" … ");
-
-    setResearching((prev) => new Set(prev).add(entityName));
-    try {
-      await runResearch({
-        documentId,
-        entityName,
-        documentContext: contextSnippets || undefined,
-      });
-    } catch (err) {
-      console.error(`Research failed for ${entityName}:`, err);
-    } finally {
-      setResearching((prev) => {
-        const next = new Set(prev);
-        next.delete(entityName);
-        return next;
-      });
     }
   }
 
@@ -432,6 +421,9 @@ export default function DocumentPage() {
     // separate cards rather than a header bar, so the document reads as the
     // thing on the desk and the panels as what is laid over it.
     <div className="flex h-screen flex-col gap-2 bg-viewer-canvas p-2">
+      {document.projectId && (
+        <ProjectSearchDialog projectId={document.projectId} />
+      )}
       {/* Every item in this row shares one height (h-14) so the row reads as
           a single strip — the back button and toolbar chips stretch to match
           the title card via items-stretch, rather than each picking its own
@@ -705,16 +697,62 @@ export default function DocumentPage() {
                   {!isGroupCollapsed && group.items.length > 0 ? (
                     <div className="flex flex-col">
                       {group.items.map((item) => {
-                        const mentions = mentionData.get(item) ?? [];
                         const isActive = selectedItem === item;
-                        const dossier = researchByEntity.get(item);
-                        const isResearching = researching.has(item);
                         const crossDoc = crossDocMap.get(item.toLowerCase());
+                        const role = roleByName.get(item.toLowerCase());
+                        const connections = crossDoc
+                          ? connectionsByEntity.get(crossDoc.entityId) ?? []
+                          : [];
+                        const isExpanded = expandedEntities.has(item);
 
                         return (
                           <div key={item} className="border-b border-border/50 last:border-0">
                             <div className="flex items-center">
+                              {/* Connections live under the name they belong
+                                  to rather than in a tab of their own: the
+                                  reader is already looking at the person they
+                                  care about, and a separate list made them
+                                  find that person again in every row. */}
                               <button
+                                onClick={() =>
+                                  setExpandedEntities((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(item)) next.delete(item);
+                                    else next.add(item);
+                                    return next;
+                                  })
+                                }
+                                disabled={connections.length === 0}
+                                title={
+                                  connections.length === 0
+                                    ? "No connections in this document"
+                                    : `${connections.length} connection${connections.length === 1 ? "" : "s"}`
+                                }
+                                className="shrink-0 pl-1 pr-0.5 py-1.5 disabled:opacity-25"
+                              >
+                                <svg
+                                  width="10"
+                                  height="10"
+                                  viewBox="0 0 10 10"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="1.5"
+                                  className={cn(
+                                    "text-muted-foreground transition-transform",
+                                    isExpanded && "rotate-90"
+                                  )}
+                                >
+                                  <path d="M3 1l4 4-4 4" />
+                                </svg>
+                              </button>
+                              {/* The row highlights the entity in the document;
+                                  the name itself goes to the entity's page.
+                                  A div rather than a button because a link
+                                  cannot legally nest inside one, and the name
+                                  is the thing a reader reaches for. */}
+                              <div
+                                role="button"
+                                tabIndex={0}
                                 onClick={() => {
                                   if (isActive) {
                                     setSelectedItem(null);
@@ -724,78 +762,73 @@ export default function DocumentPage() {
                                     setSearchQuery(item);
                                   }
                                 }}
+                                onKeyDown={(e) => {
+                                  if (e.key !== "Enter" && e.key !== " ") return;
+                                  e.preventDefault();
+                                  setSelectedItem(isActive ? null : item);
+                                  setSearchQuery(isActive ? "" : item);
+                                }}
+                                title={
+                                  isActive
+                                    ? "Clear highlight"
+                                    : `Highlight ${item} in the document`
+                                }
                                 className={cn(
-                                  "flex-1 text-left px-2 py-1.5 flex items-center gap-1.5 text-[13px] transition-colors",
+                                  "flex flex-1 cursor-pointer items-center gap-1.5 px-2 py-1.5 text-left text-[13px] transition-colors",
                                   isActive
                                     ? "bg-purple-50 font-semibold text-purple-900 dark:bg-purple-950/50 dark:text-purple-100"
                                     : "hover:bg-accent"
                                 )}
                               >
-                                <span className="flex-1 truncate">{item}</span>
-                                <span
-                                  className={cn(
-                                    "text-xs tabular-nums shrink-0",
-                                    isActive ? "text-purple-600 dark:text-purple-400 font-semibold" : "text-muted-foreground"
-                                  )}
+                                <Link
+                                  to={`/entity/${entitySlug(item)}${
+                                    document.projectId
+                                      ? `?project=${document.projectId}`
+                                      : ""
+                                  }`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  title={`Open ${item}`}
+                                  className="min-w-0 flex-1 truncate hover:underline"
                                 >
-                                  {mentions.length}
-                                </span>
-                              </button>
-                              {/* Research button inline */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleResearch(item);
-                                }}
-                                disabled={isResearching || dossier?.status === "pending"}
-                                className={cn(
-                                  "shrink-0 px-1.5 py-1.5 transition-colors",
-                                  isResearching || dossier?.status === "pending"
-                                    ? "text-muted-foreground/40"
-                                    : dossier?.status === "completed"
-                                      ? "text-purple-400 hover:text-purple-600 dark:hover:text-purple-300"
-                                      : "text-muted-foreground/40 hover:text-muted-foreground"
+                                  {item}
+                                </Link>
+                                {/* What this entity is to this document, held
+                                    to the right edge so the roles line up as
+                                    their own column rather than trailing each
+                                    name at a different offset. */}
+                                {role && (
+                                  <span
+                                    className={cn(
+                                      "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] capitalize leading-none",
+                                      isActive
+                                        ? "bg-purple-200/70 text-purple-900 dark:bg-purple-800/60 dark:text-purple-100"
+                                        : "bg-muted text-muted-foreground"
+                                    )}
+                                  >
+                                    {role}
+                                  </span>
                                 )}
-                                title={dossier?.status === "completed" ? "Refresh dossier" : "Research this entity"}
-                              >
-                                {isResearching || dossier?.status === "pending" ? (
-                                  <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                  </svg>
-                                ) : (
-                                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                    <circle cx="7" cy="7" r="5" />
-                                    <path d="M11 11l3.5 3.5" />
-                                  </svg>
-                                )}
-                              </button>
+                              </div>
                             </div>
 
-                            {/* Cross-document indicator */}
-                            {crossDoc && crossDoc.documentCount > 1 && (
-                              <CrossDocIndicator
-                                entityId={crossDoc.entityId}
-                                documentCount={crossDoc.documentCount}
-                                currentDocId={documentId}
-                                isActive={isActive}
-                              />
-                            )}
-
-                            {/* Research dossier — show when active or completed */}
-                            {dossier?.status === "failed" && isActive && (
-                              <div className="px-2 pb-2">
-                                <p className="text-xs text-red-500 dark:text-red-400">
-                                  Research failed: {dossier.errorMessage}
-                                </p>
+                            {isExpanded && crossDoc && (
+                              <div className="pb-1.5 pl-5 pr-2">
+                                <EntityConnectionList
+                                  connections={connections}
+                                  subjectId={crossDoc.entityId}
+                                  documentId={documentId}
+                                  projectId={document.projectId ?? null}
+                                  onLocate={(text, isEntity, pageNumber) => {
+                                    setSelectedItem(isEntity ? text : null);
+                                    setSearchQuery(text);
+                                    if (pageNumber !== undefined) {
+                                      scrollToPage(pageNumber + 1);
+                                    }
+                                  }}
+                                />
                               </div>
                             )}
 
-                            {dossier?.status === "completed" && dossier.content && isActive && (
-                              <div className="px-2 pb-2">
-                                <ResearchDossier dossier={dossier} onRefresh={() => handleResearch(item)} />
-                              </div>
-                            )}
                           </div>
                         );
                       })}
@@ -818,31 +851,38 @@ export default function DocumentPage() {
                   {showNewEntityForm ? (
                     <div className="flex flex-col gap-2">
                       <Input
-                        placeholder="Title (e.g. Organizations)"
+                        placeholder="Name (e.g. Vessels)"
                         value={customTitle}
                         onChange={(e) => setCustomTitle(e.target.value)}
                         autoFocus
                         className="text-xs h-8"
                       />
                       <Input
-                        placeholder="Description (e.g. Company names mentioned)"
+                        placeholder="What counts as one (e.g. a named ship or barge)"
                         value={customDescription}
                         onChange={(e) => setCustomDescription(e.target.value)}
                         className="text-xs h-8"
                       />
+                      {/* Says plainly that this is forward-looking. The old
+                          form ran against this document immediately, so the
+                          button meaning something different now matters. */}
+                      <p className="text-[11px] leading-snug text-muted-foreground">
+                        Applies to documents uploaded from now on. Re-run this
+                        document to apply it here.
+                      </p>
                       <div className="flex gap-1.5">
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={handleCustomExtract}
+                          onClick={handleAddEntityType}
                           disabled={
                             !customTitle.trim() ||
-                            customExtracting ||
-                            document.status === "extracting"
+                            !customDescription.trim() ||
+                            customExtracting
                           }
                           className="flex-1"
                         >
-                          {customExtracting ? "Extracting…" : "Extract"}
+                          {customExtracting ? "Adding…" : "Add type"}
                         </Button>
                         <Button
                           size="sm"
@@ -1205,6 +1245,9 @@ function DocumentTagsAndMetadata({ document }: { document: Doc<"documents"> }) {
           {[
             ["Title", meta.title],
             ["Date", meta.date],
+            // From the document row, not `meta` — the place is sanitized on
+            // the way in (convex/metadata.ts) rather than left in the raw blob.
+            ["Place", document.documentPlace],
             ["Author", meta.author],
             ["Language", meta.language],
             ...(meta.additional ?? []).map(
@@ -1237,276 +1280,13 @@ function DocumentTagsAndMetadata({ document }: { document: Doc<"documents"> }) {
 // Structured dossier types
 // ---------------------------------------------------------------------------
 
-interface DossierData {
-  bio: {
-    full_name: string;
-    occupation: string;
-    title: string;
-    organization: string;
-    location: string;
-  };
-  contact: {
-    email: string;
-    phone: string;
-    website?: string;
-    social_profiles?: string[];
-  };
-  summary: string;
-  key_facts: string[];
-  recent_activity: string[];
-  connections: { name: string; relationship: string }[];
-}
-
 // ---------------------------------------------------------------------------
 // Research dossier display component (structured)
 // ---------------------------------------------------------------------------
 
-function ResearchDossier({
-  dossier,
-  onRefresh,
-}: {
-  dossier: Doc<"research">;
-  onRefresh: () => void;
-}) {
-  // Parse structured content, fall back to null if it's old markdown format
-  const data = useMemo<DossierData | null>(() => {
-    try {
-      let raw = dossier.content;
-      // Handle double-stringified JSON
-      if (raw.startsWith('"') && raw.endsWith('"')) {
-        raw = JSON.parse(raw);
-      }
-      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-      if (parsed?.bio && parsed?.summary) return parsed as DossierData;
-      return null;
-    } catch {
-      return null;
-    }
-  }, [dossier.content]);
-
-  // Build citation lookup for tooltips
-  const citations = useMemo(() => {
-    return dossier.citations.map((url) => {
-      try {
-        const parsed = new URL(url);
-        return {
-          url,
-          domain: parsed.hostname.replace(/^www\./, ""),
-          path:
-            parsed.pathname.length > 1
-              ? decodeURIComponent(parsed.pathname).slice(0, 60)
-              : "",
-        };
-      } catch {
-        return { url, domain: url.slice(0, 30), path: "" };
-      }
-    });
-  }, [dossier.citations]);
-
-  // Fallback: old markdown dossiers
-  if (!data) {
-    return (
-      <div className="mt-1 text-xs leading-relaxed text-foreground whitespace-pre-wrap">
-        {dossier.content}
-        <div className="mt-1 flex justify-end">
-          <RefreshButton onRefresh={onRefresh} />
-        </div>
-      </div>
-    );
-  }
-
-  const isUnknown = (val: string | undefined) =>
-    !val || val.toLowerCase() === "unknown";
-
-  return (
-    <div className="mt-1 space-y-2">
-      {/* Summary */}
-      <p className="text-xs leading-relaxed">{data.summary}</p>
-
-      {/* Bio card */}
-      <div className="rounded-md border bg-muted/30 px-2.5 py-2 space-y-1">
-        <DossierField label="Name" value={data.bio.full_name} />
-        <DossierField label="Title" value={data.bio.title} />
-        <DossierField label="Org" value={data.bio.organization} />
-        <DossierField label="Role" value={data.bio.occupation} />
-        <DossierField label="Location" value={data.bio.location} />
-      </div>
-
-      {/* Contact */}
-      {(!isUnknown(data.contact.email) ||
-        !isUnknown(data.contact.phone) ||
-        !isUnknown(data.contact.website) ||
-        (data.contact.social_profiles && data.contact.social_profiles.length > 0)) && (
-        <div className="rounded-md border bg-muted/30 px-2.5 py-2 space-y-1">
-          {!isUnknown(data.contact.email) && (
-            <DossierField label="Email" value={data.contact.email} isLink={data.contact.email.includes("@") ? `mailto:${data.contact.email}` : undefined} />
-          )}
-          {!isUnknown(data.contact.phone) && (
-            <DossierField label="Phone" value={data.contact.phone} />
-          )}
-          {!isUnknown(data.contact.website) && data.contact.website && (
-            <DossierField label="Web" value={data.contact.website} isLink={data.contact.website} />
-          )}
-          {data.contact.social_profiles && data.contact.social_profiles.length > 0 && (
-            <div className="flex flex-wrap gap-1 pt-0.5">
-              {data.contact.social_profiles.map((url, i) => {
-                let label = "Link";
-                try {
-                  const host = new URL(url).hostname.replace(/^www\./, "");
-                  if (host.includes("linkedin")) label = "LinkedIn";
-                  else if (host.includes("twitter") || host.includes("x.com")) label = "X";
-                  else if (host.includes("github")) label = "GitHub";
-                  else label = host.split(".")[0];
-                } catch { /* use default */ }
-                return (
-                  <a
-                    key={i}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-950/50 dark:text-purple-300 dark:hover:bg-purple-900/50 transition-colors"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {label}
-                  </a>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Key Facts */}
-      {data.key_facts.length > 0 && (
-        <DossierSection title="Key Facts">
-          <ul className="text-xs leading-relaxed pl-3.5 list-disc space-y-0.5">
-            {data.key_facts.map((fact, i) => (
-              <li key={i} className="text-muted-foreground">{fact}</li>
-            ))}
-          </ul>
-        </DossierSection>
-      )}
-
-      {/* Recent Activity */}
-      {data.recent_activity.length > 0 && (
-        <DossierSection title="Recent Activity">
-          <ul className="text-xs leading-relaxed pl-3.5 list-disc space-y-0.5">
-            {data.recent_activity.map((item, i) => (
-              <li key={i} className="text-muted-foreground">{item}</li>
-            ))}
-          </ul>
-        </DossierSection>
-      )}
-
-      {/* Connections */}
-      {data.connections.length > 0 && (
-        <DossierSection title="Connections">
-          <div className="space-y-1">
-            {data.connections.map((conn, i) => (
-              <div key={i} className="flex items-baseline gap-1.5 text-xs">
-                <span className="font-medium text-foreground shrink-0">{conn.name}</span>
-                <span className="text-muted-foreground">— {conn.relationship}</span>
-              </div>
-            ))}
-          </div>
-        </DossierSection>
-      )}
-
-      {/* Sources */}
-      {citations.length > 0 && (
-        <DossierSection title={`Sources (${citations.length})`}>
-          <div className="flex flex-wrap gap-1">
-            {citations.map((cite, i) => (
-              <CitationChip key={i} num={i + 1} cite={cite} />
-            ))}
-          </div>
-        </DossierSection>
-      )}
-
-      {/* Refresh */}
-      <div className="flex justify-end">
-        <RefreshButton onRefresh={onRefresh} />
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Dossier sub-components
 // ---------------------------------------------------------------------------
-
-function DossierField({
-  label,
-  value,
-  isLink,
-}: {
-  label: string;
-  value: string;
-  isLink?: string;
-}) {
-  if (!value || value.toLowerCase() === "unknown") return null;
-  return (
-    <div className="flex items-baseline gap-1.5 text-xs">
-      <span className="text-muted-foreground shrink-0 w-12 text-right">{label}</span>
-      {isLink ? (
-        <a
-          href={isLink}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-primary hover:underline truncate"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {value}
-        </a>
-      ) : (
-        <span className="text-foreground truncate">{value}</span>
-      )}
-    </div>
-  );
-}
-
-function DossierSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-        {title}
-      </h4>
-      {children}
-    </div>
-  );
-}
-
-function RefreshButton({ onRefresh }: { onRefresh: () => void }) {
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        onRefresh();
-      }}
-      className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
-    >
-      <svg
-        width="10"
-        height="10"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      >
-        <path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4" />
-        <path d="M14 2v4h-4M2 14v-4h4" />
-      </svg>
-      Refresh
-    </button>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Citation chip with hover tooltip
@@ -1516,121 +1296,4 @@ function RefreshButton({ onRefresh }: { onRefresh: () => void }) {
 // Cross-document indicator: shows which other documents an entity appears in
 // ---------------------------------------------------------------------------
 
-function CrossDocIndicator({
-  entityId,
-  documentCount,
-  currentDocId,
-  isActive,
-}: {
-  entityId: Id<"entities">;
-  documentCount: number;
-  currentDocId: Id<"documents">;
-  isActive: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const otherDocs = useQuery(
-    api.entities.documentsForEntity,
-    expanded ? { entityId } : "skip"
-  );
 
-  return (
-    <div className="px-2">
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setExpanded(!expanded);
-        }}
-        className={cn(
-          "text-[11px] flex items-center gap-1 transition-colors",
-          isActive ? "text-purple-500" : "text-muted-foreground hover:text-foreground"
-        )}
-      >
-        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <rect x="2" y="3" width="8" height="10" rx="1" />
-          <rect x="6" y="1" width="8" height="10" rx="1" />
-        </svg>
-        in {documentCount} doc{documentCount !== 1 ? "s" : ""}
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 10 10"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className={cn(
-            "transition-transform",
-            expanded && "rotate-90"
-          )}
-        >
-          <path d="M3 1l4 4-4 4" />
-        </svg>
-      </button>
-
-      {expanded && otherDocs && (
-        <div className="mt-0.5 mb-1 flex flex-col">
-          {otherDocs
-            .filter((d) => d._id !== currentDocId)
-            .map((doc) => (
-              <Link
-                key={doc._id}
-                to={`/documents/${doc._id}`}
-                className="text-[11px] text-primary hover:underline truncate pl-4 py-0.5"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {doc.name}
-                <span className="text-muted-foreground ml-1">
-                  ({doc.mentionCount})
-                </span>
-              </Link>
-            ))}
-          {otherDocs.filter((d) => d._id !== currentDocId).length === 0 && (
-            <span className="text-[11px] text-muted-foreground pl-4 py-0.5">
-              Only in this document
-            </span>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CitationChip({
-  num,
-  cite,
-}: {
-  num: number;
-  cite: { url: string; domain: string; path: string };
-}) {
-  const [show, setShow] = useState(false);
-
-  return (
-    <span
-      className="relative inline-block"
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-    >
-      <a
-        href={cite.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors no-underline"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {cite.domain}
-      </a>
-      {show && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 pointer-events-none">
-          <div className="bg-foreground text-background text-[11px] leading-tight rounded-md px-2.5 py-1.5 shadow-lg whitespace-nowrap max-w-[300px]">
-            <div className="font-medium truncate">[{num}] {cite.domain}</div>
-            {cite.path && (
-              <div className="text-background/70 truncate">{cite.path}</div>
-            )}
-          </div>
-          <div className="flex justify-center">
-            <div className="w-2 h-2 bg-foreground rotate-45 -mt-1" />
-          </div>
-        </div>
-      )}
-    </span>
-  );
-}

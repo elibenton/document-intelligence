@@ -227,6 +227,19 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     ),
   },
   {
+    id: "documentPlace",
+    label: "Place",
+    kind: "select",
+    filterable: true,
+    groupable: true,
+    // Where the document says it is from, not where its subject matter is —
+    // see the place rule in convex/analyzePrompt.ts. Absent is common and
+    // shown as nothing rather than a guess, the same as the date beside it.
+    value: (doc) => doc.documentPlace ?? null,
+    format: (doc) => doc.documentPlace ?? null,
+    options: (rows) => observedOptions(rows, (doc) => doc.documentPlace),
+  },
+  {
     id: "uploadedAt",
     label: "Added",
     kind: "date",

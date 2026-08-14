@@ -15,7 +15,6 @@ import { api, internal } from "./_generated/api";
 import {
   ocrDocument,
   analyzeDocumentText,
-  extract,
   transcribe,
   failureCodeOf,
 } from "./interfaze";
@@ -142,50 +141,6 @@ function stageMessage(stage: string, e: unknown, msg: string): string {
   return failureCodeOf(e) ? msg : `${stage} failed: ${msg}`;
 }
 
-
-/**
- * What to hand Interfaze for a document: web clips inline their markdown
- * article text (Interfaze only reliably fetches PDF/image URLs); everything
- * else is referenced by its stable storage URL (which doubles as Interfaze's
- * cache key).
- */
-async function extractionSource(
-  ctx: ActionCtx,
-  document: Doc<"documents">
-): Promise<string | { inlineText: string }> {
-  // Web clips keep their own markdown article — Interfaze does not reliably
-  // fetch a bare text URL, and the clip has no OCR pass behind it.
-  if (document.textStorageId) {
-    const blob = await ctx.storage.get(document.textStorageId);
-    if (blob) return { inlineText: await blob.text() };
-  }
-
-  // Everything else extracts from the text the scan already produced.
-  //
-  // This used to hand Interfaze the file URL, which re-ran the entire vision
-  // pipeline for every extraction: four extraction prompts against one document
-  // meant OCR'ing it four times, at roughly a hundred times the cost of reading
-  // the text we had already stored. Text in is also deterministic, so an
-  // unchanged re-run is eligible for the semantic cache.
-  const pages: { pageNumber: number; text: string }[] = await ctx.runQuery(
-    internal.pages.textByDocument,
-    { documentId: document._id }
-  );
-  const scanned = pages
-    .filter((page) => page.text.trim())
-    .map((page) => `--- Page ${page.pageNumber + 1} ---\n${page.text}`)
-    .join("\n\n");
-  if (scanned) return { inlineText: scanned };
-
-  // No scan yet. Falling back to the file keeps a pre-scan extraction working
-  // rather than failing outright, but it is the expensive path by definition.
-  console.warn(
-    `Extracting from the original file for ${document._id} — no scanned page text found`
-  );
-  const url = await ctx.storage.getUrl(document.storageId);
-  if (!url) throw new Error("File not found in storage");
-  return url;
-}
 
 
 // ---------------------------------------------------------------------------
@@ -515,67 +470,6 @@ async function requireFileUrl(
 }
 
 
-export const runExtract = internalAction({
-  args: {
-    documentId: v.id("documents"),
-    pageSchema: v.string(), // JSON string of the extraction schema
-    pageRange: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const document = await ctx.runQuery(
-      (await import("./_generated/api")).api.documents.get,
-      { id: args.documentId }
-    );
-    if (!document) throw new Error("Document not found");
-
-    const apiKey = process.env.INTERFAZE_API_KEY;
-    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
-
-    const source = await extractionSource(ctx, document);
-
-    await ctx.runMutation(internal.processing.updateStatus, {
-      documentId: args.documentId,
-      status: "extracting",
-    });
-    await ctx.runMutation(internal.processing.updateJobStatus, {
-      documentId: args.documentId,
-      stage: "extract",
-      status: "running",
-    });
-
-    try {
-      const schema = JSON.parse(args.pageSchema);
-      const result = await extract(source, apiKey, schema, {
-        pageRange: args.pageRange,
-        log: usageLogger(ctx, { documentId: args.documentId }),
-      });
-
-      await ctx.runMutation(internal.ingest.ingestExtractResults, {
-        documentId: args.documentId,
-        schemaUsed: args.pageSchema,
-        results: result.extraction_schema_json,
-        pageRange: args.pageRange,
-      });
-
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "extract",
-        status: "completed",
-      });
-      await ctx.runMutation(internal.processing.updateStatus, {
-        documentId: args.documentId,
-        status: "completed",
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await ctx.runMutation(internal.processing.markFailed, {
-        documentId: args.documentId,
-        errorMessage: stageMessage("Extract", e, msg),
-        errorCode: failureCodeOf(e),
-      });
-    }
-  },
-});
 
 
 // ---------------------------------------------------------------------------
@@ -680,98 +574,5 @@ export const runTranscribe = internalAction({
 // per-document roles, resolved against the existing graph.
 // ---------------------------------------------------------------------------
 
-const roleValidator = v.object({
-  role: v.string(),
-  question: v.string(),
-  entityType: v.string(),
-});
 
 
-const slug = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-
-
-export const runTemplateExtraction = internalAction({
-  args: {
-    documentId: v.id("documents"),
-    roles: v.array(roleValidator),
-    saveToKind: v.optional(v.string()), // kind name to save this template back to
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const document = await ctx.runQuery(
-      (await import("./_generated/api")).api.documents.get,
-      { id: args.documentId }
-    );
-    if (!document) throw new Error("Document not found");
-    if (args.roles.length === 0) throw new Error("Template has no roles");
-
-    const apiKey = process.env.INTERFAZE_API_KEY;
-    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
-
-    const source = await extractionSource(ctx, document);
-
-    if (args.saveToKind?.trim()) {
-      await ctx.runMutation(api.kinds.saveTemplate, {
-        name: args.saveToKind.trim().toLowerCase(),
-        templateRoles: args.roles,
-      });
-    }
-
-    // Compile the template into a JSON schema: one array property per role
-    const properties: Record<string, unknown> = {};
-    for (const r of args.roles) {
-      properties[slug(r.role)] = {
-        type: "array",
-        items: { type: "string" },
-        description: `${r.question} (list the ${r.entityType} names exactly as written)`,
-      };
-    }
-    const pageSchema = { type: "object", properties, required: Object.keys(properties) };
-
-    await ctx.runMutation(internal.processing.updateStatus, {
-      documentId: args.documentId,
-      status: "extracting",
-    });
-    await ctx.runMutation(internal.processing.updateJobStatus, {
-      documentId: args.documentId,
-      stage: "extract",
-      status: "running",
-    });
-
-    try {
-      const result = await extract(source, apiKey, pageSchema, {
-        log: usageLogger(ctx, { documentId: args.documentId }),
-      });
-
-      await ctx.runMutation(internal.ingest.ingestTemplateResults, {
-        documentId: args.documentId,
-        roles: args.roles,
-        schemaUsed: JSON.stringify(pageSchema),
-        results: result.extraction_schema_json,
-      });
-
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "extract",
-        status: "completed",
-      });
-      await ctx.runMutation(internal.processing.updateStatus, {
-        documentId: args.documentId,
-        status: "completed",
-      });
-
-      // Map relationships between entities (non-fatal if it fails)
-      await ctx.runAction(internal.relationshipsNode.extract, {
-        documentId: args.documentId,
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await ctx.runMutation(internal.processing.markFailed, {
-        documentId: args.documentId,
-        errorMessage: stageMessage("Extract", e, msg),
-        errorCode: failureCodeOf(e),
-      });
-    }
-    return null;
-  },
-});

@@ -1,6 +1,6 @@
 import { internalMutation, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { OTHER_CATEGORY } from "./analyzePrompt";
 import { applyDisplayName, normalizeTitle } from "./rename";
 
@@ -30,13 +30,8 @@ export const saveMetadataResult = internalMutation({
       primary_category?: string;
       display_title?: string;
       document_date?: { value?: string; precision?: string; evidence?: string };
+      place?: { value?: string; evidence?: string };
       tags?: string[];
-      suggested_roles?: Array<{ role?: string; question?: string; entity_type?: string }>;
-      suggested_extractions?: Array<{
-        label?: string;
-        prompt?: string;
-        rationale?: string;
-      }>;
       table_of_contents?: Array<{ title?: string; level?: number; page?: number }>;
       additional?: Array<{ key?: string; value?: string }>;
     };
@@ -50,31 +45,15 @@ export const saveMetadataResult = internalMutation({
     if (!document) return;
 
     const kindName = (parsed.primary_kind ?? "").trim().toLowerCase();
-    const roles = (parsed.suggested_roles ?? [])
-      .filter((r) => r.role?.trim() && r.question?.trim())
-      .map((r) => ({
-        role: r.role!.trim().toLowerCase(),
-        question: r.question!.trim(),
-        entityType: ["person", "organization", "place", "other"].includes(r.entity_type ?? "")
-          ? r.entity_type!
-          : "person",
-      }));
 
     const toc = sanitizeTableOfContents(
       parsed.table_of_contents,
       document.pageCount
     );
 
-    const suggestedExtractions = (parsed.suggested_extractions ?? [])
-      .map((suggestion) => ({
-        label: (suggestion.label ?? "").trim(),
-        prompt: (suggestion.prompt ?? "").trim(),
-        rationale: (suggestion.rationale ?? "").trim(),
-      }))
-      .filter((suggestion) => suggestion.label && suggestion.prompt)
-      .slice(0, 8);
 
     const documentDate = sanitizeDocumentDate(parsed.document_date, Date.now());
+    const documentPlace = sanitizeDocumentPlace(parsed.place);
     // An off-enum category is the model free-styling (or a category since
     // deleted); "other" is the honest bucket for it, and the library shows no
     // primary pill for it rather than coloring a word Analyze made up.
@@ -89,7 +68,6 @@ export const saveMetadataResult = internalMutation({
       await ctx.runMutation(internal.kinds.upsert, {
         name: kindName,
         source: "ai",
-        templateRoles: roles,
       });
     }
 
@@ -104,7 +82,6 @@ export const saveMetadataResult = internalMutation({
         ? {}
         : { kinds: [kindName], primaryKind: kindName, kindSource: "ai" }),
       tags: [...tagSet],
-      suggestedRoles: roles,
       // An empty outline is written as [] rather than skipped: it records
       // "Analyze ran and found no sections", and the Contents tab treats it
       // the same as absent by falling back to SectionHeader blocks.
@@ -114,7 +91,8 @@ export const saveMetadataResult = internalMutation({
       // document: the previous run's answer is not evidence for this one.
       documentDate: documentDate?.documentDate,
       documentDatePrecision: documentDate?.documentDatePrecision,
-      suggestedExtractions,
+      documentPlace: documentPlace?.documentPlace,
+      documentPlaceEvidence: documentPlace?.documentPlaceEvidence,
       metadata: JSON.stringify({
         title: parsed.title,
         summary: parsed.summary,
@@ -151,11 +129,17 @@ export const saveMetadataResult = internalMutation({
       await applyDisplayName(ctx, args.documentId, displayTitle);
     }
 
-    // ...and understood well enough to extract from. This is the moment the
-    // suggestions exist, so it's where the initial extraction starts; there is
-    // no review step in between any more. Scheduled from here rather than from
-    // the pipeline so a standalone Analyze retry gets the same treatment.
-    await ctx.scheduler.runAfter(0, internal.processing.runInitialExtraction, {
+    // ...and understood well enough to read for people and organizations.
+    //
+    // This used to start the suggested-extraction pass, which asked for
+    // whatever Analyze thought was worth pulling out and typed each entity by
+    // the JSON key that produced it — which is how entities called "dates" and
+    // "parties" got into the table. One pass now finds the entities and their
+    // relationships together; nothing else is extracted.
+    //
+    // Scheduled from here rather than from the pipeline so a standalone
+    // Analyze retry gets the same treatment.
+    await ctx.scheduler.runAfter(0, api.processing.runRelationships, {
       documentId: args.documentId,
     });
   },
@@ -205,6 +189,38 @@ export function sanitizeDocumentDate(
   if (parsed.getTime() > now) return null;
 
   return { documentDate: value, documentDatePrecision: shape };
+}
+
+/** Words Analyze reaches for instead of leaving the place empty. */
+const NOT_A_PLACE = /^(unknown|unspecified|none|n\/?a|not stated|undisclosed)$/i;
+
+/** A place name, not a sentence — anything longer is the model narrating. */
+const MAX_PLACE_LENGTH = 120;
+
+/**
+ * The place the document situates itself in, or nothing.
+ *
+ * The counterpart to sanitizeDocumentDate, and the same bargain: the prompt
+ * asks the model to decline rather than guess, and this drops the answers that
+ * are a decline wearing a value's clothes. There is no shape to validate the
+ * way an ISO prefix can be validated, so the checks are what is left — a
+ * refusal word, or a run of prose where a place name belongs.
+ *
+ * The evidence quote is kept only when there is a place for it to support.
+ */
+export function sanitizeDocumentPlace(
+  raw: { value?: string; evidence?: string } | undefined
+): { documentPlace: string; documentPlaceEvidence?: string } | null {
+  if (!raw) return null;
+  const value = (raw.value ?? "").trim().replace(/\s+/g, " ");
+  if (!value || NOT_A_PLACE.test(value) || value.length > MAX_PLACE_LENGTH) {
+    return null;
+  }
+  const evidence = (raw.evidence ?? "").trim();
+  return {
+    documentPlace: value,
+    documentPlaceEvidence: evidence ? evidence.slice(0, 500) : undefined,
+  };
 }
 
 /** Hard ceiling on outline entries — a plausible TOC, not a re-typed document. */

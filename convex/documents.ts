@@ -193,12 +193,10 @@ export const updateIdentity = mutation({
       patch.kindSource = "human";
 
       // Register anything new so it becomes a pill for every other document.
-      // upsert never overwrites an existing kind's extraction template.
       for (const name of kinds) {
         await ctx.runMutation(internal.kinds.upsert, {
           name,
           source: "human",
-          templateRoles: [],
         });
       }
     }
@@ -236,7 +234,6 @@ export const addKinds = mutation({
       await ctx.runMutation(internal.kinds.upsert, {
         name,
         source: "human",
-        templateRoles: [],
       });
     }
   },
@@ -289,12 +286,6 @@ export const remove = mutation({
       for (const block of blocks) await ctx.db.delete(block._id);
       await ctx.db.delete(page._id);
     }
-
-    const extractions = await ctx.db
-      .query("extractions")
-      .withIndex("by_document", (q) => q.eq("documentId", args.id))
-      .collect();
-    for (const ext of extractions) await ctx.db.delete(ext._id);
 
     // Delete transcript segments (audio/video documents)
     const transcriptSegments = await ctx.db
@@ -401,13 +392,6 @@ export const remove = mutation({
         });
       }
     }
-
-    // Delete research dossiers for this document
-    const research = await ctx.db
-      .query("research")
-      .withIndex("by_document", (q) => q.eq("documentId", args.id))
-      .collect();
-    for (const r of research) await ctx.db.delete(r._id);
 
     // Delete the document itself
     await ctx.db.delete(args.id);
