@@ -4,6 +4,7 @@ import {
   customMutation,
   customQuery,
 } from "convex-helpers/server/customFunctions";
+import { ConvexError, v } from "convex/values";
 import { action, mutation, query } from "./_generated/server";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
 import { authComponent } from "./auth";
@@ -67,3 +68,54 @@ export const authedAction = customAction(
     user: await authComponent.getAuthUser(ctx),
   }))
 );
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+/**
+ * The owner. A constant rather than an env var on purpose: it lives in git, so
+ * changing who can read everyone's spend is a reviewable diff rather than a
+ * dashboard action, and it cannot skew between deployments the way the VITE_*
+ * values in docs/auth-plan.md §4 can. `grep -rn ADMIN_EMAIL convex/` is the
+ * whole audit. A second admin turns this into an array.
+ *
+ * Compared case-insensitively because it costs nothing and removes the question
+ * of whether Better Auth normalises what it stores.
+ */
+const ADMIN_EMAIL = "eliunited@gmail.com";
+
+/**
+ * Extends the sign-in check rather than restating it — same `getAuthUser` call,
+ * one added condition.
+ *
+ * Composed here rather than as `customQuery(authedQuery, …)`. That does
+ * typecheck (docs/admin-usage-plan.md §5.1 claims otherwise; it is wrong, and
+ * was verified before this was written), but chaining the builders would run
+ * two `getAuthUser` calls per request to answer one question.
+ */
+const adminOnly = customCtx(async (ctx: QueryCtx) => {
+  const user = await authComponent.getAuthUser(ctx);
+  if (user.email.toLowerCase() !== ADMIN_EMAIL) {
+    throw new ConvexError("Not authorized");
+  }
+  return { user };
+});
+
+/**
+ * Queries only, deliberately. Read-only is enforced by the wrapper set rather
+ * than by discipline: there is no `adminMutation`, and adding one is a design
+ * change, not a convenience.
+ */
+export const adminQuery = customQuery(query, adminOnly);
+
+/**
+ * Whether the caller is the owner. Any signed-in user may ask; the answer is a
+ * boolean, never the address — so the admin's email is not a target published
+ * in the client bundle.
+ */
+export const isAdmin = authedQuery({
+  args: {},
+  returns: v.boolean(),
+  handler: async (ctx) => ctx.user.email.toLowerCase() === ADMIN_EMAIL,
+});

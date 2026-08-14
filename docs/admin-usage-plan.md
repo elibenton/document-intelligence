@@ -343,12 +343,14 @@ Three layers. Each catches something the others do not, and none is a comment.
 
 ### 5.1 `adminQuery`, composed with the auth gate
 
-Builder-level composition does not typecheck, and it is worth knowing why before
-trying: `customQuery`'s first parameter is `QueryBuilder`, while `authedQuery` is
-a `CustomBuilder`. `customQuery(authedQuery, adminMod)` is rejected.
+**Correction, verified when this was built:** an earlier draft of this section
+claimed `customQuery(authedQuery, adminMod)` does not typecheck. It does —
+`tsc -b --force` accepts it. The real reason to avoid it is cheaper to state:
+chaining the builders runs `getAuthUser` twice per request to answer one
+question.
 
 So composition happens at the **customization** level — admin as a strict
-extension of authed, sharing the same `getAuthUser` call:
+extension of authed, sharing a single `getAuthUser` call:
 
 ```ts
 // convex/authz.ts — extends what is already there
