@@ -46,7 +46,7 @@ function observedTypes(rows: EntityRow[]): PropertyOption[] {
 }
 
 const countChip = (n: number, one: string, many: string) => (
-  <span className="text-2xs tabular-nums text-muted-foreground shrink-0">
+  <span className="font-mono text-2xs tabular-nums text-muted-foreground shrink-0">
     {n} {n === 1 ? one : many}
   </span>
 );
@@ -113,7 +113,7 @@ export const ENTITY_PROPERTIES: PropertyDef<EntityRow>[] = [
     value: (entity) => entity.avgConfidence,
     format: (entity) => `${Math.round(entity.avgConfidence * 100)}%`,
     render: (entity) => (
-      <span className="text-2xs tabular-nums text-muted-foreground shrink-0">
+      <span className="font-mono text-2xs tabular-nums text-muted-foreground shrink-0">
         {Math.round(entity.avgConfidence * 100)}%
       </span>
     ),

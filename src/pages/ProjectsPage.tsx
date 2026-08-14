@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { counted } from "@/lib/plural";
+import { counted, plural } from "@/lib/plural";
 
 type ProjectListItem = Doc<"projects"> & { documentCount: number };
 
@@ -155,7 +155,7 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
           onClick={startEditing}
           title="Rename project"
           aria-label="Rename project"
-          className="group/identity relative z-10 grid size-4 shrink-0 place-items-center rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+          className="group/identity relative z-10 grid size-5 shrink-0 place-items-center rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
         >
           <FolderOpen className="col-start-1 row-start-1 size-4 text-muted-foreground transition-opacity group-hover/identity:opacity-0 group-focus-visible/identity:opacity-0" />
           <MoreVertical className="col-start-1 row-start-1 size-3.5 opacity-0 transition-opacity group-hover/identity:opacity-100 group-focus-visible/identity:opacity-100" />
@@ -172,10 +172,14 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
           {project.description}
         </p>
       )}
-      <p className="text-xs text-muted-foreground mt-2">
-        {project.documentCount >= 500 ? "500+" : project.documentCount} document
-        {project.documentCount !== 1 && "s"} ·{" "}
-        {new Date(project.createdAt).toLocaleDateString()}
+      <p className="mt-2 text-xs text-muted-foreground">
+        <span className="font-mono tabular-nums">
+          {project.documentCount >= 500 ? "500+" : project.documentCount}
+        </span>{" "}
+        {plural(project.documentCount, "document")} ·{" "}
+        <span className="font-mono tabular-nums">
+          {new Date(project.createdAt).toLocaleDateString()}
+        </span>
       </p>
     </div>
   );

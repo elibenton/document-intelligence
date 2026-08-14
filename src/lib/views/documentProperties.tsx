@@ -216,7 +216,7 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     render: (doc) => (
       <span
         className={cn(
-          "text-xs tabular-nums w-[6.5rem] text-right shrink-0",
+          "font-mono text-xs tabular-nums w-[6.5rem] text-right shrink-0",
           hasDocumentDate(doc)
             ? "text-muted-foreground"
             : "text-muted-foreground/50 italic"
@@ -248,7 +248,7 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     value: (doc) => new Date(doc.uploadedAt).toISOString().slice(0, 10),
     format: (doc) => new Date(doc.uploadedAt).toLocaleDateString(),
     render: (doc) => (
-      <span className="text-xs tabular-nums text-muted-foreground shrink-0">
+      <span className="font-mono text-xs tabular-nums text-muted-foreground shrink-0">
         {new Date(doc.uploadedAt).toLocaleDateString()}
       </span>
     ),

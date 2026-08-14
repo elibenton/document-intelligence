@@ -52,7 +52,7 @@ export function ListGroup({
             <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
             <span className="truncate">{label}</span>
           </span>
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{count}</span>
+          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{count}</span>
         </summary>
         <div className="flex flex-col pl-4">{children}</div>
       </details>
