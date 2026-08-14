@@ -1,6 +1,9 @@
 # Admin usage dashboard — plan
 
-**Status:** proposed. Nothing built.
+**Status:** built. Stage A and Stage B have both shipped, along with the §3.4
+follow-up pinning the admin to a user id. Stage B's per-account breakdown was
+added to the existing `usage` query rather than a second `usageByAccount` one,
+so the 5,000-row window is scanned once per subscription instead of twice.
 
 One account (`eliunited@gmail.com`) gets a read-only view of what the deployment
 is spending and, later, how that spend splits across accounts. It must not

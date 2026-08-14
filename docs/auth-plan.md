@@ -1,6 +1,9 @@
 # Authentication — plan
 
-**Status:** proposed. Nothing built.
+**Status:** built. Phase 1 (the gate) and phase 2 (ownership) have both
+shipped. §7.3's blocking prerequisite turned out not to bind: every row in the
+four tables already carried a `projectId`, so the backfill was a no-op and the
+narrowing step was never needed. §8 (`/clip`'s shared secret) is still open.
 
 Add real authentication via the Convex Better Auth component, in two phases
 that ship independently:
