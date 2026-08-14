@@ -48,11 +48,11 @@ export function UploadRow({ item }: { item: UploadItem }) {
     <div className="rounded-lg border bg-card px-3 py-2 flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
         {item.status === "done" ? (
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
+          <CheckCircle2 className="size-4 shrink-0 text-green-600 dark:text-green-400" />
         ) : item.status === "error" ? (
-          <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+          <AlertCircle className="size-4 shrink-0 text-destructive" />
         ) : (
-          <Spinner className="h-4 w-4 shrink-0 text-primary" />
+          <Spinner className="size-4 shrink-0 text-primary" />
         )}
         {item.documentId && item.status !== "error" ? (
           <Link
@@ -79,7 +79,7 @@ export function UploadRow({ item }: { item: UploadItem }) {
         />
       )}
       {item.status === "error" && item.error && (
-        <p className="text-xs text-red-600 dark:text-red-400">{item.error}</p>
+        <p className="text-xs text-destructive">{item.error}</p>
       )}
       {item.status !== "error" && item.detail && (
         <p className="text-xs text-muted-foreground">{item.detail}</p>
@@ -88,7 +88,7 @@ export function UploadRow({ item }: { item: UploadItem }) {
         item.warnings?.map((warning) => (
           <p
             key={warning}
-            className="text-xs text-amber-700 dark:text-amber-500"
+            className="text-xs text-warning"
           >
             {warning}
           </p>

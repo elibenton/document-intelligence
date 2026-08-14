@@ -63,7 +63,7 @@ export function PersonHighlight({
               borderRadius: 3,
             }}
           >
-            <span className="absolute -top-4 left-0 text-[9px] font-semibold leading-none px-1 py-0.5 rounded-sm whitespace-nowrap bg-purple-100 text-purple-700">
+            <span className="absolute -top-4 left-0 text-viewer-label font-semibold leading-none px-1 py-0.5 rounded-sm whitespace-nowrap bg-purple-100 text-purple-700">
               {personName}
             </span>
           </div>

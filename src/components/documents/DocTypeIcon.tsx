@@ -45,7 +45,7 @@ export function DocTypeIcon({
   // Each branch names its icon statically. Resolving to a component variable
   // and rendering <Icon /> would read shorter but makes the element type
   // dynamic, which defeats React's ability to keep the node across renders.
-  const cls = cn("h-3.5 w-3.5 shrink-0 text-muted-foreground", className);
+  const cls = cn("size-3.5 shrink-0 text-muted-foreground", className);
   switch (docTypeKind({ mediaType, mimeType })) {
     case "spreadsheet":
       return <Table className={cls} />;

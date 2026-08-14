@@ -32,6 +32,7 @@ import {
 } from "@/components/documents/EntityConnectionList";
 import { ENTITY_TYPE_LABELS, entityTypeKey } from "@/lib/views/entityProperties";
 import { entitySlug } from "@/lib/entitySlug";
+import { useProjectSlug } from "@/hooks/useProjectSlug";
 import { DocTypePills } from "@/components/documents/DocTypePills";
 import { ProjectSearchDialog } from "@/components/search/ProjectSearchDialog";
 import { Spinner } from "@/components/ui/spinner";
@@ -43,12 +44,14 @@ import { cn } from "@/lib/utils";
 import { documentTitles } from "@/lib/documentTitle";
 import { isCsvDocument } from "@/lib/uploadTypes";
 import type { Id } from "../../convex/_generated/dataModel";
+import { isTypingTarget } from "@/lib/isTypingTarget";
 
 export default function DocumentPage() {
   const { id } = useParams<{ id: string }>();
   const documentId = id as Id<"documents">;
   const navigate = useNavigate();
   const document = useQuery(api.documents.get, { id: documentId });
+  const projectSlug = useProjectSlug(document?.projectId);
   const url = document?.url ?? undefined;
   const blocks = useQuery(api.blocks.byDocument, { documentId });
   const pages = useQuery(api.pages.byDocument, { documentId });
@@ -192,6 +195,8 @@ export default function DocumentPage() {
     if (!showContentsTab) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "f" || e.altKey || !(e.metaKey || e.ctrlKey)) return;
+      // Overriding browser find is only defensible outside a text field.
+      if (isTypingTarget(e.target)) return;
       e.preventDefault();
       setFindSignal((n) => n + 1);
     };
@@ -430,7 +435,7 @@ export default function DocumentPage() {
           size. */}
       <header className="flex h-14 shrink-0 items-stretch gap-2">
         <Link
-          to={document.projectId ? `/p/${document.projectId}` : "/"}
+          to={projectSlug ? `/p/${projectSlug}` : "/"}
           title="Back to project"
           aria-label="Back to project"
           className={cn(
@@ -438,7 +443,7 @@ export default function DocumentPage() {
             "flex w-14 items-center justify-center text-foreground transition-colors hover:bg-accent"
           )}
         >
-          <Folder className="h-4.5 w-4.5" />
+          <Folder className="size-4" />
         </Link>
         <div
           className={cn(
@@ -625,7 +630,7 @@ export default function DocumentPage() {
               ) : null
             ) : (
               <div className="flex flex-col items-center justify-center h-96 gap-3">
-                <Spinner className="h-6 w-6 text-muted-foreground" />
+                <Spinner className="size-4 text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">Loading document…</p>
               </div>
             )
@@ -774,7 +779,7 @@ export default function DocumentPage() {
                                     : `Highlight ${item} in the document`
                                 }
                                 className={cn(
-                                  "flex flex-1 cursor-pointer items-center gap-1.5 px-2 py-1.5 text-left text-[13px] transition-colors",
+                                  "flex flex-1 cursor-pointer items-center gap-1.5 px-2 py-1.5 text-left text-sm transition-colors",
                                   isActive
                                     ? "bg-purple-50 font-semibold text-purple-900 dark:bg-purple-950/50 dark:text-purple-100"
                                     : "hover:bg-accent"
@@ -799,7 +804,7 @@ export default function DocumentPage() {
                                 {role && (
                                   <span
                                     className={cn(
-                                      "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] capitalize leading-none",
+                                      "shrink-0 rounded-full px-1.5 py-0.5 text-2xs capitalize leading-none",
                                       isActive
                                         ? "bg-purple-200/70 text-purple-900 dark:bg-purple-800/60 dark:text-purple-100"
                                         : "bg-muted text-muted-foreground"
@@ -866,7 +871,7 @@ export default function DocumentPage() {
                       {/* Says plainly that this is forward-looking. The old
                           form ran against this document immediately, so the
                           button meaning something different now matters. */}
-                      <p className="text-[11px] leading-snug text-muted-foreground">
+                      <p className="text-2xs leading-snug text-muted-foreground">
                         Applies to documents uploaded from now on. Re-run this
                         document to apply it here.
                       </p>
@@ -927,20 +932,13 @@ export default function DocumentPage() {
                   {document && (
                     <div className="flex items-center justify-between rounded-md border px-2.5 py-1.5">
                       <span className="text-xs text-muted-foreground">
-                        {document.archivedAt !== undefined
-                          ? `Archived ${new Date(document.archivedAt).toLocaleDateString()}`
-                          : "Manage document"}
+                        Manage document
                       </span>
                       <DocumentActions
                         documentId={document._id}
                         documentName={document.name}
-                        archived={document.archivedAt !== undefined}
                         onDeleted={() =>
-                          navigate(
-                            document.projectId
-                              ? `/p/${document.projectId}`
-                              : "/"
-                          )
+                          navigate(projectSlug ? `/p/${projectSlug}` : "/")
                         }
                       />
                     </div>
@@ -1097,7 +1095,7 @@ function VisualEvidenceList({
           </span>
         </button>
       ))}
-      <p className="text-[10px] text-muted-foreground mt-0.5">
+      <p className="text-2xs text-muted-foreground mt-0.5">
         Locations are approximate, detected by AI.
       </p>
     </div>
@@ -1141,7 +1139,7 @@ function VisualObjectOverlay({
           }}
           title={detection.description}
         >
-          <span className="absolute -top-5 left-0 rounded bg-orange-500 px-1 py-0.5 text-[9px] font-semibold leading-none text-white whitespace-nowrap">
+          <span className="absolute -top-5 left-0 rounded bg-orange-500 px-1 py-0.5 text-viewer-label font-semibold leading-none text-white whitespace-nowrap">
             {detection.label.replace(/_/g, " ")}
           </span>
         </div>

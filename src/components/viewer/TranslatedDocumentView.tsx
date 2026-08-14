@@ -18,7 +18,7 @@ export function TranslatedDocumentView({
     <div className="h-full w-full overflow-y-auto bg-muted/20 px-4 py-8 sm:px-8">
       <div className="mx-auto flex max-w-3xl flex-col gap-5">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Languages className="h-4 w-4" />
+          <Languages className="size-4" />
           <span>Translated to {languageName(targetLanguageCode)}</span>
         </div>
         {pages.map((page) => (
@@ -30,7 +30,7 @@ export function TranslatedDocumentView({
             <p className="mb-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Page {page.pageNumber + 1}
             </p>
-            <div className="whitespace-pre-wrap text-[15px] leading-7 text-foreground">
+            <div className="whitespace-pre-wrap text-base leading-7 text-foreground">
               {page.text}
             </div>
           </article>

@@ -98,7 +98,7 @@ export default function ProviderAlert() {
     // Healthy: no alarm, but keep the manual probe reachable.
     return (
       <div className="mb-6 flex items-center gap-2 text-sm text-muted-foreground">
-        <CircleCheck className="h-4 w-4 text-emerald-500 shrink-0" />
+        <CircleCheck className="size-4 text-success shrink-0" />
         <span>All AI providers responding.</span>
         <button
           onClick={() => void runCheck()}
@@ -124,7 +124,7 @@ export default function ProviderAlert() {
             className="rounded-lg border-2 border-destructive bg-destructive/10 p-4"
           >
             <div className="flex items-start gap-3">
-              <TriangleAlert className="h-6 w-6 text-destructive shrink-0 mt-0.5" />
+              <TriangleAlert className="size-4 text-destructive shrink-0 mt-0.5" />
               <div className="min-w-0 flex-1">
                 <h3 className="text-base font-bold text-destructive">
                   {copy.headline(label)}
@@ -150,7 +150,7 @@ export default function ProviderAlert() {
                     disabled={checking}
                     className="inline-flex items-center gap-1.5 text-sm bg-destructive text-destructive-foreground rounded-md px-3 py-1.5 hover:bg-destructive/90 transition-colors disabled:opacity-60"
                   >
-                    {checking && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    {checking && <Loader2 className="size-3.5 animate-spin" />}
                     {checking ? "Checking…" : "Check now"}
                   </button>
                   {h.provider === "google" && (
@@ -161,7 +161,7 @@ export default function ProviderAlert() {
                       className="inline-flex items-center gap-1 text-sm border rounded-md px-3 py-1.5 hover:bg-accent transition-colors"
                     >
                       Google AI Studio
-                      <ExternalLink className="h-3 w-3" />
+                      <ExternalLink className="size-3" />
                     </a>
                   )}
                   {checkResult && (

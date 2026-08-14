@@ -23,7 +23,7 @@ import type { PropertyDef, PropertyOption } from "./types";
 /** A row as `documents.list` returns it: the document plus its analyze job state. */
 export type LibraryDoc = Doc<"documents"> & { analyzeStatus?: string | null };
 
-const CHIP = "text-[10px] font-medium leading-none px-1.5 py-0.5 truncate";
+const CHIP = "text-2xs font-medium leading-none px-1.5 py-0.5 truncate";
 
 interface DocumentMetadata {
   author?: string;

@@ -40,11 +40,11 @@ export function DocStatusIndicator({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 shrink-0",
+        "inline-flex items-center gap-1 text-2xs text-blue-600 dark:text-blue-400 shrink-0",
         className
       )}
     >
-      <Spinner className="h-3 w-3" />
+      <Spinner className="size-3" />
       {label}
     </span>
   );

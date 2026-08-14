@@ -37,7 +37,7 @@ function ConnectionDetail({
         </Link>
         <Badge
           variant="outline"
-          className="text-[10px] capitalize shrink-0"
+          className="text-2xs capitalize shrink-0"
           title={`Type: ${connection.otherEntity.type}`}
         >
           {connection.otherEntity.type}
@@ -53,7 +53,7 @@ function ConnectionDetail({
           phrasing shown in the group heading — provenance the reader can check. */}
       {connection.canonicalKnown &&
         connection.relationType.replace(/_/g, " ") !== connection.label && (
-          <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+          <p className="text-2xs text-muted-foreground/70 mt-0.5">
             stated as “{connection.relationType.replace(/_/g, " ")}”
           </p>
         )}

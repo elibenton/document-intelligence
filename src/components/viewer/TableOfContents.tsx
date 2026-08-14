@@ -225,7 +225,7 @@ export function TableOfContents({
               key={header.id}
               ref={isActive ? activeRef : undefined}
               className={cn(
-                "group relative flex items-center gap-1 text-[13px] leading-snug transition-all cursor-pointer",
+                "group relative flex items-center gap-1 text-sm leading-snug transition-all cursor-pointer",
                 "py-1.5 pr-3",
                 editing
                   ? isSelected

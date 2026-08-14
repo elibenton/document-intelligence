@@ -7,7 +7,7 @@ import { styleForColor } from "./docTypeCategories";
  *  a deleted category, or nothing yet. */
 const NEUTRAL_LIGHT = "bg-muted text-muted-foreground";
 
-const PILL = "px-1.5 py-0.5 text-[10px] font-medium leading-none truncate";
+const PILL = "px-1.5 py-0.5 text-2xs font-medium leading-none truncate";
 
 /** "writ of mandate" → "Writ of mandate". Sentence case, not title case: these
  *  are open-vocabulary phrases and title-casing them reads as a proper noun. */

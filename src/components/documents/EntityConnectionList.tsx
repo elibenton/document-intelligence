@@ -69,7 +69,7 @@ function ConnectionLine({
       {connection.quote && (
         <button
           onClick={() => onLocate(connection.quote!, false, quotePage)}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border text-[9px] tabular-nums text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+          className="flex size-4 shrink-0 items-center justify-center rounded-full border border-border text-viewer-label tabular-nums text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
           title={
             quotePage === undefined
               ? "Find this passage in the document"
@@ -104,7 +104,7 @@ export function EntityConnectionList({
 }) {
   if (connections.length === 0) {
     return (
-      <p className="py-1 text-[11px] text-muted-foreground/70">
+      <p className="py-1 text-2xs text-muted-foreground/70">
         No connections stated in this document.
       </p>
     );

@@ -11,6 +11,7 @@ import ReactMarkdown from "react-markdown";
 import { ArrowUpRight, ChevronLeft, ChevronRight, FileText } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { Tooltip } from "@/components/ui/tooltip";
 
 interface ResearchResult {
   documentId: Id<"documents">;
@@ -100,27 +101,36 @@ function CitationButton({
   onSelect: () => void;
 }) {
   return (
-    <span className="group/citation relative mx-0.5 inline-flex align-super not-prose">
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-label={`Citation ${number}: ${result.documentName}, page ${result.pageNumber + 1}`}
-        aria-pressed={active}
-        className={`inline-flex size-5 items-center justify-center rounded-full border text-[10px] font-semibold leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-          active
-            ? "border-amber-500 bg-amber-400 text-amber-950"
-            : "border-primary/25 bg-primary/5 text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground"
-        }`}
+    // Was a CSS-only tooltip: a `role="tooltip"` span revealed by
+    // group-hover/group-focus-within, with no collision handling — so a
+    // citation near the right edge rendered its card off-screen — and never
+    // referenced by aria-describedby, so the role was decorative.
+    <span className="relative mx-0.5 inline-flex align-super not-prose">
+      <Tooltip
+        content={
+          <span className="block max-w-64 text-left">
+            <span className="block font-medium">{result.documentName}</span>
+            <span className="text-muted-foreground">
+              Page {result.pageNumber + 1}
+            </span>
+          </span>
+        }
       >
-        {number}
-      </button>
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden w-max max-w-64 -translate-x-1/2 rounded-md border bg-popover px-2.5 py-2 text-left text-xs font-normal leading-snug text-popover-foreground shadow-lg group-hover/citation:block group-focus-within/citation:block"
-      >
-        <span className="block font-medium">{result.documentName}</span>
-        <span className="text-muted-foreground">Page {result.pageNumber + 1}</span>
-      </span>
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-label={`Citation ${number}: ${result.documentName}, page ${result.pageNumber + 1}`}
+          // Single-select among N, not a toggle.
+          aria-current={active ? "true" : undefined}
+          className={`inline-flex size-5 items-center justify-center rounded-full border text-2xs font-semibold leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            active
+              ? "border-warning bg-warning/80 text-foreground"
+              : "border-primary/25 bg-primary/5 text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground"
+          }`}
+        >
+          {number}
+        </button>
+      </Tooltip>
     </span>
   );
 }
@@ -184,7 +194,7 @@ function CitationPage({
           Page {result.pageNumber + 1}
         </span>
         {boxes.length > 1 && (
-          <span className="shrink-0 rounded-full bg-amber-400/20 px-2 py-1 text-[11px] font-medium text-amber-800 dark:text-amber-300">
+          <span className="shrink-0 rounded-full bg-amber-400/20 px-2 py-1 text-2xs font-medium text-amber-800 dark:text-amber-300">
             {boxes.length} matches on this page
           </span>
         )}

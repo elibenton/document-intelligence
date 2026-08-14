@@ -373,8 +373,8 @@ export function PipelineProgress({
           floating ? cn(FLOATING_SURFACE, "px-3 py-2.5") : "rounded-lg border bg-card px-3 py-2.5"
         )}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <Check className="h-3 w-3" strokeWidth={3} />
+        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <Check className="size-3" strokeWidth={3} />
         </span>
         <span className="text-sm text-foreground">Processing complete</span>
       </div>
@@ -453,14 +453,14 @@ export function PipelineProgress({
                         : step.status === "completed"
                           ? "text-foreground"
                           : step.status === "failed"
-                            ? "text-red-600 dark:text-red-400"
+                            ? "text-destructive"
                             : "text-foreground"
                     )}
                   >
                     {step.label}
                   </span>
                   {duration && (
-                    <span className="text-[11px] tabular-nums text-foreground shrink-0">
+                    <span className="text-2xs tabular-nums text-foreground shrink-0">
                       {duration}
                     </span>
                   )}
@@ -477,7 +477,7 @@ export function PipelineProgress({
                     className={cn(
                       "text-xs leading-snug truncate",
                       step.noteStatus === "failed"
-                        ? "text-red-600 dark:text-red-400"
+                        ? "text-destructive"
                         : "text-foreground"
                     )}
                   >
@@ -491,7 +491,7 @@ export function PipelineProgress({
       </ol>
 
       {(failed || document.translationStatus === "failed") && errorMessage && (
-        <p className="text-xs text-red-600 dark:text-red-400 leading-snug">{errorMessage}</p>
+        <p className="text-xs text-destructive leading-snug">{errorMessage}</p>
       )}
 
       {document.errorCode === "processing_canceled" && (
@@ -551,7 +551,7 @@ function StepMarker({
   const [focused, setFocused] = useState(false);
   if (!retry) return <StepIcon status={status} />;
   return (
-    <span className="relative h-5 w-5 shrink-0">
+    <span className="relative size-4 shrink-0">
       <span
         className={cn(
           "absolute inset-0 transition-opacity group-hover/step:opacity-0",
@@ -568,13 +568,13 @@ function StepMarker({
         onFocus={(e) => setFocused(e.currentTarget.matches(":focus-visible"))}
         onBlur={() => setFocused(false)}
         className={cn(
-          "absolute inset-0 flex h-5 w-5 items-center justify-center rounded-full",
+          "absolute inset-0 flex size-5 items-center justify-center rounded-full",
           "border-2 border-primary bg-background text-primary",
           "opacity-0 transition-opacity group-hover/step:opacity-100 focus-visible:opacity-100",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
         )}
       >
-        <RotateCw className="h-2.5 w-2.5" strokeWidth={3} />
+        <RotateCw className="size-3" strokeWidth={3} />
       </button>
     </span>
   );
@@ -582,30 +582,30 @@ function StepMarker({
 
 function StepIcon({ status }: { status: StepStatus }) {
   if (status === "running") {
-    return <Spinner className="h-5 w-5 text-primary" />;
+    return <Spinner className="size-4 text-primary" />;
   }
   if (status === "completed") {
     return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-        <Check className="h-3 w-3" strokeWidth={3} />
+      <span className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+        <Check className="size-3" strokeWidth={3} />
       </span>
     );
   }
   if (status === "failed") {
     return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-white">
-        <X className="h-3 w-3" strokeWidth={3} />
+      <span className="flex size-5 items-center justify-center rounded-full bg-red-600 text-white">
+        <X className="size-3" strokeWidth={3} />
       </span>
     );
   }
   if (status === "waiting") {
     return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-50 dark:bg-amber-950">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+      <span className="flex size-5 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-50 dark:bg-amber-950">
+        <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
       </span>
     );
   }
   return (
-    <span className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-border bg-background" />
+    <span className="flex size-5 items-center justify-center rounded-full border-2 border-border bg-background" />
   );
 }

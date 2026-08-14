@@ -27,7 +27,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         className
       )}
     >
-      <Icon className="h-5 w-5" />
+      <Icon className="size-4" />
     </button>
   );
 }

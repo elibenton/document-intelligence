@@ -1,15 +1,37 @@
 @import "tailwindcss";
-@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* Base UI reports orientation as `data-orientation`; these map the readable
+   `data-horizontal:` / `data-vertical:` variants onto it. Previously supplied
+   by shadcn/tailwind.css, which was a devDependency imported into the
+   production stylesheet — Tabs went silently unstyled without them, because
+   native Tailwind compiles `data-horizontal:` to `[data-horizontal]`, an
+   attribute that never exists in the DOM.
+
+   Unwrapped `&[…]`, not `&:where([…])`: `:where()` contributes zero
+   specificity, which would leave these at (0,1,0) against the (0,2,0) every
+   stock `data-*` variant carries — so `data-vertical:border-b` would tie with a
+   plain `border-b-0` and be resolved by utility sort order rather than winning
+   the way a variant is supposed to. */
+@custom-variant data-horizontal (&[data-orientation="horizontal"]);
+@custom-variant data-vertical (&[data-orientation="vertical"]);
+
+/* Base UI's other state attributes need no declarations — `data-open:`,
+   `data-highlighted:`, `data-starting-style:`, `data-[side=top]:` and the
+   `group-data-*`/`in-data-*` forms all compile natively. Only add a variant
+   here when the class name has to differ from the attribute name, as above. */
+
+/* Paired with `theme.tsx`, which toggles `.dark` on <html>. Tailwind v4's
+   built-in `dark:` follows prefers-color-scheme and would ignore an explicit
+   user choice. ~166 `dark:` classes depend on this line. */
+@custom-variant dark (&:is(.dark *));
 
 /* Native range/caret behavior remains active, but selection paint comes from
    validated PDF word boxes in ImagePdfViewer instead of arbitrary DOM rects. */
 .pdf-text-layer [data-pdf-text-token]::selection {
   background: transparent;
 }
-@import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
-
-@custom-variant dark (&:is(.dark *));
 
 @keyframes progress-indeterminate {
     0% {
@@ -20,12 +42,16 @@
     }
 }
 
-.progress-indeterminate {
-    animation: progress-indeterminate 1.2s ease-in-out infinite;
+/* Layered so a utility can still beat it. Unlayered rules sort after every
+   @layer block and become unoverridable. The @keyframes stays unlayered —
+   at-rules other than style rules aren't layer-scoped. */
+@layer components {
+    .progress-indeterminate {
+        animation: progress-indeterminate 1.2s ease-in-out infinite;
+    }
 }
 
 :root {
-    color-scheme: light;
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
@@ -37,42 +63,29 @@
     --secondary: oklch(0.97 0 0);
     --secondary-foreground: oklch(0.205 0 0);
     --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
+    /* Was 0.556, which measured 4.34:1 on --muted and --accent — the app's
+       most common chip pairing, and under the 4.5:1 floor. */
+    --muted-foreground: oklch(0.5 0 0);
     --accent: oklch(0.97 0 0);
     --accent-foreground: oklch(0.205 0 0);
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.809 0.105 251.813);
-    --chart-2: oklch(0.623 0.214 259.815);
-    --chart-3: oklch(0.546 0.245 262.881);
-    --chart-4: oklch(0.488 0.243 264.376);
-    --chart-5: oklch(0.424 0.199 265.638);
+    --success: oklch(0.52 0.13 155);
+    --warning: oklch(0.55 0.12 75);
+    --border: oklch(0.905 0 0);
+    --border-subtle: oklch(0.945 0 0);
+    --input: oklch(0.86 0 0);
+    /* Was 0.708 — 2.59:1 on white, and 1.54:1 once composited at 50% alpha,
+       against a 3:1 non-text floor. Every focusable control inherits this. */
+    --ring: oklch(0.45 0 0);
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
 
     /* The document viewer's backdrop. Slightly darker than --card so the
        floating panels and the page itself read as sitting above it — the
        panel border and shadow do most of that work, so this stays subtle. */
     --viewer-canvas: oklch(0.955 0 0);
-
-    /* Relationship-graph chrome. Set here rather than as Tailwind classes
-       because they are consumed as inline SVG paint attributes. */
-    --graph-edge: oklch(0.869 0.022 252.9);
-    --graph-edge-label: oklch(0.554 0.041 257.4);
-    --graph-node-ring: oklch(1 0 0);
 }
 
 .dark {
-    color-scheme: dark;
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
@@ -84,54 +97,31 @@
     --secondary: oklch(0.269 0 0);
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
+    --muted-foreground: oklch(0.72 0 0);
     --accent: oklch(0.269 0 0);
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.809 0.105 251.813);
-    --chart-2: oklch(0.623 0.214 259.815);
-    --chart-3: oklch(0.546 0.245 262.881);
-    --chart-4: oklch(0.488 0.243 264.376);
-    --chart-5: oklch(0.424 0.199 265.638);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --success: oklch(0.75 0.16 155);
+    --warning: oklch(0.79 0.14 75);
+    --border: oklch(1 0 0 / 14%);
+    --border-subtle: oklch(1 0 0 / 7%);
+    --input: oklch(1 0 0 / 20%);
+    --ring: oklch(0.7 0 0);
 
     /* Darker than --card (0.205) for the same reason as in light mode. */
     --viewer-canvas: oklch(0.165 0 0);
-
-    --graph-edge: oklch(0.446 0.03 256.8);
-    --graph-edge-label: oklch(0.704 0.04 256.8);
-    --graph-node-ring: oklch(0.205 0 0);
 }
 
 @theme inline {
     --font-sans: 'Geist Variable', sans-serif;
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
+    --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
+    --color-border-subtle: var(--border-subtle);
     --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-warning: var(--warning);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -151,19 +141,113 @@
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
     --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* NOT `@theme inline`. The paired modifiers below (`--text-sm--line-height`
+   and friends) are emitted as real custom properties and read at use site by
+   the compiled utility: `line-height: var(--tw-leading, var(--text-sm--line-height))`.
+   Marking this block `inline` deletes them and every step silently loses its
+   line-height, tracking and weight.
+
+   The type scale is closed: seven steps plus one scoped exception.
+   Clearing the namespace first means `text-2xl`, `text-4xl`…`text-9xl` stop
+   existing as classes rather than silently working. Note Tailwind emits
+   nothing for an unknown utility — it does not error — so the eslint rule is
+   what actually catches a stray one; this block is the documentation.
+
+   Line-heights are declared with each size, so `leading-*` in markup is a
+   policy violation rather than a mechanical impossibility — `leading-5` will
+   cleanly override via `--tw-leading`, which is the designed escape hatch.
+   The slash shorthand (`text-sm/6`) is the one to actually avoid: it emits
+   font-size and line-height *only*, silently dropping the step's tracking and
+   weight instead of overriding them. Tracking follows
+   an optical ramp — tighter as size grows, looser as it shrinks — because
+   Geist Variable ships only a `wght` axis, so `font-optical-sizing` is a
+   no-op here and the compensation has to be manual. */
+@theme {
+    --text-*: initial;
+
+    --text-2xs: 0.6875rem;            /* 11px — chips, pills, eyebrows, kbd */
+    --text-2xs--line-height: 0.875rem;
+    --text-2xs--letter-spacing: 0.006em;
+    --text-2xs--font-weight: 500;
+
+    --text-xs: 0.75rem;               /* 12px — captions, counts, metadata */
+    --text-xs--line-height: 1rem;
+
+    --text-sm: 0.875rem;              /* 14px — body, the default */
+    --text-sm--line-height: 1.25rem;
+    --text-sm--letter-spacing: -0.006em;
+
+    --text-base: 1rem;                /* 16px — document titles; also the
+                                         iOS zoom-prevention floor on inputs */
+    --text-base--line-height: 1.375rem;
+    --text-base--letter-spacing: -0.011em;
+
+    --text-lg: 1.0625rem;             /* 17px — section headings */
+    --text-lg--line-height: 1.5rem;
+    --text-lg--letter-spacing: -0.013em;
+
+    --text-xl: 1.25rem;               /* 20px — page titles */
+    --text-xl--line-height: 1.75rem;
+    --text-xl--letter-spacing: -0.017em;
+
+    --text-3xl: 1.875rem;             /* 30px — the one hero title */
+    --text-3xl--line-height: 2.25rem;
+    --text-3xl--letter-spacing: -0.021em;
+
+    /* Outside the scale on purpose. Annotation labels on the zoomable PDF
+       canvas are geometry, not UI text: their -top-4 offsets are computed
+       against bbox output, and at 11px the label overlaps the box it
+       annotates. Legal only inside the viewer. */
+    --text-viewer-label: 0.5625rem;   /* 9px */
+    --text-viewer-label--line-height: 0.5625rem;
+    --text-viewer-label--font-weight: 600;
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
+  /* Preflight sets `border: 0 solid` with no colour, so an element that gains
+     a border width without a border-color would inherit currentColor. Default
+     it to the token. This replaces shadcn's `* { @apply border-border
+     outline-ring }` — the `outline-ring` half styled a channel nothing uses,
+     since every focus ring here is a box-shadow (`focus-visible:ring-3`)
+     alongside an explicit `outline-none`. */
+  *, ::before, ::after {
+    border-color: var(--border);
+    }
+  /* The fallback ring for anything not wearing a ui/ primitive. */
+  :focus-visible {
+    outline-color: var(--ring);
     }
   body {
     @apply bg-background text-foreground;
+    /* `case` lifts parentheses, hyphens and slashes to cap height inside the
+       uppercase eyebrow labels. It is one of only seven features Geist
+       actually ships (case frac kern liga pnum tnum zero) — anything else in
+       this string would be dead CSS. */
+    font-feature-settings: "case" 1;
     }
-  html {
-    @apply font-sans;
+  /* Portalled popups land outside the app shell, so the stacking context that
+     keeps them above page content belongs on the root, not on each popup. */
+  #root {
+    isolation: isolate;
     }
+  /* Lucide draws on a 24-unit box, so a 16px icon at stroke 2 renders a
+     1.33px stem against Geist's ~1.15px at 14px and reads bolder than the
+     text beside it. 1.75 matches. Smaller icons keep 2 for hinting. */
+  .lucide {
+    stroke-width: 1.75;
+    }
+  .size-3 .lucide, .size-3\.5.lucide, .size-3.lucide {
+    stroke-width: 2;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

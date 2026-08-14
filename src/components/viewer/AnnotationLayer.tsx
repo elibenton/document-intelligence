@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { MessageSquare, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Popover, PopoverContent } from "@/components/ui/popover";
 import { ANNOTATION_COLORS, annotationColor } from "./annotationColors";
 import type { AnnotationColor } from "./annotationColors";
 import { boundingRect } from "./annotationGeometry";
@@ -80,7 +81,7 @@ export function AnnotationLayer({
               >
                 {annotation.comment && (
                   <MessageSquare
-                    className="absolute -right-1 -top-2 h-3 w-3 fill-background"
+                    className="absolute -right-1 -top-2 size-3 fill-background"
                     style={{ color: color.swatch }}
                     aria-hidden="true"
                   />
@@ -97,10 +98,10 @@ export function AnnotationLayer({
 /**
  * The comment box beside a highlight.
  *
- * Measured off the highlight's own DOM node and positioned `fixed`, for the
- * same reason SelectionPopover is: the page surface carries the zoom scale and
- * the rotation transform, and a comment box that rotates with the paper — or
- * doubles in size at 2× zoom — is unusable. Measuring keeps it glued to the
+ * Anchored to the highlight's own DOM node and portalled out, for the same
+ * reason SelectionPopover is: the page surface carries the zoom scale and the
+ * rotation transform, and a comment box that rotates with the paper — or
+ * doubles in size at 2× zoom — is unusable. Anchoring keeps it glued to the
  * highlight through both.
  */
 export function AnnotationComment({
@@ -116,72 +117,43 @@ export function AnnotationComment({
   onDelete: () => void;
   onDismiss: () => void;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
   // Seeded once per highlight: the parent keys this component on the
   // annotation id, so activating a different one remounts rather than
   // carrying the previous highlight's half-typed draft across.
   const [draft, setDraft] = useState(annotation.comment ?? "");
-  const [placement, setPlacement] = useState<{ left: number; top: number } | null>(
-    null
-  );
 
   const annotationId = annotation._id;
-  useLayoutEffect(() => {
-    const card = cardRef.current;
-    if (!card) return;
-
-    const reposition = () => {
-      const anchor = window.document.querySelector<HTMLElement>(
+  // Resolved lazily on every measurement, because the anchor span unmounts
+  // when its page leaves the viewer's proximity window. `data-anchor-hidden`
+  // handles that case now; previously it was a null check plus a manual
+  // reposition on capture-phase scroll (the viewer scrolls inside its own
+  // container, so scroll never reaches window) and on resize — about 45 lines,
+  // re-run on every keystroke because `draft` was in the dependency array.
+  // floating-ui's autoUpdate covers all of it.
+  const anchor = useCallback(
+    () =>
+      window.document.querySelector<HTMLElement>(
         `[data-annotation-anchor="${annotationId}"]`
-      );
-      // The page scrolled out of the viewer's proximity window and unmounted
-      // its layers — there is nothing to sit beside any more.
-      if (!anchor) {
-        setPlacement(null);
-        return;
-      }
-      const target = anchor.getBoundingClientRect();
-      const { width, height } = card.getBoundingClientRect();
-      // Beside the highlight when there is room to its right; tucked under it
-      // otherwise, which is what a highlight running to the right margin gets.
-      const rightOf = target.right + 12;
-      const beside = rightOf + width + 12 <= window.innerWidth;
-      const left = beside
-        ? rightOf
-        : Math.max(12, Math.min(target.left, window.innerWidth - width - 12));
-      const top = Math.max(
-        12,
-        Math.min(
-          beside ? target.top : target.bottom + 8,
-          window.innerHeight - height - 12
-        )
-      );
-      setPlacement({ left, top });
-    };
-
-    reposition();
-    // The viewer scrolls inside its own container, so this listens in the
-    // capture phase — scroll events on a scrollable div don't reach window.
-    window.addEventListener("scroll", reposition, true);
-    window.addEventListener("resize", reposition);
-    return () => {
-      window.removeEventListener("scroll", reposition, true);
-      window.removeEventListener("resize", reposition);
-    };
-  }, [annotationId, draft]);
+      ),
+    [annotationId]
+  );
 
   const dirty = draft.trim() !== (annotation.comment ?? "").trim();
 
   return (
-    <div
-      ref={cardRef}
+    <Popover
+      open
+      onOpenChange={(next) => {
+        if (!next) onDismiss();
+      }}
+    >
+    <PopoverContent
+      anchor={anchor}
+      side="right"
+      align="start"
+      sideOffset={12}
       onPointerDown={(event) => event.stopPropagation()}
-      className={cn(
-        "fixed z-50 w-64 rounded-lg border bg-popover p-2 shadow-xl",
-        placement ? "" : "invisible"
-      )}
-      style={{ left: placement?.left ?? 0, top: placement?.top ?? 0 }}
-      role="dialog"
+      className="w-64 overflow-visible rounded-lg border bg-popover p-2 shadow-xl data-[anchor-hidden]:invisible"
       aria-label="Highlight comment"
     >
       <p className="mb-2 line-clamp-3 border-l-2 pl-2 text-xs italic text-muted-foreground">
@@ -202,7 +174,7 @@ export function AnnotationComment({
         className={cn(
           "w-full resize-none rounded-md border bg-background px-2 py-1.5 text-sm",
           "placeholder:text-muted-foreground",
-          "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
         )}
       />
       <div className="mt-2 flex items-center gap-1">
@@ -214,8 +186,8 @@ export function AnnotationComment({
             aria-label={`Recolor ${option.label.toLowerCase()}`}
             onClick={() => onChangeColor(option.key)}
             className={cn(
-              "h-4 w-4 rounded-full transition-transform hover:scale-110",
-              "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              "size-4 rounded-full transition-transform hover:scale-110",
+              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring",
               annotation.color === option.key
                 ? "ring-2 ring-foreground ring-offset-2 ring-offset-popover"
                 : "ring-1 ring-inset ring-black/10"
@@ -229,9 +201,9 @@ export function AnnotationComment({
           onClick={onDelete}
           title="Delete highlight"
           aria-label="Delete highlight"
-          className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+          className="grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
         >
-          <Trash2 className="h-3.5 w-3.5" />
+          <Trash2 className="size-3.5" />
         </button>
         {dirty ? (
           <button
@@ -251,6 +223,7 @@ export function AnnotationComment({
           </button>
         )}
       </div>
-    </div>
+    </PopoverContent>
+    </Popover>
   );
 }

@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
-import { Popover } from "@base-ui/react/popover";
 import type { LucideIcon } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 /**
@@ -26,33 +30,24 @@ export function ViewPopover({
   children: ReactNode;
 }) {
   return (
-    <Popover.Root>
-      <Popover.Trigger
+    <Popover>
+      <PopoverTrigger
         aria-label={label}
         title={label}
         className={cn(
-          "relative grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground",
+          "relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground",
           active && "bg-accent text-foreground"
         )}
       >
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="size-3.5" />
         {active && (
-          <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
+          <span className="absolute bottom-1 right-1 size-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
         )}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner side="bottom" align="end" sideOffset={6}>
-          <Popover.Popup
-            className={cn(
-              width,
-              "max-h-[70vh] overflow-y-auto rounded-lg border bg-popover p-2 text-popover-foreground shadow-md outline-none"
-            )}
-          >
-            {children}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      {/* The z-50 that keeps this above row controls now lives on the shared
+          Positioner — this call site was the one missing it. */}
+      <PopoverContent className={width}>{children}</PopoverContent>
+    </Popover>
   );
 }
 
@@ -94,7 +89,7 @@ export function MiniSelect({
 
 export function PanelHeading({ children }: { children: ReactNode }) {
   return (
-    <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <p className="px-1 pb-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
       {children}
     </p>
   );

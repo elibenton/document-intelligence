@@ -12,7 +12,7 @@ import type { PropertyDef, PropertyOption } from "./types";
 
 export type EntityRow = Doc<"entities">;
 
-const CHIP = "text-[10px] font-medium leading-none px-1.5 py-0.5 truncate";
+const CHIP = "text-2xs font-medium leading-none px-1.5 py-0.5 truncate";
 
 /**
  * The stable global types. `entityTypeKey` folds the plural spellings that
@@ -46,7 +46,7 @@ function observedTypes(rows: EntityRow[]): PropertyOption[] {
 }
 
 const countChip = (n: number, one: string, many: string) => (
-  <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">
+  <span className="text-2xs tabular-nums text-muted-foreground shrink-0">
     {n} {n === 1 ? one : many}
   </span>
 );
@@ -113,7 +113,7 @@ export const ENTITY_PROPERTIES: PropertyDef<EntityRow>[] = [
     value: (entity) => entity.avgConfidence,
     format: (entity) => `${Math.round(entity.avgConfidence * 100)}%`,
     render: (entity) => (
-      <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">
+      <span className="text-2xs tabular-nums text-muted-foreground shrink-0">
         {Math.round(entity.avgConfidence * 100)}%
       </span>
     ),

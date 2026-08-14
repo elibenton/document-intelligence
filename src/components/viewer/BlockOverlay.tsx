@@ -67,7 +67,7 @@ export function BlockOverlay({ blocks, pages, pageNumber, renderedWidth }: Block
           >
             {/* Always-visible type label */}
             <span
-              className="absolute -top-4 left-0 text-[9px] font-semibold leading-none px-1 py-0.5 rounded-sm whitespace-nowrap"
+              className="absolute -top-4 left-0 text-viewer-label font-semibold leading-none px-1 py-0.5 rounded-sm whitespace-nowrap"
               style={{
                 color: colors.label,
                 backgroundColor: `${colors.border}22`,
@@ -82,7 +82,7 @@ export function BlockOverlay({ blocks, pages, pageNumber, renderedWidth }: Block
                 e.stopPropagation();
                 handleToggleType(block._id, block.blockType);
               }}
-              className="absolute -top-4 right-0 opacity-0 group-hover:opacity-100 transition-opacity text-[9px] font-semibold leading-none px-1.5 py-0.5 rounded-sm whitespace-nowrap cursor-pointer"
+              className="absolute -top-4 right-0 opacity-0 group-hover:opacity-100 transition-opacity text-viewer-label font-semibold leading-none px-1.5 py-0.5 rounded-sm whitespace-nowrap cursor-pointer"
               style={{
                 color: isSectionHeader
                   ? BLOCK_TYPE_COLORS.Text.label

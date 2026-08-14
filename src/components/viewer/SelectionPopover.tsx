@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
+import { Popover, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
   ANNOTATION_COLORS,
@@ -24,16 +25,19 @@ interface SelectionPopoverProps {
   onDismiss: () => void;
 }
 
-const MARGIN = 8;
-
 /**
  * The menu that appears where the user let go of the mouse.
  *
- * Fixed-positioned against the viewport rather than absolutely inside the page
- * surface: that surface carries the zoom scale and the rotation transform, and
- * a menu that rotates with the paper (or doubles in size at 2× zoom) is not a
- * menu. The selection's own client rect is already in viewport space, so this
- * costs nothing and is immune to both.
+ * Anchored to the selection's own client rect, which is already in viewport
+ * space — so it is immune to the zoom scale and rotation transform the page
+ * surface carries. (A menu that rotates with the paper, or doubles in size at
+ * 2× zoom, is not a menu.) Base UI's Positioner takes a VirtualElement, i.e.
+ * anything with `getBoundingClientRect`, which is exactly what that rect is.
+ *
+ * That replaced ~35 lines of manual measure-centre-clamp-flip plus an
+ * `invisible`-until-measured guard and a window-level Escape listener. The
+ * window listener is the one worth noting: it fired for *every* open overlay,
+ * so one Escape over the viewer also closed the stage-retry dialog.
  */
 export function SelectionPopover({
   anchor,
@@ -41,62 +45,51 @@ export function SelectionPopover({
   onComment,
   onDismiss,
 }: SelectionPopoverProps) {
-  const cardRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [commenting, setCommenting] = useState(false);
   const [color, setColor] = useState<AnnotationColor>(DEFAULT_ANNOTATION_COLOR);
   const [comment, setComment] = useState("");
-  // Off-screen until measured, so the first paint isn't at an unclamped
-  // position that then jumps once the width is known.
-  const [placement, setPlacement] = useState<{ left: number; top: number } | null>(
-    null
-  );
 
-  useLayoutEffect(() => {
-    const card = cardRef.current;
-    if (!card) return;
-    const { width, height } = card.getBoundingClientRect();
-    const centered = (anchor.left + anchor.right) / 2 - width / 2;
-    const left = Math.max(
-      MARGIN,
-      Math.min(centered, window.innerWidth - width - MARGIN)
-    );
-    // Below the selection by default; above it when the selection ends near
-    // the bottom of the window and the menu would be cut off.
-    const below = anchor.bottom + MARGIN;
-    const top =
-      below + height + MARGIN > window.innerHeight
-        ? Math.max(MARGIN, anchor.top - height - MARGIN)
-        : below;
-    setPlacement({ left, top });
-  }, [anchor, commenting]);
+  // A VirtualElement over the selection rect. Rebuilt when the anchor moves so
+  // the positioner re-measures.
+  const virtualAnchor = useMemo(
+    () => ({
+      getBoundingClientRect: () =>
+        new DOMRect(
+          anchor.left,
+          anchor.top,
+          anchor.right - anchor.left,
+          anchor.bottom - anchor.top
+        ),
+    }),
+    [anchor]
+  );
 
   // Focus the box the moment it exists, so "comment" is one click and typing.
   useEffect(() => {
     if (commenting) textareaRef.current?.focus();
   }, [commenting]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onDismiss();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onDismiss]);
-
   return (
-    <div
-      ref={cardRef}
-      // The pointerdown that would otherwise land on the page below clears the
-      // selection this popover exists to act on.
+    <Popover
+      open
+      onOpenChange={(next) => {
+        if (!next) onDismiss();
+      }}
+    >
+    <PopoverContent
+      anchor={virtualAnchor}
+      side="bottom"
+      align="center"
+      sideOffset={8}
+      // Base UI steals focus into the popup by default, which collapses the
+      // DOM selection this menu exists to act on.
+      initialFocus={false}
+      // The pointerdown that would otherwise land on the page below clears
+      // that same selection.
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.preventDefault()}
-      className={cn(
-        "fixed z-50 rounded-lg border bg-popover p-1.5 shadow-xl",
-        placement ? "" : "invisible"
-      )}
-      style={{ left: placement?.left ?? 0, top: placement?.top ?? 0 }}
-      role="dialog"
+      className="overflow-visible rounded-lg border bg-popover p-1.5 shadow-xl"
       aria-label="Highlight selected text"
     >
       <div className="flex items-center gap-1">
@@ -111,8 +104,8 @@ export function SelectionPopover({
               commenting ? setColor(option.key) : onHighlight(option.key)
             }
             className={cn(
-              "h-6 w-6 rounded-full transition-transform hover:scale-110",
-              "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              "size-4 rounded-full transition-transform hover:scale-110",
+              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring",
               commenting && color === option.key
                 ? "ring-2 ring-foreground ring-offset-2 ring-offset-popover"
                 : "ring-1 ring-inset ring-black/10"
@@ -130,10 +123,10 @@ export function SelectionPopover({
               className={cn(
                 "flex h-6 items-center gap-1.5 rounded-md px-2 text-xs font-medium",
                 "text-foreground transition-colors hover:bg-accent",
-                "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
               )}
             >
-              <MessageSquarePlus className="h-3.5 w-3.5" />
+              <MessageSquarePlus className="size-3.5" />
               Comment
             </button>
           </>
@@ -159,7 +152,7 @@ export function SelectionPopover({
             className={cn(
               "w-full resize-none rounded-md border bg-background px-2 py-1.5 text-sm",
               "placeholder:text-muted-foreground",
-              "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
             )}
           />
           <div className="mt-1.5 flex justify-end gap-1.5">
@@ -184,6 +177,7 @@ export function SelectionPopover({
           </div>
         </div>
       )}
-    </div>
+    </PopoverContent>
+    </Popover>
   );
 }

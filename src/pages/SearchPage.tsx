@@ -15,13 +15,10 @@ import SearchBar from "@/components/search/SearchBar";
 import { useSearchHotkey } from "@/components/search/useSearchHotkey";
 import { ResearchAnswerWithEvidence } from "@/components/search/ResearchEvidenceCarousel";
 import { Skeleton } from "@/components/ui/skeleton";
-
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+import { entitySlug } from "@/lib/entitySlug";
+import { useProjectSlug } from "@/hooks/useProjectSlug";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
 
 const STAGES = [
   { key: "planning", label: "Understanding the question" },
@@ -65,6 +62,7 @@ export default function SearchPage() {
   const queryText = search?.query ?? q;
   // Project context: from the loaded search row, else the URL
   const projectId = search?.projectId ?? projectParam ?? null;
+  const projectSlug = useProjectSlug(projectId);
 
   async function rerun() {
     if (!queryText || !projectId) return;
@@ -82,42 +80,47 @@ export default function SearchPage() {
 
   return (
     <div className="flex flex-col">
-      <header className="border-b px-6 py-4 flex items-center gap-4">
-        <Link
-          to={projectId ? `/p/${projectId}` : "/"}
-          className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
-          title="Back to project"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </Link>
-        <div className="flex-1">
-          {projectId && (
-            <SearchBar projectId={projectId} focusSignal={searchFocus} />
-          )}
+      <header className="border-b border-border">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-6 py-4">
+          <Link
+            to={projectSlug ? `/p/${projectSlug}` : "/"}
+            aria-label="Back to project"
+            className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+          >
+            <ArrowLeft className="size-4" />
+          </Link>
+          <div className="flex-1">
+            {projectId && (
+              <SearchBar projectId={projectId} focusSignal={searchFocus} />
+            )}
+          </div>
         </div>
       </header>
 
-      <div className="flex-1">
-        <div className="max-w-6xl mx-auto p-6">
+      <main id="main" className="flex-1">
+        <div className="mx-auto w-full max-w-5xl px-6 py-6">
           {!q && !idParam ? (
-            <p className="text-sm text-muted-foreground text-center py-12">
-              Type a question above to search the corpus.
-            </p>
+            <EmptyState
+              title="Type a question above to search the corpus."
+              description="Answers cite the documents they came from."
+            />
           ) : (
             <>
               <div className="flex items-center gap-2 mb-4">
-                <h1 className="text-lg font-semibold flex items-center gap-2 min-w-0">
-                  <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                <h1 className="text-xl font-semibold flex items-center gap-2 min-w-0">
+                  <Sparkles className="size-4 text-primary shrink-0" />
                   <span className="truncate">{queryText}</span>
                 </h1>
                 {search?.status === "completed" && (
-                  <button
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={() => void rerun()}
-                    className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground border rounded-md px-2 py-1 transition-colors shrink-0"
+                    className="ml-auto shrink-0"
                     title="Run this search again with fresh results"
                   >
-                    <RefreshCw className="h-3 w-3" /> Re-run
-                  </button>
+                    <RefreshCw className="size-3" /> Re-run
+                  </Button>
                 )}
               </div>
 
@@ -133,11 +136,11 @@ export default function SearchPage() {
                         className="flex items-center gap-2 text-sm"
                       >
                         {done ? (
-                          <Check className="h-4 w-4 text-emerald-500" />
+                          <Check className="size-4 text-success" />
                         ) : current ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                          <Loader2 className="size-4 animate-spin text-primary" />
                         ) : (
-                          <span className="h-4 w-4 rounded-full border inline-block" />
+                          <span className="size-4 rounded-full border inline-block" />
                         )}
                         <span
                           className={
@@ -156,7 +159,7 @@ export default function SearchPage() {
 
               {search?.status === "failed" && (
                 <div className="flex items-start gap-2 border border-destructive/30 bg-destructive/5 text-sm rounded-lg p-4 mb-6">
-                  <CircleAlert className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+                  <CircleAlert className="size-4 text-destructive mt-0.5 shrink-0" />
                   <div>
                     <p className="font-medium">Search failed</p>
                     <p className="text-muted-foreground">
@@ -172,7 +175,7 @@ export default function SearchPage() {
                   {search.matchedEntities.map((e) => (
                     <Link
                       key={e.entityId}
-                      to={`/entity/${toSlug(e.name)}${projectId ? `?project=${projectId}` : ""}`}
+                      to={`/entity/${entitySlug(e.name)}${projectId ? `?project=${projectId}` : ""}`}
                       className="text-xs border rounded-full px-2.5 py-1 hover:bg-accent transition-colors"
                     >
                       {e.name}
@@ -205,7 +208,7 @@ export default function SearchPage() {
             </>
           )}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

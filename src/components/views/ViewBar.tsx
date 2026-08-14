@@ -67,9 +67,9 @@ export function ViewBar<T>({
           onClick={onReset}
           aria-label="Reset this view"
           title="Reset this view"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
-          <X className="h-3.5 w-3.5" />
+          <X className="size-3.5" />
         </button>
       )}
     </div>
@@ -142,13 +142,13 @@ function PropertiesPanel<T>({
             dragging === id && "opacity-40"
           )}
         >
-          <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-muted-foreground" />
+          <GripVertical className="size-3 shrink-0 cursor-grab text-muted-foreground" />
           <input
             type="checkbox"
             checked
             onChange={() => toggle(id)}
             aria-label={`Hide ${labelOf(id)}`}
-            className="h-3 w-3 shrink-0 cursor-pointer accent-primary"
+            className="size-3 shrink-0 cursor-pointer accent-primary"
           />
           <span className="truncate">{labelOf(id)}</span>
         </div>
@@ -166,7 +166,7 @@ function PropertiesPanel<T>({
                 type="checkbox"
                 checked={false}
                 onChange={() => toggle(id)}
-                className="h-3 w-3 shrink-0 cursor-pointer accent-primary"
+                className="size-3 shrink-0 cursor-pointer accent-primary"
               />
               <span className="truncate">{labelOf(id)}</span>
             </label>
@@ -229,7 +229,7 @@ function GroupPanel<T>({
               onChange={(event) =>
                 onChange({ ...config, hideEmptyGroups: event.target.checked })
               }
-              className="h-3 w-3 cursor-pointer accent-primary"
+              className="size-3 cursor-pointer accent-primary"
             />
             Hide empty groups
           </label>
@@ -290,7 +290,7 @@ function FilterPanel<T>({
     >
       {config.filters.length === 0 ? (
         <p className="px-1 py-1 text-xs text-muted-foreground">
-          No filters. Every document is shown.
+          No filters. Everything is shown.
         </p>
       ) : (
         config.filters.map((condition, index) => {
@@ -298,7 +298,7 @@ function FilterPanel<T>({
           return (
             <div key={index} className="mb-1.5 rounded border p-1.5">
               <div className="flex items-center gap-1">
-                <span className="w-8 shrink-0 text-[10px] uppercase text-muted-foreground">
+                <span className="w-8 shrink-0 text-2xs uppercase text-muted-foreground">
                   {index === 0 ? "Where" : "And"}
                 </span>
                 <MiniSelect
@@ -321,9 +321,9 @@ function FilterPanel<T>({
                   type="button"
                   onClick={() => remove(index)}
                   aria-label="Remove filter"
-                  className="grid h-6 w-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="size-3" />
                 </button>
               </div>
               {def && (
@@ -360,7 +360,7 @@ function FilterPanel<T>({
         onClick={add}
         className="mt-1 flex w-full items-center gap-1 rounded px-1 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
       >
-        <Plus className="h-3 w-3" /> Add filter
+        <Plus className="size-3" /> Add filter
       </button>
     </ViewPopover>
   );
@@ -421,7 +421,7 @@ function FilterValueEditor<T>({
                 })
               }
               className={cn(
-                "rounded-full border px-1.5 py-0.5 text-[10px] transition-colors",
+                "rounded-full border px-1.5 py-0.5 text-2xs transition-colors",
                 on
                   ? "border-primary/40 bg-primary/10 text-foreground"
                   : "bg-background text-muted-foreground hover:bg-accent"
@@ -491,7 +491,7 @@ function SortPanel<T>({
       ) : (
         config.sorts.map((sort, index) => (
           <div key={index} className="mb-1 flex items-center gap-1">
-            <span className="w-8 shrink-0 text-[10px] uppercase text-muted-foreground">
+            <span className="w-8 shrink-0 text-2xs uppercase text-muted-foreground">
               {index === 0 ? "By" : "Then"}
             </span>
             <MiniSelect
@@ -528,9 +528,9 @@ function SortPanel<T>({
                 })
               }
               aria-label="Remove sort"
-              className="grid h-6 w-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
             >
-              <X className="h-3 w-3" />
+              <X className="size-3" />
             </button>
           </div>
         ))
@@ -548,9 +548,9 @@ function SortPanel<T>({
         }}
         className="mt-1 flex w-full items-center gap-1 rounded px-1 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
       >
-        <Plus className="h-3 w-3" /> Add sort
+        <Plus className="size-3" /> Add sort
       </button>
-      <p className="px-1 pt-1 text-[10px] text-muted-foreground">
+      <p className="px-1 pt-1 text-2xs text-muted-foreground">
         Rows with no value always sort last.
       </p>
     </ViewPopover>
@@ -593,11 +593,11 @@ export function ToolbarSearch({
         aria-expanded={expanded}
         title="Search"
         onClick={() => setExpanded((current) => !current)}
-        className="relative grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
-        <Search className="h-3.5 w-3.5" />
+        <Search className="size-3.5" />
         {value && (
-          <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
+          <span className="absolute bottom-1 right-1 size-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
         )}
       </button>
       {expanded && (

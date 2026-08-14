@@ -16,16 +16,10 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { DocTypeIcon } from "@/components/documents/DocTypeIcon";
-
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+import { entitySlug } from "@/lib/entitySlug";
 
 function EntityTypeIcon({ type }: { type: string }) {
-  const cls = "h-4 w-4 text-muted-foreground shrink-0";
+  const cls = "size-4 text-muted-foreground shrink-0";
   if (type === "person" || type === "people") return <User className={cls} />;
   if (type === "organization") return <Building2 className={cls} />;
   if (type === "place" || type === "places") return <MapPin className={cls} />;
@@ -132,6 +126,10 @@ export default function SearchBar({
   const [recentCount, setRecentCount] = useState(DEFAULT_RECENT_COUNT);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  // The list is max-h-[32rem] with its own scroller, so moving `active` past
+  // the fold used to slide an invisible highlight — the row was never scrolled
+  // into view.
+  const activeRowRef = useRef<HTMLDivElement>(null);
 
   // The ring is a transient on the DOM node, not React state: nothing else
   // renders from it, and a state flag here would re-render the whole dropdown
@@ -234,7 +232,7 @@ export default function SearchBar({
         navigate(`/search?id=${item.id}`);
         break;
       case "entity":
-        navigate(`/entity/${toSlug(item.name)}?project=${projectId}`);
+        navigate(`/entity/${entitySlug(item.name)}?project=${projectId}`);
         break;
       case "document":
         navigate(`/documents/${item.documentId}`);
@@ -247,7 +245,21 @@ export default function SearchBar({
     }
   }
 
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
   function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Home" && open && items.length > 0) {
+      e.preventDefault();
+      setActive(0);
+      return;
+    }
+    if (e.key === "End" && open && items.length > 0) {
+      e.preventDefault();
+      setActive(items.length - 1);
+      return;
+    }
     if (!open || items.length === 0) {
       if (e.key === "Enter" && value.trim()) {
         go({ kind: "ask" });
@@ -316,12 +328,27 @@ export default function SearchBar({
   return (
     <div ref={rootRef} className="relative mx-auto w-full max-w-3xl">
       <div className="relative">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground pointer-events-none" />
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
         <input
           ref={inputRef}
           type="text"
+          /* Base UI's Autocomplete can host this list (mode="none" takes
+             server-filtered items), but not its two nested action buttons:
+             "Generate 3 more" and "Show 5 more" live *inside* group headings,
+             and Autocomplete owns click and keyboard handling for everything
+             under its List. Moving them out is a suggestion-UX change, not a
+             migration. What is here is now the full WAI-ARIA combobox pattern
+             — listbox/option ownership, aria-controls, aria-activedescendant,
+             a roving active index, Home/End and scroll-into-view — so what is
+             left is composition, not correctness. */
+          // eslint-disable-next-line no-restricted-syntax
           role="combobox"
           aria-expanded={open && items.length > 0}
+          aria-controls="search-suggestions"
+          aria-autocomplete="list"
+          aria-activedescendant={
+            open && items.length > 0 ? `search-option-${active}` : undefined
+          }
           aria-label="Search"
           value={value}
           onChange={(e) => {
@@ -332,18 +359,25 @@ export default function SearchBar({
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
           placeholder="Search people, documents, connections — or ask a question…"
-          className="w-full h-12 pl-11 pr-4 rounded-xl border bg-card text-[15px] shadow-sm outline-none transition-shadow focus:shadow-md focus:ring-2 focus:ring-ring/30 placeholder:text-muted-foreground"
+          className="w-full h-12 pl-11 pr-4 rounded-xl border bg-card text-base shadow-sm outline-none transition-shadow focus:shadow-md focus:ring-2 focus:ring-ring/30 placeholder:text-muted-foreground"
         />
       </div>
 
       {open && items.length > 0 && (
         <div className="absolute z-50 mt-2 w-full rounded-xl border bg-popover text-popover-foreground shadow-lg overflow-hidden">
-          <ul className="max-h-[32rem] overflow-y-auto py-1">
+          <ul
+            id="search-suggestions"
+            /* Owned by the combobox input above; see the note there. */
+            // eslint-disable-next-line no-restricted-syntax
+            role="listbox"
+            aria-label="Search suggestions"
+            className="max-h-[32rem] overflow-y-auto py-1"
+          >
             {items.map((item, index) => (
               <li key={itemKey(item)}>
                 {item.kind !== "ask" && firstOfKind(index) && (
                   <div className="flex items-center justify-between gap-3 px-3 pt-2 pb-1">
-                    <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
                       {groupLabel[item.kind]}
                     </span>
                     {item.kind === "suggested" && (
@@ -356,15 +390,17 @@ export default function SearchBar({
                         }}
                         onClick={generateMoreQuestions}
                       >
-                        <RefreshCw className="h-3 w-3" />
+                        <RefreshCw className="size-3" />
                         Generate 3 more
                       </button>
                     )}
                   </div>
                 )}
                 <div
+                  id={`search-option-${index}`}
                   role="option"
                   aria-selected={active === index}
+                  ref={active === index ? activeRowRef : undefined}
                   className={rowClass(index)}
                   onMouseEnter={() => setActive(index)}
                   onMouseDown={(e) => {
@@ -374,29 +410,29 @@ export default function SearchBar({
                 >
                   {item.kind === "ask" && (
                     <>
-                      <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                      <Sparkles className="size-4 text-primary shrink-0" />
                       <span className="text-sm">
                         Ask: <span className="font-medium">“{value.trim()}”</span>
                       </span>
-                      <span className="ml-auto text-[11px] text-muted-foreground border rounded px-1.5 py-0.5">
+                      <span className="ml-auto text-2xs text-muted-foreground border rounded px-1.5 py-0.5">
                         deep search ↵
                       </span>
                     </>
                   )}
                   {item.kind === "history" && (
                     <>
-                      <History className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <History className="size-4 text-muted-foreground shrink-0" />
                       <span className="text-sm truncate">{item.query}</span>
-                      <span className="ml-auto text-[11px] text-muted-foreground shrink-0">
+                      <span className="ml-auto text-2xs text-muted-foreground shrink-0">
                         saved
                       </span>
                     </>
                   )}
                   {item.kind === "suggested" && (
                     <>
-                      <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                      <Sparkles className="size-4 text-primary shrink-0" />
                       <span className="text-sm leading-snug">{item.query}</span>
-                      <span className="ml-auto text-[11px] text-muted-foreground shrink-0">
+                      <span className="ml-auto text-2xs text-muted-foreground shrink-0">
                         deep search
                       </span>
                     </>
@@ -433,7 +469,7 @@ export default function SearchBar({
                   )}
                   {item.kind === "page" && (
                     <>
-                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <FileText className="size-4 text-muted-foreground shrink-0" />
                       <span className="min-w-0">
                         <span className="block text-xs text-muted-foreground truncate">
                           {item.documentName} · p.{item.pageNumber + 1}
@@ -459,7 +495,7 @@ export default function SearchBar({
                     setRecentCount((count) => count + RECENT_COUNT_STEP)
                   }
                 >
-                  <ChevronDown className="h-3.5 w-3.5" />
+                  <ChevronDown className="size-3.5" />
                   Show {Math.min(RECENT_COUNT_STEP, remainingRecentSearches)} more
                 </button>
               </li>

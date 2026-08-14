@@ -34,7 +34,7 @@ export function ZoomControl({
         disabled={zoom <= MIN_ZOOM}
         onClick={() => onZoomChange(zoomOut(zoom))}
       >
-        <Minus className="h-3.5 w-3.5" />
+        <Minus className="size-3.5" />
       </ZoomButton>
       <button
         type="button"
@@ -49,11 +49,11 @@ export function ZoomControl({
         disabled={zoom >= MAX_ZOOM}
         onClick={() => onZoomChange(zoomIn(zoom))}
       >
-        <Plus className="h-3.5 w-3.5" />
+        <Plus className="size-3.5" />
       </ZoomButton>
       <span className="h-4 w-px bg-border" aria-hidden="true" />
       <ZoomButton label="Fit to width" onClick={onFitWidth}>
-        <MoveHorizontal className="h-3.5 w-3.5" />
+        <MoveHorizontal className="size-3.5" />
       </ZoomButton>
     </div>
   );

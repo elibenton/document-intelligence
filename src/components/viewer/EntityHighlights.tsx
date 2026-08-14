@@ -110,7 +110,7 @@ export function EntityHighlights({
           >
             {isHovered && (
               <span
-                className="absolute left-0 text-[9px] font-semibold leading-none px-1 py-0.5 rounded-sm whitespace-nowrap bg-purple-100 text-purple-700 pointer-events-none"
+                className="absolute left-0 text-viewer-label font-semibold leading-none px-1 py-0.5 rounded-sm whitespace-nowrap bg-purple-100 text-purple-700 pointer-events-none"
                 style={labelBelow ? { top: "100%" } : { bottom: "100%" }}
               >
                 {mention.name}

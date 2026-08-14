@@ -367,12 +367,12 @@ function MinimizeButton({
       title={label}
       aria-label={label}
       className={cn(
-        "absolute top-2 right-2 z-30 grid h-6 w-6 place-items-center rounded-md",
+        "absolute top-2 right-2 z-30 grid size-6 place-items-center rounded-md",
         "text-foreground transition-colors hover:bg-accent",
-        "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
       )}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="size-3.5" />
     </button>
   );
 }
@@ -398,13 +398,13 @@ function FloatingPanelButton({
         FLOATING_SURFACE,
         "absolute top-3 z-30 flex items-center gap-2 rounded-full py-2.5",
         "text-sm font-medium text-foreground transition-colors hover:bg-accent",
-        "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring",
         side === "left" ? "left-3 pl-3 pr-4" : "right-3 pl-4 pr-3"
       )}
     >
-      {side === "left" && <Icon className="h-4 w-4" />}
+      {side === "left" && <Icon className="size-4" />}
       {label}
-      {side === "right" && <Icon className="h-4 w-4" />}
+      {side === "right" && <Icon className="size-4" />}
     </button>
   );
 }

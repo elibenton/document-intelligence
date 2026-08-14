@@ -109,12 +109,12 @@ function NoteRow({
       <button
         type="button"
         onClick={onSelect}
-        className="flex w-full flex-col items-start gap-1 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 rounded-md"
+        className="flex w-full flex-col items-start gap-1 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring rounded-md"
       >
         <span className="flex w-full items-start gap-2">
           <span
             aria-hidden="true"
-            className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-inset ring-black/10"
+            className="mt-1 size-3 shrink-0 rounded-full ring-1 ring-inset ring-black/10"
             style={{ backgroundColor: color.swatch }}
           />
           <span className="line-clamp-3 flex-1 text-xs italic text-muted-foreground">
@@ -126,7 +126,7 @@ function NoteRow({
             {note.comment}
           </span>
         )}
-        <span className="pl-4.5 text-[11px] text-muted-foreground">
+        <span className="pl-4.5 text-2xs text-muted-foreground">
           Page {note.pageNumber + 1}
         </span>
       </button>
@@ -136,13 +136,13 @@ function NoteRow({
         title="Delete note"
         aria-label="Delete note"
         className={cn(
-          "absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-md",
+          "absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-md",
           "text-muted-foreground opacity-0 transition-opacity hover:text-destructive",
           "group-hover/note:opacity-100 focus-visible:opacity-100",
-          "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
         )}
       >
-        <Trash2 className="h-3.5 w-3.5" />
+        <Trash2 className="size-3.5" />
       </button>
     </div>
   );

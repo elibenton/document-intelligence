@@ -162,7 +162,7 @@ export function RecordingView({
                 }}
               >
                 <RefreshCw
-                  className={cn("h-3.5 w-3.5 mr-1", retrying && "animate-spin")}
+                  className={cn("size-3.5 mr-1", retrying && "animate-spin")}
                 />
                 Re-transcribe
               </Button>
@@ -180,7 +180,7 @@ export function RecordingView({
           <div className="flex flex-col items-center gap-3 py-12 text-center">
             {isProcessing ? (
               <>
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">
                   Transcribing with speaker diarization…
                 </p>

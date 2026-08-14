@@ -19,7 +19,7 @@ export function WebClipViewer({ url, sourceUrl, clippedAt }: WebClipViewerProps)
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-muted/50 text-xs text-muted-foreground shrink-0">
-        <Globe className="h-3.5 w-3.5 shrink-0" />
+        <Globe className="size-3.5 shrink-0" />
         <span className="truncate">
           Archived snapshot
           {domain ? ` of ${domain}` : ""}
@@ -34,7 +34,7 @@ export function WebClipViewer({ url, sourceUrl, clippedAt }: WebClipViewerProps)
             rel="noopener noreferrer"
             className="ml-auto inline-flex items-center gap-1 hover:text-foreground shrink-0"
           >
-            View original <ExternalLink className="h-3 w-3" />
+            View original <ExternalLink className="size-3" />
           </a>
         )}
       </div>

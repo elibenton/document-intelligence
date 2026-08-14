@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { Link, useParams } from "react-router";
-import { Archive, ArrowLeft, Plus, Star, Tag, Trash2, X } from "lucide-react";
-import { Popover } from "@base-ui/react/popover";
+import { ArrowLeft, Plus, RotateCw, Star, Tag, Trash2, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { AddFilesButton } from "@/components/documents/AddFilesButton";
@@ -35,13 +35,9 @@ import {
 import { useUploads } from "@/hooks/uploadContext";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
-
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+import { entitySlug } from "@/lib/entitySlug";
+import { useConfirm } from "@/components/ui/use-confirm";
+import { counted } from "@/lib/plural";
 
 /**
  * The bar that replaces the Library's view controls while rows are checked:
@@ -54,14 +50,15 @@ function SelectionToolbar({
   selected: Id<"documents">[];
   onClear: () => void;
 }) {
-  const setArchived = useMutation(api.documents.setArchived);
   const addKinds = useMutation(api.documents.addKinds);
   const remove = useMutation(api.documents.remove);
+  const reanalyze = useAction(api.processing.runAnalyze);
   const allKinds = useQuery(api.kinds.list);
 
   const [tagOpen, setTagOpen] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
 
   // Each document is its own mutation: `remove` cascades through pages,
   // blocks, extractions, and stored files, so batching a selection into one
@@ -90,34 +87,15 @@ function SelectionToolbar({
         {selected.length} selected
       </span>
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 gap-1.5 px-2 text-xs"
-        disabled={busy}
-        onClick={() => void run((id) => setArchived({ id, archived: true }))}
-      >
-        <Archive className="h-3.5 w-3.5" />
-        Archive
-      </Button>
-
-      <Popover.Root open={tagOpen} onOpenChange={setTagOpen}>
-        <Popover.Trigger
+      <Popover open={tagOpen} onOpenChange={setTagOpen}>
+        <PopoverTrigger
           disabled={busy}
           className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
         >
-          <Tag className="h-3.5 w-3.5" />
+          <Tag className="size-3.5" />
           Tag
-        </Popover.Trigger>
-        <Popover.Portal>
-          <Popover.Positioner
-            side="bottom"
-            align="end"
-            sideOffset={6}
-            className="z-50"
-          >
-            <Popover.Popup className="w-56 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
+        </PopoverTrigger>
+        <PopoverContent className="w-56 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
               <div className="flex flex-col gap-2">
                 <div className="flex gap-1">
                   <Input
@@ -141,7 +119,7 @@ function SelectionToolbar({
                     disabled={!newTag.trim()}
                     onClick={() => void applyTag(newTag)}
                   >
-                    <Plus className="h-3.5 w-3.5" />
+                    <Plus className="size-3.5" />
                   </Button>
                 </div>
                 {(allKinds ?? []).length > 0 && (
@@ -151,7 +129,7 @@ function SelectionToolbar({
                         key={kind.name}
                         type="button"
                         onClick={() => void applyTag(kind.name)}
-                        className="rounded-4xl border border-border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
+                        className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
                       >
                         {kind.name}
                       </button>
@@ -159,10 +137,28 @@ function SelectionToolbar({
                   </div>
                 )}
               </div>
-            </Popover.Popup>
-          </Popover.Positioner>
-        </Popover.Portal>
-      </Popover.Root>
+        </PopoverContent>
+      </Popover>
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 gap-1.5 px-2 text-xs"
+        disabled={busy}
+        onClick={async () => {
+          const ok = await confirm({
+            title: `Re-analyze ${counted(selected.length, "document")}?`,
+            body: "Each one goes back through the Analyze pass, replacing the type, category, dates and place it derived. A title or type you set yourself is kept.",
+            confirmLabel: "Re-analyze",
+          });
+          if (!ok) return;
+          void run((id) => reanalyze({ documentId: id }));
+        }}
+      >
+        <RotateCw className="size-3.5" />
+        Re-analyze
+      </Button>
 
       <Button
         type="button"
@@ -170,19 +166,18 @@ function SelectionToolbar({
         size="sm"
         className="h-7 gap-1.5 px-2 text-xs text-destructive hover:text-destructive"
         disabled={busy}
-        onClick={() => {
-          const plural = selected.length === 1 ? "document" : "documents";
-          if (
-            !window.confirm(
-              `Delete ${selected.length} ${plural}? This also removes their pages, extractions, and files.`
-            )
-          ) {
-            return;
-          }
+        onClick={async () => {
+          const ok = await confirm({
+            title: `Delete ${counted(selected.length, "document")}?`,
+            body: "This also removes their pages, extractions, and files. It cannot be undone.",
+            confirmLabel: "Delete",
+            tone: "destructive",
+          });
+          if (!ok) return;
           void run((id) => remove({ id }));
         }}
       >
-        <Trash2 className="h-3.5 w-3.5" />
+        <Trash2 className="size-3.5" />
         Delete
       </Button>
 
@@ -191,9 +186,9 @@ function SelectionToolbar({
         onClick={onClear}
         aria-label="Clear selection"
         title="Clear selection"
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
-        <X className="h-3.5 w-3.5" />
+        <X className="size-3.5" />
       </button>
     </div>
   );
@@ -219,17 +214,17 @@ function EntityListRow({
         title={starred ? "Unstar entity" : "Star entity"}
         onClick={() => void setStarred({ id: entity._id, starred: !starred })}
         className={cn(
-          "relative z-10 grid h-5 w-5 shrink-0 place-items-center rounded transition-colors",
-          "hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+          "relative z-10 grid size-5 shrink-0 place-items-center rounded transition-colors",
+          "hover:bg-accent focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring",
           starred
             ? "text-amber-500"
             : "text-muted-foreground/45 hover:text-amber-500"
         )}
       >
-        <Star className="h-3.5 w-3.5" fill={starred ? "currentColor" : "none"} />
+        <Star className="size-3.5" fill={starred ? "currentColor" : "none"} />
       </button>
       <Link
-        to={`/entity/${toSlug(entity.name)}?project=${projectId}`}
+        to={`/entity/${entitySlug(entity.name)}?project=${projectId}`}
         className="min-w-0 flex-1 truncate text-left text-sm after:absolute after:inset-0 after:content-['']"
       >
         {entity.name}
@@ -309,17 +304,51 @@ function EntityGroup({
   );
 }
 
+function ProjectHomeSkeleton() {
+  return (
+    <div className="mx-auto max-w-2xl space-y-4 p-12">
+      <Skeleton className="mx-auto h-8 w-64" />
+      <Skeleton className="mx-auto h-10 w-full" />
+    </div>
+  );
+}
+
+function ProjectNotFound() {
+  return (
+    <div className="p-12 text-center text-sm text-muted-foreground">
+      No project at this address.{" "}
+      <Link to="/" className="underline hover:text-foreground">
+        Pick one
+      </Link>
+      .
+    </div>
+  );
+}
+
+/**
+ * `/p/:slug` names a project the way the user does. Everything below this page
+ * is keyed by the project's id, so the row has to be resolved before any of it
+ * can run — hence the split: this half resolves, the other half renders.
+ */
 export default function HomePage() {
-  const { projectId } = useParams<{ projectId: string }>() as {
-    projectId: Id<"projects">;
-  };
+  const { slug } = useParams<{ slug: string }>();
+  const project = useQuery(api.projects.getBySlug, slug ? { slug } : "skip");
+
+  if (project === undefined) return <ProjectHomeSkeleton />;
+  if (project === null) return <ProjectNotFound />;
+  // Keyed on the id so moving between projects remounts, rather than carrying
+  // the previous project's selection and view state into the next one.
+  return <ProjectHome key={project._id} project={project} />;
+}
+
+function ProjectHome({ project }: { project: Doc<"projects"> }) {
+  const projectId = project._id;
 
   // The search bar is already on this page, so ⌘K walks the user to it —
   // focused and briefly ringed — instead of stacking a modal copy over it.
   const [searchFocus, setSearchFocus] = useState(0);
   useSearchHotkey(useCallback(() => setSearchFocus((n) => n + 1), []));
 
-  const project = useQuery(api.projects.get, { id: projectId });
   const allDocuments = useQuery(api.documents.list, { projectId });
   // A file being ingested lives in the upload card, not here — it joins the
   // library only once the pipeline has finished with it.
@@ -501,9 +530,9 @@ export default function HomePage() {
           to="/"
           title="All projects"
           aria-label="All projects"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft className="size-4" />
         </Link>
         <span
           aria-hidden={!scrolled}
@@ -519,7 +548,7 @@ export default function HomePage() {
       <div className="flex-1">
         <div className="px-6 pb-6">
           <div className="mx-auto mb-6 mt-4 max-w-2xl text-center">
-            <h1 className="text-4xl font-bold tracking-tight">
+            <h1 className="text-3xl font-semibold tracking-tight">
               {project?.name ?? "…"}
             </h1>
             <p className="mt-2 text-base text-muted-foreground">

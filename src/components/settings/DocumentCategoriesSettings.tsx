@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ui/use-confirm";
 
 interface CategoryBreakdown {
   categoryKey: string;
@@ -22,7 +23,7 @@ interface CategoryBreakdown {
 }
 
 const TEXTAREA =
-  "w-full resize-none rounded-md border border-input bg-transparent px-2.5 py-1.5 text-xs leading-snug outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+  "w-full resize-none rounded-md border border-input bg-transparent px-2.5 py-1.5 text-xs leading-snug outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring";
 
 function ColorPicker({
   value,
@@ -41,7 +42,7 @@ function ColorPicker({
           title={color}
           onClick={() => onChange(color)}
           className={cn(
-            "h-5 w-5 rounded-full border-2 transition-colors",
+            "size-4 rounded-full border-2 transition-colors",
             CATEGORY_COLOR_PALETTE[color].dark,
             value === color ? "border-foreground" : "border-transparent"
           )}
@@ -73,6 +74,7 @@ function CategoryRow({
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const confirm = useConfirm();
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const dirty =
@@ -95,7 +97,13 @@ function CategoryRow({
 
   async function handleRemove() {
     if (deleting) return;
-    if (!window.confirm(`Delete the "${category.label}" category?`)) return;
+    const ok = await confirm({
+      title: `Delete the “${category.label}” category?`,
+      body: "Documents already sorted into it keep their category until they are re-analyzed.",
+      confirmLabel: "Delete category",
+      tone: "destructive",
+    });
+    if (!ok) return;
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -114,7 +122,7 @@ function CategoryRow({
       <div className="flex items-start gap-3">
         <span
           className={cn(
-            "mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none",
+            "mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-2xs font-medium leading-none",
             style.dark
           )}
         >
@@ -159,9 +167,9 @@ function CategoryRow({
                 className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
               >
                 {expanded ? (
-                  <ChevronDown className="h-3.5 w-3.5" />
+                  <ChevronDown className="size-3.5" />
                 ) : (
-                  <ChevronRight className="h-3.5 w-3.5" />
+                  <ChevronRight className="size-3.5" />
                 )}
                 {kindCount} type{kindCount === 1 ? "" : "s"} · {breakdown?.documentCount}{" "}
                 document{breakdown?.documentCount === 1 ? "" : "s"}
@@ -175,7 +183,7 @@ function CategoryRow({
                 <span
                   key={k.name}
                   className={cn(
-                    "rounded-full px-2 py-0.5 text-[10px] font-medium leading-none",
+                    "rounded-full px-2 py-0.5 text-2xs font-medium leading-none",
                     style.light
                   )}
                 >
@@ -183,7 +191,7 @@ function CategoryRow({
                 </span>
               ))}
               {breakdown.truncated && (
-                <span className="text-[10px] text-muted-foreground">and more…</span>
+                <span className="text-2xs text-muted-foreground">and more…</span>
               )}
             </div>
           )}

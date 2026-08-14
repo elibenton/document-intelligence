@@ -12,6 +12,9 @@ import {
   GroupedConnections,
 } from "@/components/entities/EntityConnections";
 import { entitySlug } from "@/lib/entitySlug";
+import { PageShell, SectionHeading } from "@/components/ui/page-shell";
+import { counted } from "@/lib/plural";
+import { useProjectSlug } from "@/hooks/useProjectSlug";
 
 export default function EntityPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -26,6 +29,7 @@ export default function EntityPage() {
   });
   // Prefer the resolved entity's own project for outbound links.
   const linkProjectId = entity?.projectId ?? projectParam ?? null;
+  const projectSlug = useProjectSlug(linkProjectId);
   const entityLink = (name: string) =>
     `/entity/${entitySlug(name)}${linkProjectId ? `?project=${linkProjectId}` : ""}`;
   const documents = useQuery(
@@ -76,35 +80,35 @@ export default function EntityPage() {
   };
 
   return (
-    <div className="flex flex-col">
+    <>
       {linkProjectId && <ProjectSearchDialog projectId={linkProjectId} />}
-      <header className="border-b px-6 py-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-          <Link
-            to={entity.projectId ? `/p/${entity.projectId}` : "/"}
-            className="hover:text-foreground"
-          >
-            Project
-          </Link>
-          <span>/</span>
-          <span>{entity.name}</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-bold">{entity.name}</h1>
-          {(entity.types ?? [entity.type]).map((t) => (
-            <Badge key={t} variant="outline" className="text-xs capitalize">
-              {typeLabels[t] ?? t}
-            </Badge>
-          ))}
-        </div>
+      <PageShell
+        back={{ to: projectSlug ? `/p/${projectSlug}` : "/", label: "Back to project" }}
+        title={
+          <span className="flex items-baseline gap-2.5">
+            <span className="truncate">{entity.name}</span>
+            {(entity.types ?? [entity.type]).map((t) => (
+              <Badge key={t} variant="outline" className="shrink-0 capitalize">
+                {typeLabels[t] ?? t}
+              </Badge>
+            ))}
+          </span>
+        }
+        subtitle={
+          <span className="tabular-nums">
+            {counted(entity.mentionCount, "mention")} across{" "}
+            {counted(entity.documentCount, "document")}
+          </span>
+        }
+      >
         {/* Contextual roles this entity plays, per document */}
         {roles && roles.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
+          <div className="mb-6 flex flex-wrap gap-1.5">
             {roles.map((r) => (
               <Badge
                 key={r._id}
                 variant="secondary"
-                className="text-xs capitalize"
+                className="capitalize"
                 title={r.document ? `${r.role} in ${r.document.name}` : r.role}
               >
                 {r.role}
@@ -117,13 +121,8 @@ export default function EntityPage() {
             ))}
           </div>
         )}
-        <p className="text-sm text-muted-foreground mt-1">
-          {entity.mentionCount} mention{entity.mentionCount !== 1 && "s"} across{" "}
-          {entity.documentCount} document{entity.documentCount !== 1 && "s"}
-        </p>
-      </header>
 
-      <div className="flex-1 p-6">
+      <div>
         {connections === undefined ? (
           <div className="space-y-2 mb-6">
             <Skeleton className="h-4 w-full" />
@@ -146,7 +145,7 @@ export default function EntityPage() {
             )}
 
             <section>
-              <h2 className="text-lg font-semibold mb-3">Connections</h2>
+              <SectionHeading>Connections</SectionHeading>
               <GroupedConnections
                 connections={connections.connections}
                 subjectName={entity.name}
@@ -155,7 +154,7 @@ export default function EntityPage() {
             </section>
 
             <section>
-              <h2 className="text-lg font-semibold mb-3">Timeline</h2>
+              <SectionHeading>Timeline</SectionHeading>
               <ConnectionTimeline
                 connections={connections.connections}
                 subjectName={entity.name}
@@ -165,7 +164,7 @@ export default function EntityPage() {
           </div>
         )}
 
-        <h2 className="text-lg font-semibold mb-3">Appears In</h2>
+        <SectionHeading>Appears In</SectionHeading>
 
         {documents === undefined ? (
           <div className="space-y-2">
@@ -240,6 +239,7 @@ export default function EntityPage() {
           </div>
         )}
       </div>
-    </div>
+      </PageShell>
+    </>
   );
 }

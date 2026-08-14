@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Link } from "react-router";
-import { ArrowLeft, CircleAlert, CircleCheck, Languages } from "lucide-react";
+import { CircleAlert, CircleCheck, Languages } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import ProviderAlert from "@/components/settings/ProviderAlert";
 import { ProcessingQueueControls } from "@/components/settings/ProcessingQueueControls";
@@ -9,6 +9,8 @@ import { DocumentCategoriesSettings } from "@/components/settings/DocumentCatego
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
+import { PageShell, SectionHeading } from "@/components/ui/page-shell";
+import { useConfirm } from "@/components/ui/use-confirm";
 
 const operationLabels: Record<string, string> = {
   parse: "Parse",
@@ -66,10 +68,10 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint?:
 }
 
 const healthPill: Record<string, { label: string; cls: string }> = {
-  ok: { label: "Healthy", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+  ok: { label: "Healthy", cls: "bg-emerald-500/10 text-success" },
   quota_exhausted: { label: "Out of credits", cls: "bg-destructive/15 text-destructive" },
   auth_failed: { label: "Key rejected", cls: "bg-destructive/15 text-destructive" },
-  not_configured: { label: "Not configured", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  not_configured: { label: "Not configured", cls: "bg-amber-500/15 text-warning" },
   error: { label: "Failing", cls: "bg-destructive/15 text-destructive" },
 };
 
@@ -78,7 +80,7 @@ function HealthPill({ status }: { status?: string }) {
   const pill = healthPill[status];
   if (!pill) return null;
   return (
-    <span className={`text-[10px] rounded-full px-2 py-0.5 font-medium ${pill.cls}`}>
+    <span className={`text-2xs rounded-full px-2 py-0.5 font-medium ${pill.cls}`}>
       {pill.label}
     </span>
   );
@@ -93,6 +95,7 @@ export default function SettingsPage() {
   const geminiStatus = health?.find((h) => h.provider === "google")?.status;
   const [languageDraft, setLanguageDraft] = useState("en");
   const [savingLanguage, setSavingLanguage] = useState(false);
+  const confirm = useConfirm();
 
   useEffect(() => {
     if (settings?.defaultLanguageCode) {
@@ -103,10 +106,11 @@ export default function SettingsPage() {
   async function saveLanguage() {
     if (savingLanguage || languageDraft === settings?.defaultLanguageCode) return;
 
-    const confirmed = window.confirm(
-      `Change the default language to ${languageName(languageDraft)}?\n\n` +
-        "This will retranslate the existing archive in the background and may incur additional API costs. Original source text will be preserved."
-    );
+    const confirmed = await confirm({
+      title: `Change the default language to ${languageName(languageDraft)}?`,
+      body: "This retranslates the existing archive in the background and will incur additional API cost. Original source text is preserved.",
+      confirmLabel: "Change language",
+    });
     if (!confirmed) return;
 
     setSavingLanguage(true);
@@ -118,42 +122,29 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex flex-col">
-      <header className="border-b px-6 py-4 flex items-center gap-3">
-        <Link
-          to="/"
-          className="p-1.5 -ml-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
-          title="Back"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </Link>
-        <div>
-          <h1 className="text-xl font-bold">Settings & Usage</h1>
-          <p className="text-sm text-muted-foreground">
-            API activity, token usage, and estimated cost.
-          </p>
-        </div>
-      </header>
-
-      <div className="flex-1">
-        <div className="p-6 max-w-4xl">
+    <PageShell
+      title="Settings & Usage"
+      subtitle="API activity, token usage, and estimated cost."
+      back={{ to: "/", label: "Back to projects" }}
+    >
+      <>
           {/* Provider health — loud when a provider is down or out of credits */}
           <ProviderAlert />
 
-          <h2 className="text-lg font-semibold mb-3">Document categories</h2>
+          <SectionHeading>Document categories</SectionHeading>
           <p className="text-sm text-muted-foreground mb-3">
             The enforced primary categories Analyze sorts every document into.
             Add your own, or adjust how the built-in ones are described.
           </p>
           <DocumentCategoriesSettings />
 
-          <h2 className="text-lg font-semibold mb-3">Processing</h2>
+          <SectionHeading>Processing</SectionHeading>
           <ProcessingQueueControls />
 
-          <h2 className="text-lg font-semibold mb-3">Language</h2>
+          <SectionHeading>Language</SectionHeading>
           <div className="rounded-lg border bg-card p-4 mb-8">
             <div className="flex items-start gap-3">
-              <Languages className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+              <Languages className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <label htmlFor="default-language" className="text-sm font-medium">
                   Default language
@@ -201,7 +192,7 @@ export default function SettingsPage() {
           </div>
 
           {/* Usage summary */}
-          <h2 className="text-lg font-semibold mb-3">Usage</h2>
+          <SectionHeading>Usage</SectionHeading>
           {totals === undefined ? (
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
               <Skeleton className="h-20" />
@@ -239,7 +230,7 @@ export default function SettingsPage() {
           )}
 
           {/* API log */}
-          <h2 className="text-lg font-semibold mb-3">API log</h2>
+          <SectionHeading>API log</SectionHeading>
           {logs === undefined ? (
             <div className="space-y-2 mb-8">
               <Skeleton className="h-4 w-full" />
@@ -310,7 +301,7 @@ export default function SettingsPage() {
                           <span
                             className={
                               log.cacheHit
-                                ? "text-emerald-600 dark:text-emerald-400"
+                                ? "text-success"
                                 : "text-muted-foreground"
                             }
                           >
@@ -320,10 +311,10 @@ export default function SettingsPage() {
                       </td>
                       <td className="px-3 py-2 text-center">
                         {log.status === "ok" ? (
-                          <CircleCheck className="h-4 w-4 text-emerald-500 inline" />
+                          <CircleCheck className="size-4 text-success inline" />
                         ) : (
                           <CircleAlert
-                            className="h-4 w-4 text-destructive inline"
+                            className="size-4 text-destructive inline"
                             aria-label={log.error}
                           />
                         )}
@@ -339,7 +330,7 @@ export default function SettingsPage() {
           )}
 
           {/* Provider settings */}
-          <h2 className="text-lg font-semibold mb-3">AI providers</h2>
+          <SectionHeading>AI providers</SectionHeading>
           <div className="border rounded-lg divide-y">
             <div className="p-4 flex items-start justify-between gap-4">
               <div>
@@ -378,8 +369,7 @@ export default function SettingsPage() {
               </p>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+      </>
+    </PageShell>
   );
 }

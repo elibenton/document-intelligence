@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 
 /**
@@ -28,19 +28,31 @@ export function ListGroup({
   /** Rendered under a collapsed group — the starred-entity peek. */
   footer?: ReactNode;
 }) {
+  // `defaultOpen` used to be passed straight into the controlled `open`
+  // attribute, so a group that started open could never be closed. Hold the
+  // state here and let `forceOpen` override it.
+  const [open, setOpen] = useState(defaultOpen ?? false);
+
+  // Native <details> stays, rather than Base UI's Collapsible: Chrome expands
+  // a closed <details> to reveal a find-in-page match, and a div-based panel
+  // does not unless it carries hidden="until-found". Worth more than the
+  // consistency.
   return (
     <div>
       <details
         className="group"
-        open={forceOpen || defaultOpen || undefined}
-        onToggle={(event) => onToggle?.(event.currentTarget.open)}
+        open={forceOpen || open}
+        onToggle={(event) => {
+          setOpen(event.currentTarget.open);
+          onToggle?.(event.currentTarget.open);
+        }}
       >
-        <summary className="flex cursor-pointer list-none items-center justify-between rounded px-1 py-1.5 -mx-1 transition-colors hover:bg-accent/50 [&::-webkit-details-marker]:hidden">
-          <span className="flex min-w-0 items-center gap-1 text-sm font-medium">
-            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+        <summary className="flex cursor-pointer list-none items-center justify-between rounded-md px-1 py-1.5 -mx-1 transition-colors hover:bg-accent/50 [&::-webkit-details-marker]:hidden">
+          <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
             <span className="truncate">{label}</span>
           </span>
-          <span className="shrink-0 text-xs text-muted-foreground">{count}</span>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{count}</span>
         </summary>
         <div className="flex flex-col pl-4">{children}</div>
       </details>

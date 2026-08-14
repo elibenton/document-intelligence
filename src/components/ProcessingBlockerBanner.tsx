@@ -38,7 +38,7 @@ export function ProcessingBlockerBanner() {
     >
       <div className="flex flex-wrap items-start gap-3 px-4 py-3">
         <AlertTriangle
-          className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400"
+          className="mt-0.5 size-4 shrink-0 text-destructive"
           aria-hidden
         />
         <div className="min-w-0 flex-1">
@@ -61,7 +61,7 @@ export function ProcessingBlockerBanner() {
               className={buttonVariants({ size: "sm", variant: "outline" })}
             >
               Add credits
-              <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+              <ExternalLink className="ml-1.5 size-3.5" />
             </a>
           )}
           <Button
@@ -77,7 +77,7 @@ export function ProcessingBlockerBanner() {
             }}
           >
             <RefreshCw
-              className={`mr-1.5 h-3.5 w-3.5 ${retrying ? "animate-spin" : ""}`}
+              className={`mr-1.5 size-3.5 ${retrying ? "animate-spin" : ""}`}
             />
             {retrying ? "Retrying…" : "Retry all"}
           </Button>

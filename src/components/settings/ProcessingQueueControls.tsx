@@ -4,12 +4,14 @@ import { CirclePause, CirclePlay, OctagonX } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useConfirm } from "@/components/ui/use-confirm";
 
 export function ProcessingQueueControls() {
   const control = useQuery(api.processingControl.get);
   const setPaused = useMutation(api.processingControl.setPaused);
   const cancelWaiting = useMutation(api.processingControl.cancelWaiting);
   const [busy, setBusy] = useState<"pause" | "resume" | "stop" | null>(null);
+  const confirm = useConfirm();
 
   async function togglePaused() {
     if (!control || busy) return;
@@ -24,10 +26,12 @@ export function ProcessingQueueControls() {
 
   async function stopWaiting() {
     if (busy) return;
-    const confirmed = window.confirm(
-      "Stop every job that is still waiting?\n\n" +
-        "The queue will be paused. Jobs already running cannot be interrupted and will finish normally. Canceled documents can be retried."
-    );
+    const confirmed = await confirm({
+      title: "Stop all waiting work?",
+      body: "Documents already running will finish. Anything still queued is dropped and will need to be retried.",
+      confirmLabel: "Stop waiting work",
+      tone: "destructive",
+    });
     if (!confirmed) return;
     setBusy("stop");
     try {
@@ -49,8 +53,8 @@ export function ProcessingQueueControls() {
               <span
                 className={
                   control.paused
-                    ? "rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-                    : "rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+                    ? "rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs font-medium text-warning"
+                    : "rounded-full bg-emerald-500/10 px-2 py-0.5 text-2xs font-medium text-emerald-700 dark:text-emerald-300"
                 }
               >
                 {control.paused ? "Paused" : "Running"}

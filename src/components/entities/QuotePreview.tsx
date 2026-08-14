@@ -96,7 +96,7 @@ function PreviewCard({
         )}
       </div>
       <div className="flex items-center justify-between px-1">
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-2xs text-muted-foreground">
           Page {target.pageNumber + 1}
         </span>
         <Link

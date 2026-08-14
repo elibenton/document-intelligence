@@ -38,10 +38,10 @@ export function MergeSuggestions({
     <details className="group/duplicates mt-1 rounded-md border border-amber-200/80 bg-amber-50/50 dark:border-amber-900/80 dark:bg-amber-950/20">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100/60 dark:text-amber-100 dark:hover:bg-amber-950/40 [&::-webkit-details-marker]:hidden">
         <span className="flex min-w-0 items-center gap-1.5">
-          <ChevronRight className="h-3 w-3 shrink-0 text-amber-700 transition-transform group-open/duplicates:rotate-90 dark:text-amber-300" />
+          <ChevronRight className="size-3 shrink-0 text-amber-700 transition-transform group-open/duplicates:rotate-90 dark:text-amber-300" />
           <span className="truncate">Possible duplicates</span>
         </span>
-        <span className="shrink-0 tabular-nums text-amber-700 dark:text-amber-300">
+        <span className="shrink-0 tabular-nums text-warning">
           {suggestions.length}
         </span>
       </summary>
@@ -55,7 +55,7 @@ export function MergeSuggestions({
               <span className="font-medium">{s.source.name}</span>
               <span className="text-muted-foreground"> = </span>
               <span className="font-medium">{s.target.name}</span>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-2xs text-muted-foreground">
                 {" "}
                 ({s.target.mentionCount} mentions
                 {s.documentName ? ` · found in ${s.documentName}` : ""})

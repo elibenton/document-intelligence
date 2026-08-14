@@ -79,9 +79,7 @@ export function GlobalDropOverlay() {
     | Id<"documents">
     | undefined;
   const entitySlug = useMatch("/entity/:slug")?.params.slug;
-  const projectRoute = useMatch("/p/:projectId")?.params.projectId as
-    | Id<"projects">
-    | undefined;
+  const projectSlug = useMatch("/p/:slug")?.params.slug;
   const searchId = useMatch("/search")
     ? (searchParams.get("id") as Id<"searches"> | null)
     : null;
@@ -99,9 +97,15 @@ export function GlobalDropOverlay() {
     api.entities.getBySlug,
     entitySlug && !projectParam ? { slug: entitySlug } : "skip"
   );
+  // /p/:slug names the project but doesn't carry its id, and uploads are keyed
+  // by id — so on the project home the overlay resolves the row itself.
+  const project = useQuery(
+    api.projects.getBySlug,
+    projectSlug ? { slug: projectSlug } : "skip"
+  );
 
   const projectId =
-    projectRoute ??
+    project?._id ??
     projectParam ??
     document?.projectId ??
     search?.projectId ??
@@ -223,7 +227,7 @@ function ProjectDropOverlay({
           {isDragging ? (
             <div className="flex flex-col items-center gap-3 text-center">
               <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
-                <UploadCloud className="h-7 w-7" />
+                <UploadCloud className="size-7" />
               </span>
               <span>
                 <span className="block text-lg font-semibold text-balance">
@@ -238,7 +242,7 @@ function ProjectDropOverlay({
             isPreparing && (
               <div className="flex items-center gap-3">
                 <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
-                  <UploadCloud className="h-5 w-5" />
+                  <UploadCloud className="size-4" />
                 </span>
                 <span className="min-w-0">
                   <span className="block font-semibold">
@@ -253,7 +257,7 @@ function ProjectDropOverlay({
           )}
           {dropError && !isDragging && !isPreparing && (
             <div className="flex items-start gap-2 px-1 py-1 text-sm text-destructive">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
               <span className="flex-1">{dropError}</span>
               <button
                 type="button"
@@ -261,7 +265,7 @@ function ProjectDropOverlay({
                 onClick={() => setDropError(null)}
                 aria-label="Dismiss upload error"
               >
-                <X className="h-4 w-4" />
+                <X className="size-4" />
               </button>
             </div>
           )}

@@ -95,7 +95,7 @@ export function DocumentSearch({
                     <p className="line-clamp-5 min-w-0 flex-1 leading-relaxed text-foreground">
                       <HighlightedSnippet text={hit.snippet} query={query} />
                     </p>
-                    <span className="shrink-0 pt-px text-[11px] tabular-nums text-foreground">
+                    <span className="shrink-0 pt-px text-2xs tabular-nums text-foreground">
                       p. {displayPage}
                     </span>
                   </button>

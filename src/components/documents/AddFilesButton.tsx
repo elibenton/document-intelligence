@@ -37,7 +37,7 @@ export function AddFilesButton({ projectId }: { projectId: Id<"projects"> }) {
         onClick={() => inputRef.current?.click()}
         className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
-        <Upload className="h-3.5 w-3.5" />
+        <Upload className="size-3.5" />
         Add files
       </button>
     </>

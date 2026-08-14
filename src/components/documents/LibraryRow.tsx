@@ -69,7 +69,7 @@ export function LibraryRow({
             with a badge on the right — the icon is already the eye's first
             stop, and a column of red marks is scannable in a way trailing text
             is not. */}
-        <span className="group/check relative z-10 grid h-5 w-5 shrink-0 place-items-center">
+        <span className="group/check relative z-10 grid size-4 shrink-0 place-items-center">
           {failed ? (
             // The wrapper carries the tooltip because lucide icons don't take
             // a `title` prop, and the error message is the point of the mark.
@@ -79,7 +79,7 @@ export function LibraryRow({
               title={doc.errorMessage ?? "Processing failed"}
               className={iconVisibility}
             >
-              <CircleAlert className="h-4 w-4 text-red-600 dark:text-red-400" />
+              <CircleAlert className="size-4 text-destructive" />
             </span>
           ) : (
             <DocTypeIcon
@@ -101,7 +101,7 @@ export function LibraryRow({
             }}
             onChange={(event) => onCheckedChange(event.target.checked, index)}
             className={cn(
-              "col-start-1 row-start-1 h-3.5 w-3.5 cursor-pointer accent-primary transition-opacity",
+              "col-start-1 row-start-1 size-3.5 cursor-pointer accent-primary transition-opacity",
               !anySelected &&
                 "opacity-0 group-hover/check:opacity-100 focus-visible:opacity-100"
             )}

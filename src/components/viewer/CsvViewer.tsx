@@ -153,7 +153,7 @@ export function CsvViewer({ url, name }: CsvViewerProps) {
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
-        <AlertCircle className="h-7 w-7 text-destructive" />
+        <AlertCircle className="size-7 text-destructive" />
         <div>
           <p className="font-medium">Couldn’t preview this CSV</p>
           <p className="mt-1 text-sm text-muted-foreground">{error}</p>
@@ -168,7 +168,7 @@ export function CsvViewer({ url, name }: CsvViewerProps) {
   if (!table) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
-        <Spinner className="h-6 w-6 text-muted-foreground" />
+        <Spinner className="size-4 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">Parsing CSV…</p>
       </div>
     );
@@ -187,7 +187,7 @@ export function CsvViewer({ url, name }: CsvViewerProps) {
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/40 px-3 text-xs text-muted-foreground">
-        <Table className="h-3.5 w-3.5" />
+        <Table className="size-3.5" />
         <span>
           {truncated ? "Previewing first " : ""}
           {table.body.length.toLocaleString()} row
@@ -205,7 +205,7 @@ export function CsvViewer({ url, name }: CsvViewerProps) {
           download={name}
           className="inline-flex items-center gap-1 text-foreground hover:text-primary"
         >
-          <Download className="h-3.5 w-3.5" />
+          <Download className="size-3.5" />
           Download
         </a>
       </div>

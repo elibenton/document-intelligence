@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { Link, useNavigate } from "react-router";
-import { FolderOpen, MoreVertical, Plus, Search, X } from "lucide-react";
+import { FolderOpen, MoreVertical, Plus, Trash2, X } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageShell, SectionHeading } from "@/components/ui/page-shell";
+import { SearchField } from "@/components/ui/search-field";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useConfirm } from "@/components/ui/use-confirm";
+import { counted } from "@/lib/plural";
 
 type ProjectListItem = Doc<"projects"> & { documentCount: number };
 
@@ -16,6 +22,8 @@ type ProjectListItem = Doc<"projects"> & { documentCount: number };
  */
 function ProjectCard({ project }: { project: ProjectListItem }) {
   const updateProject = useMutation(api.projects.update);
+  const removeProject = useMutation(api.projects.remove);
+  const confirm = useConfirm();
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(project.name);
@@ -48,11 +56,31 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
     }
   }
 
+  /**
+   * Deleting a project takes every document, entity and search in it — by far
+   * the most destructive thing in the app — so the prompt names the project and
+   * says how much goes with it rather than asking a generic "are you sure".
+   */
+  async function handleDelete() {
+    const documents =
+      project.documentCount >= 500
+        ? "500+ documents"
+        : counted(project.documentCount, "document");
+    const ok = await confirm({
+      title: `Permanently delete “${project.name}”?`,
+      body: `This deletes the project and its ${documents}, along with every page, entity, extraction and saved search inside it. It cannot be undone.`,
+      confirmLabel: "Delete project",
+      tone: "destructive",
+    });
+    if (!ok) return;
+    await removeProject({ id: project._id });
+  }
+
   if (editing) {
     return (
       <div className="rounded-lg border bg-card p-4">
         <div className="flex items-center gap-2">
-          <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
           <input
             value={name}
             autoFocus
@@ -83,7 +111,18 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
           }}
           className="mt-2 w-full resize-none rounded border bg-background px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-ring/30 placeholder:text-muted-foreground"
         />
-        <div className="mt-2 flex justify-end gap-2">
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mr-auto gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={saving}
+            onClick={() => void handleDelete()}
+          >
+            <Trash2 className="size-3.5" />
+            Delete project
+          </Button>
           <Button
             type="button"
             variant="ghost"
@@ -116,13 +155,13 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
           onClick={startEditing}
           title="Rename project"
           aria-label="Rename project"
-          className="group/identity relative z-10 grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="group/identity relative z-10 grid size-4 shrink-0 place-items-center rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
         >
-          <FolderOpen className="col-start-1 row-start-1 h-4 w-4 text-muted-foreground transition-opacity group-hover/identity:opacity-0 group-focus-visible/identity:opacity-0" />
-          <MoreVertical className="col-start-1 row-start-1 h-3.5 w-3.5 opacity-0 transition-opacity group-hover/identity:opacity-100 group-focus-visible/identity:opacity-100" />
+          <FolderOpen className="col-start-1 row-start-1 size-4 text-muted-foreground transition-opacity group-hover/identity:opacity-0 group-focus-visible/identity:opacity-0" />
+          <MoreVertical className="col-start-1 row-start-1 size-3.5 opacity-0 transition-opacity group-hover/identity:opacity-100 group-focus-visible/identity:opacity-100" />
         </button>
         <Link
-          to={`/p/${project._id}`}
+          to={`/p/${project.slug}`}
           className="min-w-0 truncate text-left text-sm font-medium after:absolute after:inset-0 after:content-['']"
         >
           {project.name}
@@ -169,101 +208,89 @@ export default function ProjectsPage() {
     if (!newName.trim() || creating) return;
     setCreating(true);
     try {
-      const projectId = await createProject({ name: newName.trim() });
-      navigate(`/p/${projectId}`);
+      const { slug } = await createProject({ name: newName.trim() });
+      navigate(`/p/${slug}`);
     } finally {
       setCreating(false);
     }
   }
 
   return (
-    <div className="flex flex-col">
-      <header className="border-b px-6 py-4 flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-bold">Document Intelligence</h1>
-          <p className="text-sm text-muted-foreground">
-            Pick a project — each one is its own corpus with its own entities and
-            connections.
-          </p>
+    <PageShell
+      width="prose"
+      title="Document Intelligence"
+      subtitle="Pick a project — each one is its own corpus with its own entities and connections."
+    >
+      <SearchField
+        className="mb-6"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search projects…"
+        aria-label="Search projects"
+      />
+
+      <SectionHeading
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowCreateForm(!showCreateForm)}
+          >
+            {showCreateForm ? (
+              <>
+                <X className="size-3.5" /> Cancel
+              </>
+            ) : (
+              <>
+                <Plus className="size-3.5" /> New Project
+              </>
+            )}
+          </Button>
+        }
+      >
+        Projects
+      </SectionHeading>
+
+      {showCreateForm && (
+        <form onSubmit={handleCreate} className="mb-4 flex gap-2">
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Project name…"
+            aria-label="New project name"
+            autoFocus
+          />
+          <Button type="submit" size="sm" disabled={creating} className="shrink-0">
+            {creating ? "Creating…" : "Create"}
+          </Button>
+        </form>
+      )}
+
+      {projects === undefined ? (
+        <div className="grid grid-cols-2 gap-4">
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
         </div>
-      </header>
-
-      <div className="flex-1">
-        <div className="max-w-3xl mx-auto p-6">
-          {/* Search across projects */}
-          <div className="relative mb-6 mt-2">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search projects…"
-              aria-label="Search projects"
-              autoFocus
-              className="w-full h-12 pl-11 pr-4 rounded-xl border bg-card text-[15px] shadow-sm outline-none transition-shadow focus:shadow-md focus:ring-2 focus:ring-ring/30 placeholder:text-muted-foreground"
-            />
-          </div>
-
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Projects</h2>
-            <button
-              onClick={() => setShowCreateForm(!showCreateForm)}
-              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {showCreateForm ? (
-                <>
-                  <X className="h-3.5 w-3.5" /> Cancel
-                </>
-              ) : (
-                <>
-                  <Plus className="h-3.5 w-3.5" /> New Project
-                </>
-              )}
-            </button>
-          </div>
-
-          {showCreateForm && (
-            <form onSubmit={handleCreate} className="flex gap-2 mb-4">
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Project name…"
-                className="flex-1 text-sm border rounded px-3 py-1.5 bg-background"
-                autoFocus
-              />
-              <button
-                type="submit"
-                disabled={creating}
-                className="text-sm px-3 py-1.5 bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
-              >
-                {creating ? "Creating…" : "Create"}
-              </button>
-            </form>
-          )}
-
-          {projects === undefined ? (
-            <div className="grid grid-cols-2 gap-4">
-              <Skeleton className="h-24" />
-              <Skeleton className="h-24" />
-              <Skeleton className="h-24" />
-              <Skeleton className="h-24" />
-            </div>
-          ) : projects.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-10 text-center border rounded-lg">
-              {debounced.trim()
-                ? "No projects match this search."
-                : "No projects yet. Create one to get started."}
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 gap-4">
-              {projects.map((project) => (
-                <ProjectCard key={project._id} project={project} />
-              ))}
-            </div>
-          )}
+      ) : projects.length === 0 ? (
+        <EmptyState
+          title={
+            debounced.trim()
+              ? "No projects match this search."
+              : "No projects yet."
+          }
+          description={
+            debounced.trim() ? undefined : "Create one to get started."
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-2 gap-4">
+          {projects.map((project) => (
+            <ProjectCard key={project._id} project={project} />
+          ))}
         </div>
-      </div>
-    </div>
+      )}
+    </PageShell>
   );
 }
