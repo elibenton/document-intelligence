@@ -35,6 +35,7 @@ export const saveMetadataResult = internalMutation({
       tags?: string[];
       table_of_contents?: Array<{ title?: string; level?: number; page?: number }>;
       additional?: Array<{ key?: string; value?: string }>;
+      citation?: CitationInput;
     };
     try {
       parsed = JSON.parse(args.raw);
@@ -104,6 +105,11 @@ export const saveMetadataResult = internalMutation({
       documentDatePrecision: documentDate?.documentDatePrecision,
       documentPlace: documentPlace?.documentPlace,
       documentPlaceEvidence: documentPlace?.documentPlaceEvidence,
+      // Cleared rather than left stale on a re-run, the same as the date and
+      // place above: the previous run's bibliography is not evidence for this
+      // one, and a citation that survives the analysis it came from is exactly
+      // the kind of stale claim a reader would reprint.
+      citation: sanitizeCitation(parsed.citation),
       metadata: JSON.stringify({
         title: parsed.title,
         summary: parsed.summary,
@@ -234,8 +240,15 @@ export function sanitizeDocumentPlace(
   };
 }
 
-/** Bibliographic values are labels, not prose. */
-const MAX_CITATION_FIELD = 300;
+/**
+ * Bibliographic values are labels, not prose. The same guard as
+ * MAX_PLACE_LENGTH and for the same reason: a run of prose in a field that
+ * holds a publisher's name is the model narrating why it cannot answer.
+ * Sized against the longest real ones — "Proceedings of the National Academy
+ * of Sciences of the United States of America" is 79, "United States District
+ * Court for the Northern District of California" 68 — with room to spare.
+ */
+const MAX_CITATION_FIELD = 160;
 /** More contributors than this is the model listing everyone the document
  *  mentions rather than everyone credited with producing it. */
 const MAX_CONTRIBUTORS = 24;
