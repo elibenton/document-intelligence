@@ -624,6 +624,33 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
 
+  // An anonymous try-it-out session on the landing page.
+  //
+  // The row *is* the identity. `demo:<token>` is written into
+  // `projects.ownerId`, so every ownership walk in convex/ownership.ts, the
+  // `userUsage` ledger and the spend cap all apply to a demo visitor without
+  // knowing one exists — the only thing convex/demo.ts adds is a way to arrive
+  // at that owner id without a Better Auth session.
+  //
+  // `token` is a bearer secret and the only credential: whoever holds it is
+  // this session. That is acceptable because it reaches nothing but the one
+  // document the same holder uploaded, and the `demo:` prefix cannot collide
+  // with a Better Auth id (those carry no colon), so a crafted token can never
+  // name a real account's project.
+  //
+  // `documentId` is what makes "one file" enforceable on the server rather
+  // than in the browser: the second createDocument on a session that already
+  // has one is refused, whatever the client believes.
+  demoSessions: defineTable({
+    token: v.string(),
+    projectId: v.id("projects"),
+    documentId: v.optional(v.id("documents")),
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    // Both the daily issuance cap and the expiry sweep read this range.
+    .index("by_createdAt", ["createdAt"]),
+
   // Per-user preferences. One row per account, created on first write.
   //
   // This was `appSettings`, a single `key: "global"` row — so one user

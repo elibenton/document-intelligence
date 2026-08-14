@@ -22,9 +22,16 @@ import { authComponent } from "./auth";
  *
  *     grep -rEn "^export const [a-zA-Z0-9_]+ = (query|mutation|action)\(" convex/
  *
- * which should match nothing but `getAuthUser` in convex/auth.ts — the one
- * endpoint that has to answer without a session, since it is how the client
- * discovers it hasn't got one.
+ * which should match exactly one endpoint: `demo.startSession`, which cannot
+ * take a session token because it is what issues one. (`auth.getAuthUser`, the
+ * other endpoint that answers without a session, is a destructured re-export
+ * and so was never matched by this grep in the first place — it is how the
+ * client discovers it hasn't got a session.)
+ *
+ * `convex/ownership.test.ts` pins that list, so a second bare export cannot
+ * appear quietly. Everything else in convex/demo.ts is built on `demoQuery` /
+ * `demoMutation`, which resolve a `ctx.user` from that token and then walk the
+ * same ownership helpers as the authed builders.
  *
  * `ctx.user` is the Better Auth user document, and is what phase 2's ownership
  * checks will read. Note its `_id` is a string from the component's tables, not

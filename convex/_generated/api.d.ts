@@ -18,6 +18,8 @@ import type * as blocks from "../blocks.js";
 import type * as budget from "../budget.js";
 import type * as clips from "../clips.js";
 import type * as crons from "../crons.js";
+import type * as demo from "../demo.js";
+import type * as demoLimits from "../demoLimits.js";
 import type * as detections from "../detections.js";
 import type * as documentCategories from "../documentCategories.js";
 import type * as documentMove from "../documentMove.js";
@@ -87,6 +89,8 @@ declare const fullApi: ApiFromModules<{
   budget: typeof budget;
   clips: typeof clips;
   crons: typeof crons;
+  demo: typeof demo;
+  demoLimits: typeof demoLimits;
   detections: typeof detections;
   documentCategories: typeof documentCategories;
   documentMove: typeof documentMove;

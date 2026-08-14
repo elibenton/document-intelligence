@@ -255,8 +255,13 @@ export const update = authedMutation({
 const PROJECT_DOCUMENT_BATCH = 4;
 const PROJECT_ROW_BATCH = 64;
 
-/** Phases of `drainProjectDeletion`, in the order they run. */
-const PROJECT_PHASE = {
+/**
+ * Phases of `drainProjectDeletion`, in the order they run. Exported because
+ * convex/demo.ts starts the same cascade when a demo session expires, and a
+ * hardcoded `0` there would be a magic number that silently means the wrong
+ * phase the day this order changes.
+ */
+export const PROJECT_PHASE = {
   documents: 0,
   entities: 1,
   searches: 2,

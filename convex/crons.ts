@@ -19,4 +19,18 @@ crons.daily(
   {}
 );
 
+/**
+ * Expire anonymous demo sessions and everything they uploaded.
+ *
+ * Hourly rather than daily: this one is not pruning measurement detail, it is
+ * releasing storage leased to the public. A day's worth of unswept demo
+ * uploads is a day's worth of files nobody owns.
+ */
+crons.hourly(
+  "sweep demo sessions",
+  { minuteUTC: 20 },
+  internal.demo.sweepExpired,
+  {}
+);
+
 export default crons;

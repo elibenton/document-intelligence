@@ -39,8 +39,11 @@ type Endpoint = {
 
 function endpoints(): Endpoint[] {
   const found: Endpoint[] = [];
+  // The demo builders are in here for the reason the authed ones are: they
+  // hand the handler a `ctx.user` and are reachable from outside, so an
+  // endpoint of theirs that takes an id and skips the walk is the same bug.
   const decl =
-    /export const (\w+) = (authedQuery|authedMutation|authedAction|adminQuery)\(\{/g;
+    /export const (\w+) = (authedQuery|authedMutation|authedAction|adminQuery|demoQuery|demoMutation)\(\{/g;
   for (const file of fs.readdirSync(DIR)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
     const src = fs.readFileSync(path.join(DIR, file), "utf8");
@@ -92,6 +95,32 @@ describe("ownership coverage", () => {
       .filter((e) => !callsHelper.test(e.body))
       .map((e) => `${e.file}:${e.name} (${e.idArgs.join(", ")})`);
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * The unauthenticated surface, pinned by name.
+   *
+   * `authedQuery` and friends make a missed endpoint *greppable*; this makes it
+   * fail the build. A bare `query`/`mutation`/`action` export is by definition
+   * reachable with no session at all, so the list of them is a security fact
+   * about this directory and belongs under test rather than in a comment
+   * somebody has to re-run by hand.
+   */
+  it("only the known endpoints are reachable without a session", () => {
+    const bare = /^export const ([a-zA-Z0-9_]+) = (?:query|mutation|action)\(/gm;
+    const found: string[] = [];
+    for (const file of fs.readdirSync(DIR)) {
+      if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
+      const src = fs.readFileSync(path.join(DIR, file), "utf8");
+      for (const m of src.matchAll(bare)) {
+        found.push(`${file.replace(/\.ts$/, "")}.${m[1]}`);
+      }
+    }
+    // demo.startSession issues the demo token, so it cannot require one, and
+    // it takes no id — it creates the project it then hands back. Everything
+    // else in convex/demo.ts is built on demoQuery/demoMutation and is
+    // therefore covered by the ownership check above.
+    expect(found.sort()).toEqual(["demo.startSession"]);
   });
 
   it("no endpoint lists itself as unscoped without existing", () => {

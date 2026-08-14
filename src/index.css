@@ -198,9 +198,25 @@
     --text-xl--line-height: 1.75rem;
     --text-xl--letter-spacing: -0.017em;
 
+    /* 24px — the landing page tagline. The rung between page titles (xl) and
+       the hero title (3xl) was missing because nothing had needed it: the
+       tagline sits under a namemark that is now much larger than it, so at
+       3xl the two competed and at xl it read as body copy. */
+    --text-2xl: 1.5rem;               /* 24px — the landing tagline */
+    --text-2xl--line-height: 2rem;
+    --text-2xl--letter-spacing: -0.019em;
+
     --text-3xl: 1.875rem;             /* 30px — the one hero title */
     --text-3xl--line-height: 2.25rem;
     --text-3xl--letter-spacing: -0.021em;
+
+    /* 56px — the namemark on the landing page, and nothing else. A step this
+       far above the hero title exists because the namemark is set beside a
+       96px mark and has to hold its own against it. Tighter tracking than 3xl
+       because the only string ever set at this size is a single word. */
+    --text-4xl: 3.5rem;               /* 56px — the namemark */
+    --text-4xl--line-height: 3.75rem;
+    --text-4xl--letter-spacing: -0.026em;
 
     /* Outside the scale on purpose. Annotation labels on the zoomable PDF
        canvas are geometry, not UI text: their -top-4 offsets are computed

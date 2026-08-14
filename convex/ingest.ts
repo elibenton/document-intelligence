@@ -3,6 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { recountEntity } from "./entityResolution";
+import { enforceDemoPageLimit } from "./demo";
 
 // ---------------------------------------------------------------------------
 // Ingest parse (convert) results
@@ -367,6 +368,12 @@ export const ingestParseResults = internalMutation({
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.documentId, { pageCount: args.pageCount });
+    // The demo's page limit, applied at the first moment the true count
+    // exists. A no-op for every normal document; for a demo document that is
+    // over, it fails the row and the pages are not worth committing.
+    if (await enforceDemoPageLimit(ctx, args.documentId, args.pageCount)) {
+      return;
+    }
     await reconcilePagesAndBlocks(ctx, { ...args, pageOffset: 0 });
   },
 });

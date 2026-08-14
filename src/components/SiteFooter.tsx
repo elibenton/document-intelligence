@@ -35,7 +35,7 @@ export function SiteFooter() {
         <div className="leading-tight">
           <p className="font-semibold">Haystack</p>
           <p className="text-xs text-muted-foreground">
-            Anything in. Answers out.
+            Throw anything in. Get answers out.
           </p>
         </div>
       </div>
