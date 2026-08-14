@@ -6,15 +6,30 @@ import { formatBytes } from "./formatBytes";
  * Client-side gate for PDF uploads.
  *
  * Everything checked here is a failure mode measured against the real provider
- * and written up in docs/pdf-edge-cases.md. The headline finding is that our OCR
- * provider does not OCR pictures inside a PDF at all — it reads the embedded
- * text layer and nothing else. A scanned document therefore comes back with no
- * text, no error, and a bill for the tokens. That is invisible at upload time
- * unless we look, so we look.
+ * and written up in docs/pdf-edge-cases.md.
+ *
+ * ## The text-layer check used to live here, and was wrong
+ *
+ * This file used to sample the first five pages, classify each as readable or
+ * scanned, and warn that a scanned document "will most likely come back with
+ * nothing". That was true when it was written: the pipeline sent the whole file
+ * to a model completion that read the embedded text layer and nothing else.
+ *
+ * It stopped being true when the parse stage moved to Interfaze's dedicated OCR
+ * task (`ocrDocument` in convex/processingNode.ts). Re-measured against the live
+ * pipeline: `test-corpus/Matt smith 2022 contract.pdf` — no text layer, no
+ * embedded fonts, five iPhone-camera JPEGs, the most unambiguous scan in the
+ * corpus — returns 7,769 characters across 128 blocks, correctly. The check was
+ * turning away documents that work.
+ *
+ * The whole classifier went with it rather than being relaxed: a check whose
+ * premise is gone has no threshold worth tuning. What is left are the limits
+ * that are still real — size, page count, page geometry — none of which OCR
+ * changed.
  *
  * Nothing here re-encodes the file. Re-encoding was tried and measured: every
  * image encoding fails identically, so a repaired file is just a slower way to
- * get the same empty result.
+ * get the same result.
  */
 
 /**
@@ -26,30 +41,52 @@ import { formatBytes } from "./formatBytes";
 export const PDF_INTERFAZE_SAFE_BYTES = PROVIDER_URL_SAFE_BYTES;
 
 /**
- * Measured, not documented: a 45-page file came back complete, while 60, 150 and
- * 520-page files all came back with exactly 50 pages and no error. Anything past
- * this is silently dropped.
+ * The 50-page truncation warning was removed here for the same reason as the
+ * text-layer check, and it is worth recording why rather than just deleting it.
+ *
+ * The original measurement was real: a 45-page file came back complete, while
+ * 60, 150 and 520-page files all came back with exactly 50 pages and no error.
+ * Re-measured against every document in the deployment past 50 pages, that
+ * ceiling is gone — 156 pages stored 156 pages with text through page 155, and
+ * 89, 75, 65, 62, 62 and 60-page files all read in full. The one long document
+ * that comes back mostly empty (93 pages, 4 with text) is a redacted scan,
+ * which is a different failure and not a truncation at 50.
+ *
+ * The pattern both share: a provider limit measured when it was true, encoded
+ * as a constant, and never re-measured after the pipeline moved underneath it.
+ * Anything added here should carry the date and method of its measurement.
  */
-export const PDF_PROVIDER_PAGE_LIMIT = 50;
 
 /**
- * Page-dimension ceilings, also measured. A 22-inch page reads fine, a 69-inch
- * page loses most of its text, and a 200-inch page returns nothing at all.
+ * Page-dimension ceilings, re-measured 2026-08-14 against the live pipeline by
+ * pushing the geom-large-page-* fixtures through it and reading back what the
+ * parse stage stored:
+ *
+ *   1,584pt (22in)  → parsed, 350 chars, full marker text.
+ *   5,000pt (69in)  → parsed, 350 chars, full marker text.
+ *  14,400pt (200in) → failed. Interfaze billed 561 OCR tokens and returned
+ *                     nothing; the stage reports it as a provider-side failure.
+ *
+ * The old ceilings — warn at 1,584, hard-reject at 5,000 — were set when a
+ * 69-inch page "lost most of its text". It no longer does: 5,000pt reads
+ * completely, so the hard reject was refusing a document that works. The block
+ * moves to the size that actually fails.
+ *
+ * Note what is *not* measured: anything between 5,000 and 14,400. The warning
+ * threshold sits at 5,000 rather than somewhere interpolated, because that is
+ * the largest size proven to read cleanly, and a warning is the honest way to
+ * say "past here we have not checked".
  */
-export const PDF_WARN_PAGE_POINTS = 1_584;
-export const PDF_MAX_PAGE_POINTS = 5_000;
+export const PDF_WARN_PAGE_POINTS = 5_000;
+export const PDF_MAX_PAGE_POINTS = 14_400;
 
-/** Pages inspected for a text layer. Enough to classify, cheap enough to run. */
-const TEXT_LAYER_SAMPLE_PAGES = 5;
+/**
+ * Pages inspected for their dimensions. The geometry ceiling is a property of
+ * the page box, which is uniform in practice, so a sample answers it.
+ */
+const GEOMETRY_SAMPLE_PAGES = 5;
 
-/** An image this much of the page width is treated as covering it. */
-const FULL_PAGE_IMAGE_RATIO = 0.9;
-
-export type PdfWarningCode =
-  | "no_text_layer"
-  | "page_limit_truncation"
-  | "large_pages"
-  | "form_fields_ignored";
+export type PdfWarningCode = "large_pages" | "form_fields_ignored";
 
 export interface PdfWarning {
   code: PdfWarningCode;
@@ -111,145 +148,6 @@ function isPasswordError(error: unknown): boolean {
     error.name === "PasswordException" ||
     /password|encrypted/i.test(error.message)
   );
-}
-
-// ---------------------------------------------------------------------------
-// Text-layer classification
-// ---------------------------------------------------------------------------
-
-export type PageReadability =
-  /** Painted text the provider will extract. */
-  | "readable"
-  /** Text exists but is invisible (a scanner's own OCR) — the provider drops it. */
-  | "hidden_text"
-  /** Text exists but a full-page image covers it — the provider drops it too. */
-  | "covered_by_image"
-  /** No text at all: a pure scan. */
-  | "image_only";
-
-/**
- * Decide, for a single page, whether the provider will get any text from it.
- *
- * Three separate measurements landed on the same answer for scanned documents,
- * so all three are checked: text rendered in mode 3 or 7 is invisible and gets
- * dropped, text sitting under a page-sized image gets dropped, and a page with
- * no text at all was never going to yield any.
- */
-export function classifyPage(
-  ops: { fnArray: number[]; argsArray: unknown[] },
-  codes: {
-    setTextRenderingMode: number;
-    showText: number;
-    showSpacedText: number;
-    nextLineShowText: number;
-    nextLineSetSpacingShowText: number;
-    paintImageXObject: number;
-    /** Dropped in pdf.js 5, still emitted by older builds. */
-    paintJpegXObject?: number;
-    paintImageMaskXObject: number;
-    transform: number;
-    save: number;
-    restore: number;
-  },
-  pageWidth: number,
-  pageHeight: number
-): PageReadability {
-  const textOps = new Set([
-    codes.showText,
-    codes.showSpacedText,
-    codes.nextLineShowText,
-    codes.nextLineSetSpacingShowText,
-  ]);
-  const imageOps = new Set(
-    [
-      codes.paintImageXObject,
-      codes.paintJpegXObject,
-      codes.paintImageMaskXObject,
-    ].filter((code): code is number => code !== undefined)
-  );
-
-  let renderMode = 0;
-  let visibleGlyphs = 0;
-  let hiddenGlyphs = 0;
-  let fullPageImage = false;
-
-  // Track just enough of the graphics state to know how big a painted image is.
-  // Scale is all we need, so the matrix is kept as [scaleX, scaleY].
-  let ctm: [number, number] = [1, 1];
-  const stack: [number, number][] = [];
-
-  for (let i = 0; i < ops.fnArray.length; i += 1) {
-    const op = ops.fnArray[i];
-    const args = ops.argsArray[i] as number[] | undefined;
-
-    if (op === codes.save) {
-      stack.push([...ctm] as [number, number]);
-      continue;
-    }
-    if (op === codes.restore) {
-      ctm = stack.pop() ?? [1, 1];
-      continue;
-    }
-    if (op === codes.transform && args && args.length >= 4) {
-      // |a| and |d| carry the scale; skew is rare enough on a page-filling image
-      // that the magnitude of the row is a good enough stand-in.
-      const scaleX = Math.hypot(args[0] ?? 0, args[1] ?? 0);
-      const scaleY = Math.hypot(args[2] ?? 0, args[3] ?? 0);
-      ctm = [ctm[0] * scaleX, ctm[1] * scaleY];
-      continue;
-    }
-    if (op === codes.setTextRenderingMode) {
-      renderMode = Number(args?.[0] ?? 0);
-      continue;
-    }
-    if (imageOps.has(op)) {
-      if (
-        Math.abs(ctm[0]) >= pageWidth * FULL_PAGE_IMAGE_RATIO &&
-        Math.abs(ctm[1]) >= pageHeight * FULL_PAGE_IMAGE_RATIO
-      ) {
-        fullPageImage = true;
-      }
-      continue;
-    }
-    if (textOps.has(op)) {
-      // One glyph run is enough to classify; exact counts do not matter.
-      if (renderMode === 3 || renderMode === 7) hiddenGlyphs += 1;
-      else visibleGlyphs += 1;
-    }
-  }
-
-  if (visibleGlyphs > 0) return fullPageImage ? "covered_by_image" : "readable";
-  if (hiddenGlyphs > 0) return "hidden_text";
-  return "image_only";
-}
-
-const UNREADABLE_ADVICE =
-  "Run text recognition on it first (Preview › Export as PDF with OCR, Acrobat › Recognise Text, or your scanner's “searchable PDF” setting), then upload the recognised copy.";
-
-function textLayerWarning(
-  unreadable: PageReadability[],
-  sampled: number,
-  pageCount: number
-): PdfWarning | null {
-  if (unreadable.length === 0) return null;
-  const everyPage = unreadable.length === sampled;
-  const scope = everyPage
-    ? pageCount === 1
-      ? "This page has"
-      : "Every page we checked has"
-    : `${unreadable.length} of the first ${sampled} pages have`;
-
-  const kind = unreadable.includes("hidden_text")
-    ? "text that is stored invisibly beneath the scan"
-    : "no text in it — only a picture of one";
-
-  return {
-    code: "no_text_layer",
-    message:
-      `${scope} ${kind}. We read the text stored inside a PDF; we cannot read ` +
-      `words that only exist as pixels, so this document will most likely come ` +
-      `back with nothing. ${UNREADABLE_ADVICE}`,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -327,23 +225,18 @@ export async function preflightPdf(file: File): Promise<PdfPreflightResult> {
       const warnings: PdfWarning[] = [];
 
       // -- geometry ------------------------------------------------------
+      // Only the viewport is read now. The `getOperatorList()` call that used
+      // to sit here — decoding every content stream on five pages to classify
+      // its text layer — went with the check it fed, which also makes this
+      // preflight markedly cheaper on a large file.
       let widest = 0;
-      const sampleCount = Math.min(pageCount, TEXT_LAYER_SAMPLE_PAGES);
-      const unreadable: PageReadability[] = [];
+      const sampleCount = Math.min(pageCount, GEOMETRY_SAMPLE_PAGES);
 
       for (let index = 1; index <= sampleCount; index += 1) {
         const page = await pdf.getPage(index);
         try {
           const viewport = page.getViewport({ scale: 1 });
           widest = Math.max(widest, viewport.width, viewport.height);
-
-          const readability = classifyPage(
-            await page.getOperatorList(),
-            pdfjs.OPS,
-            viewport.width,
-            viewport.height
-          );
-          if (readability !== "readable") unreadable.push(readability);
         } finally {
           page.cleanup();
         }
@@ -355,9 +248,9 @@ export async function preflightPdf(file: File): Promise<PdfPreflightResult> {
           code: "oversized_pages",
           pageCount,
           message:
-            `This PDF's pages are ${(widest / 72).toFixed(0)} inches across, which is too ` +
-            `large to read reliably — text is dropped at this size. Export it at a ` +
-            `normal page size (A4, Letter, or up to about 22 inches) and try again.`,
+            `This PDF's pages are ${(widest / 72).toFixed(0)} inches across. At that size ` +
+            `the reading pass comes back empty, so there is nothing to show. Export it ` +
+            `at a normal page size and try again.`,
         };
       }
       if (widest > PDF_WARN_PAGE_POINTS) {
@@ -365,22 +258,8 @@ export async function preflightPdf(file: File): Promise<PdfPreflightResult> {
           code: "large_pages",
           message:
             `Pages are unusually large (${(widest / 72).toFixed(0)} inches across). ` +
-            `Some text may be missed; a normal page size reads more reliably.`,
-        });
-      }
-
-      // -- text layer ----------------------------------------------------
-      const layerWarning = textLayerWarning(unreadable, sampleCount, pageCount);
-      if (layerWarning) warnings.push(layerWarning);
-
-      // -- page count ----------------------------------------------------
-      if (pageCount > PDF_PROVIDER_PAGE_LIMIT) {
-        warnings.push({
-          code: "page_limit_truncation",
-          message:
-            `Only the first ${PDF_PROVIDER_PAGE_LIMIT} of ${pageCount} pages will be read — ` +
-            `the rest are dropped without warning. Split this into files of ` +
-            `${PDF_PROVIDER_PAGE_LIMIT} pages or fewer to capture all of it.`,
+            `Pages up to 69 inches read cleanly; past that we haven't measured, so ` +
+            `some text may be missed.`,
         });
       }
 

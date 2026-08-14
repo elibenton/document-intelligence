@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  classifyPage,
   hasPdfHeader,
   isPdfUpload,
   preflightPdf,
   PDF_INTERFAZE_SAFE_BYTES,
-  type PageReadability,
 } from "./pdfPreflight";
 import { formatBytes } from "./formatBytes";
 
@@ -66,139 +64,6 @@ describe("formatBytes", () => {
   it("uses one decimal place until ten megabytes", () => {
     expect(formatBytes(2_120_000)).toBe("2.1 MB");
     expect(formatBytes(21_000_000)).toBe("21 MB");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Page classification — the logic behind the "this scan will come back empty"
-// warning. Operator lists are synthesized so each case is unambiguous.
-// ---------------------------------------------------------------------------
-
-const OPS = {
-  setTextRenderingMode: 1,
-  showText: 2,
-  showSpacedText: 3,
-  nextLineShowText: 4,
-  nextLineSetSpacingShowText: 5,
-  paintImageXObject: 6,
-  paintImageMaskXObject: 7,
-  transform: 8,
-  save: 9,
-  restore: 10,
-};
-
-const PAGE_WIDTH = 612;
-const PAGE_HEIGHT = 792;
-
-function classify(
-  steps: [number, unknown[]?][],
-  width = PAGE_WIDTH,
-  height = PAGE_HEIGHT
-): PageReadability {
-  return classifyPage(
-    {
-      fnArray: steps.map(([op]) => op),
-      argsArray: steps.map(([, args]) => args ?? []),
-    },
-    OPS,
-    width,
-    height
-  );
-}
-
-/** A full-bleed image, drawn the way every rasterized page draws it. */
-const fullPageImage: [number, unknown[]?][] = [
-  [OPS.save],
-  [OPS.transform, [PAGE_WIDTH, 0, 0, PAGE_HEIGHT, 0, 0]],
-  [OPS.paintImageXObject, ["Im0"]],
-  [OPS.restore],
-];
-
-describe("classifyPage", () => {
-  it("calls painted text readable", () => {
-    expect(classify([[OPS.showText, [[{ unicode: "a" }]]]])).toBe("readable");
-  });
-
-  it("calls a page with no text at all image-only", () => {
-    expect(classify(fullPageImage)).toBe("image_only");
-  });
-
-  it("flags invisible text, which the provider discards", () => {
-    expect(
-      classify([
-        [OPS.setTextRenderingMode, [3]],
-        [OPS.showText, [[{ unicode: "a" }]]],
-      ])
-    ).toBe("hidden_text");
-  });
-
-  it("flags text sitting under a full-page image", () => {
-    expect(
-      classify([[OPS.showText, [[{ unicode: "a" }]]], ...fullPageImage])
-    ).toBe("covered_by_image");
-  });
-
-  it("leaves text alone when the image is small and clear of it", () => {
-    expect(
-      classify([
-        [OPS.showText, [[{ unicode: "a" }]]],
-        [OPS.save],
-        [OPS.transform, [160, 0, 0, 200, 72, 80]],
-        [OPS.paintImageXObject, ["Im0"]],
-        [OPS.restore],
-      ])
-    ).toBe("readable");
-  });
-
-  it("leaves text alone when the image covers only half the page", () => {
-    expect(
-      classify([
-        [OPS.showText, [[{ unicode: "a" }]]],
-        [OPS.save],
-        [OPS.transform, [PAGE_WIDTH, 0, 0, PAGE_HEIGHT / 2, 0, 0]],
-        [OPS.paintImageXObject, ["Im0"]],
-        [OPS.restore],
-      ])
-    ).toBe("readable");
-  });
-
-  it("restores the transform on Q, so a later small image is not misjudged", () => {
-    // Without a working graphics-state stack the full-page scale would leak out
-    // of the q/Q pair and make the thumbnail look page-sized.
-    expect(
-      classify([
-        [OPS.showText, [[{ unicode: "a" }]]],
-        ...fullPageImage.slice(0, 2),
-        [OPS.restore],
-        [OPS.save],
-        [OPS.transform, [40, 0, 0, 40, 10, 10]],
-        [OPS.paintImageXObject, ["Im0"]],
-        [OPS.restore],
-      ])
-    ).toBe("readable");
-  });
-
-  it("treats a stencil mask as an image", () => {
-    expect(
-      classify([
-        [OPS.save],
-        [OPS.transform, [PAGE_WIDTH, 0, 0, PAGE_HEIGHT, 0, 0]],
-        [OPS.paintImageMaskXObject, ["Im0"]],
-        [OPS.restore],
-      ])
-    ).toBe("image_only");
-  });
-
-  it("accumulates nested transforms rather than taking only the last one", () => {
-    expect(
-      classify([
-        [OPS.save],
-        [OPS.transform, [PAGE_WIDTH / 2, 0, 0, PAGE_HEIGHT / 2, 0, 0]],
-        [OPS.transform, [2, 0, 0, 2, 0, 0]],
-        [OPS.paintImageXObject, ["Im0"]],
-        [OPS.restore],
-      ])
-    ).toBe("image_only");
   });
 });
 
