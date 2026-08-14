@@ -9,7 +9,7 @@
 
 import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { chatCompletion, failureCodeOf } from "./interfaze";
 import { usageLogger } from "./apiLogs";
 
@@ -215,7 +215,7 @@ export const extract = internalAction({
       // What this project looks for beyond people and organizations. Read at
       // call time rather than stored with the document, so declaring a type
       // takes effect on the next document without a migration.
-      const document = await ctx.runQuery(api.documents.get, {
+      const document = await ctx.runQuery(internal.documents.getInternal, {
         id: args.documentId,
       });
       const extraTypes = document?.projectId

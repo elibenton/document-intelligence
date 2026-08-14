@@ -11,7 +11,7 @@
 import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import {
   ocrDocument,
   analyzeDocumentText,
@@ -155,7 +155,7 @@ export const runDocumentUnderstanding = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const document = await ctx.runQuery(api.documents.get, {
+    const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
     if (!document) throw new Error("Document not found");
@@ -332,11 +332,11 @@ async function projectTaxonomy(
   projectId: Id<"projects"> | undefined
 ): Promise<{ kindNames: string[]; categories: Doc<"documentCategories">[] }> {
   if (!projectId) return { kindNames: [], categories: [] };
-  const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {
+  const kinds: Doc<"documentKinds">[] = await ctx.runQuery(internal.kinds.listInternal, {
     projectId,
   });
   const categories: Doc<"documentCategories">[] = await ctx.runQuery(
-    api.documentCategories.list,
+    internal.documentCategories.listInternal,
     { projectId }
   );
   return { kindNames: kinds.map((kind) => kind.name), categories };
@@ -416,7 +416,7 @@ export const runAnalyze = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const document = await ctx.runQuery(api.documents.get, {
+    const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
     if (!document) throw new Error("Document not found");
@@ -503,7 +503,7 @@ export const runTranscribe = internalAction({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const document = await ctx.runQuery(api.documents.get, {
+    const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
     if (!document) throw new Error("Document not found");

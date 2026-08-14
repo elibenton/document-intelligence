@@ -1,8 +1,4 @@
-import {
-  mutation,
-  internalMutation,
-  internalQuery,
-} from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
@@ -10,6 +6,7 @@ import { renderEnqueueOptions, renderPool } from "./renderPool";
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { authedMutation } from "./authz";
 
 const bboxValidator = v.object({
   x: v.number(),
@@ -371,7 +368,7 @@ async function scheduleRender(
 }
 
 /** Ensure missing or outdated page derivatives are scheduled exactly once. */
-export const ensureRendered = mutation({
+export const ensureRendered = authedMutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
@@ -403,7 +400,7 @@ export const ensureRendered = mutation({
 });
 
 /** User-visible retry for a failed or stalled render. Existing work is reused. */
-export const retryRender = mutation({
+export const retryRender = authedMutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);

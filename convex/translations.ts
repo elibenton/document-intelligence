@@ -1,12 +1,8 @@
-import {
-  internalMutation,
-  internalQuery,
-  mutation,
-  query,
-} from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
+import { authedMutation, authedQuery } from "./authz";
 
 const GLOBAL_SETTINGS_KEY = "global";
 const MAX_TRANSLATED_PAGES_PER_DOCUMENT = 2_000;
@@ -494,7 +490,7 @@ export const failTranslation = internalMutation({
   },
 });
 
-export const pagesByDocument = query({
+export const pagesByDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: v.array(
     v.object({
@@ -525,7 +521,7 @@ export const pagesByDocument = query({
   },
 });
 
-export const retry = mutation({
+export const retry = authedMutation({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {

@@ -1,11 +1,12 @@
-import { query, mutation, internalMutation } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { processingPool } from "./processingPool";
+import { authedMutation, authedQuery } from "./authz";
 
-export const list = query({
+export const list = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const active = await ctx.db
@@ -44,7 +45,7 @@ export const list = query({
  * Scans by status index (failed documents only) and reports the most recent
  * blocking failure plus how many documents are stuck behind it.
  */
-export const processingBlocker = query({
+export const processingBlocker = authedQuery({
   args: {},
   handler: async (ctx) => {
     const failed = await ctx.db
@@ -77,13 +78,32 @@ export const processingBlocker = query({
  * series — `getUrl` could not run until `get` had returned a storageId, so the
  * whole time-to-first-pixel was gated on two sequential round trips.
  */
-export const get = query({
+/**
+ * Shared by the public `get` and the pipeline's `getInternal` below, so the two
+ * cannot drift.
+ */
+async function readDocument(ctx: QueryCtx, id: Id<"documents">) {
+  const document = await ctx.db.get(id);
+  if (!document) return null;
+  return { ...document, url: await ctx.storage.getUrl(document.storageId) };
+}
+
+export const get = authedQuery({
   args: { id: v.id("documents") },
-  handler: async (ctx, args) => {
-    const document = await ctx.db.get(args.id);
-    if (!document) return null;
-    return { ...document, url: await ctx.storage.getUrl(document.storageId) };
-  },
+  handler: async (ctx, args) => readDocument(ctx, args.id),
+});
+
+/**
+ * The same read, for the processing pipeline.
+ *
+ * The node actions run from the workpool, and Convex does not propagate
+ * identity through the scheduler — so they cannot call the authenticated `get`.
+ * They are already unreachable from outside, which is what makes an unguarded
+ * read safe here.
+ */
+export const getInternal = internalQuery({
+  args: { id: v.id("documents") },
+  handler: async (ctx, args) => readDocument(ctx, args.id),
 });
 
 /**
@@ -100,7 +120,7 @@ export const get = query({
  * A deleted document reports "missing" so the overlay releases the card
  * instead of holding it forever.
  */
-export const ingestStates = query({
+export const ingestStates = authedQuery({
   args: { ids: v.array(v.id("documents")) },
   handler: async (ctx, args) => {
     return await Promise.all(
@@ -126,7 +146,7 @@ export const ingestStates = query({
 });
 
 /** Rotate every page while preserving any page-specific adjustment. */
-export const rotateDocument = mutation({
+export const rotateDocument = authedMutation({
   args: {
     id: v.id("documents"),
     degrees: v.union(v.literal(90), v.literal(-90)),
@@ -155,7 +175,7 @@ const MAX_KINDS = 8;
  * changed. An empty `displayName` clears the human title and the "human"
  * stamp with it, which puts the document back in reach of the AI rename pass.
  */
-export const updateIdentity = mutation({
+export const updateIdentity = authedMutation({
   args: {
     id: v.id("documents"),
     displayName: v.optional(v.string()),
@@ -218,7 +238,7 @@ export const updateIdentity = mutation({
  * editor but wrong for tagging a selection: the documents in a selection rarely
  * share a kind list, and replacing would flatten them all to the same one.
  */
-export const addKinds = mutation({
+export const addKinds = authedMutation({
   args: { id: v.id("documents"), kinds: v.array(v.string()) },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.id);
@@ -248,7 +268,7 @@ export const addKinds = mutation({
   },
 });
 
-export const getUrl = query({
+export const getUrl = authedQuery({
   args: { storageId: v.id("_storage") },
   handler: async (ctx, args) => {
     return await ctx.storage.getUrl(args.storageId);
@@ -378,7 +398,7 @@ export async function beginDocumentTeardown(
   });
 }
 
-export const remove = mutation({
+export const remove = authedMutation({
   args: { id: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {

@@ -1,8 +1,9 @@
-import { internalMutation, mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { OTHER_CATEGORY } from "./analyzePrompt";
 import { applyDisplayName, normalizeTitle } from "./rename";
+import { authedMutation } from "./authz";
 
 // ---------------------------------------------------------------------------
 // Metadata pass — default-runtime half.
@@ -149,7 +150,7 @@ export const saveMetadataResult = internalMutation({
     //
     // Scheduled from here rather than from the pipeline so a standalone
     // Analyze retry gets the same treatment.
-    await ctx.scheduler.runAfter(0, api.processing.runRelationships, {
+    await ctx.scheduler.runAfter(0, internal.processing.runRelationshipsInternal, {
       documentId: args.documentId,
     });
   },
@@ -233,6 +234,132 @@ export function sanitizeDocumentPlace(
   };
 }
 
+/** Bibliographic values are labels, not prose. */
+const MAX_CITATION_FIELD = 300;
+/** More contributors than this is the model listing everyone the document
+ *  mentions rather than everyone credited with producing it. */
+const MAX_CONTRIBUTORS = 24;
+
+/** The CSL types the prompt offers. An off-enum answer is the model inventing
+ *  a vocabulary, and "document" is the honest bucket for it. */
+const CITATION_TYPES = new Set([
+  "article-journal",
+  "article-newspaper",
+  "book",
+  "chapter",
+  "report",
+  "legal_case",
+  "legislation",
+  "patent",
+  "webpage",
+  "manuscript",
+  "speech",
+  "dataset",
+  "personal_communication",
+  "document",
+]);
+
+const CONTRIBUTOR_ROLES = new Set(["author", "editor", "translator"]);
+
+/** Values a model returns when it means "empty" but felt obliged to answer. */
+const NOT_A_VALUE =
+  /^(unknown|unspecified|none|n\/?a|not stated|not provided|undisclosed|null|-+)$/i;
+
+function citationField(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim().replace(/\s+/g, " ");
+  if (!value || NOT_A_VALUE.test(value) || value.length > MAX_CITATION_FIELD) {
+    return undefined;
+  }
+  return value;
+}
+
+export interface CitationInput {
+  type?: string;
+  contributors?: Array<{
+    role?: string;
+    family?: string;
+    given?: string;
+    literal?: string;
+  }>;
+  container_title?: string;
+  publisher?: string;
+  publisher_place?: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  edition?: string;
+  number?: string;
+  authority?: string;
+  jurisdiction?: string;
+  genre?: string;
+  doi?: string;
+  isbn?: string;
+  url?: string;
+}
+
+/**
+ * The bibliographic facts worth keeping, or nothing.
+ *
+ * The counterpart to CITATION_RULE, and the strictest of these sanitizers on
+ * purpose: a citation is a claim a reader will check and may reprint, so a
+ * field that is a refusal word wearing a value's clothes has to be dropped
+ * rather than formatted into a reference.
+ *
+ * Returns undefined when nothing survives — including when only `type` does.
+ * A bare `type: "document"` is the model answering a required field, not a fact
+ * about the document, and storing it would make every analyzed document look as
+ * though it had citation data.
+ */
+export function sanitizeCitation(
+  raw: CitationInput | undefined
+): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+
+  const contributors = (Array.isArray(raw.contributors) ? raw.contributors : [])
+    .slice(0, MAX_CONTRIBUTORS)
+    .map((person) => {
+      const role = (person?.role ?? "").trim().toLowerCase();
+      return {
+        role: CONTRIBUTOR_ROLES.has(role) ? role : "author",
+        family: citationField(person?.family),
+        given: citationField(person?.given),
+        literal: citationField(person?.literal),
+      };
+    })
+    // A contributor with no name at all is an empty slot the model filled to
+    // satisfy the array, not a person.
+    .filter((person) => person.family || person.given || person.literal);
+
+  const type = (raw.type ?? "").trim().toLowerCase();
+  const citation = {
+    type: CITATION_TYPES.has(type) ? type : undefined,
+    contributors: contributors.length > 0 ? contributors : undefined,
+    containerTitle: citationField(raw.container_title),
+    publisher: citationField(raw.publisher),
+    publisherPlace: citationField(raw.publisher_place),
+    volume: citationField(raw.volume),
+    issue: citationField(raw.issue),
+    pages: citationField(raw.pages),
+    edition: citationField(raw.edition),
+    number: citationField(raw.number),
+    authority: citationField(raw.authority),
+    jurisdiction: citationField(raw.jurisdiction),
+    genre: citationField(raw.genre),
+    doi: citationField(raw.doi),
+    isbn: citationField(raw.isbn),
+    url: citationField(raw.url),
+  };
+
+  // Everything but `type` — see the doc comment on why type alone is not data.
+  const { type: _type, ...facts } = citation;
+  if (Object.values(facts).every((value) => value === undefined)) return undefined;
+
+  return Object.fromEntries(
+    Object.entries(citation).filter(([, value]) => value !== undefined)
+  );
+}
+
 /** Hard ceiling on outline entries — a plausible TOC, not a re-typed document. */
 const MAX_TOC_ENTRIES = 500;
 const MAX_TOC_LEVEL = 4;
@@ -285,7 +412,7 @@ export function sanitizeTableOfContents(
 // Human edits to kind / tags / metadata
 // ---------------------------------------------------------------------------
 
-export const updateDocumentMeta = mutation({
+export const updateDocumentMeta = authedMutation({
   args: {
     documentId: v.id("documents"),
     primaryKind: v.optional(v.string()),

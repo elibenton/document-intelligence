@@ -1,4 +1,4 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
@@ -14,12 +14,13 @@ import {
   type CitationStyle,
 } from "./projectTemplates";
 import { slugify } from "./slug";
+import { authedMutation, authedQuery } from "./authz";
 
 // ---------------------------------------------------------------------------
 // List all projects (newest first) with document counts for the picker cards
 // ---------------------------------------------------------------------------
 
-export const list = query({
+export const list = authedQuery({
   args: {},
   handler: async (ctx) => {
     const projects = await ctx.db
@@ -45,7 +46,7 @@ export const list = query({
 // Search projects by name (picker search bar)
 // ---------------------------------------------------------------------------
 
-export const search = query({
+export const search = authedQuery({
   args: { q: v.string() },
   handler: async (ctx, args) => {
     const q = args.q.trim();
@@ -70,7 +71,7 @@ export const search = query({
 // Get a single project
 // ---------------------------------------------------------------------------
 
-export const get = query({
+export const get = authedQuery({
   args: { id: v.id("projects") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.id);
@@ -83,7 +84,7 @@ export const get = query({
  * deployment may already hold duplicates, and throwing here would take the
  * project page down rather than landing on one of them.
  */
-export const getBySlug = query({
+export const getBySlug = authedQuery({
   args: { slug: v.string() },
   handler: async (ctx, args) => {
     return await ctx.db
@@ -125,16 +126,16 @@ async function allocateSlug(
 /**
  * Create a project and everything it starts out believing.
  *
- * The template supplies the categories, entity types and citation style; the
- * three optional overrides are what the new-project dialog sends when the user
- * edited them in the review step, before the project existed. Sending nothing
- * but a `templateKey` is the common path and the one the wire is cheap for.
+ * The template supplies the starting categories, entity types and citation
+ * style; all three are overridable because the new-project dialog presents each
+ * template as an editable page and sends back whatever the user left on it.
+ * Sending nothing but a `templateKey` still means "as the template wrote it".
  *
  * All of it lands in this one transaction on purpose: a project that is briefly
  * visible without its categories is a project whose first upload can be
  * analyzed against an empty taxonomy and filed as "other".
  */
-export const create = mutation({
+export const create = authedMutation({
   args: {
     name: v.string(),
     description: v.optional(v.string()),
@@ -194,14 +195,24 @@ export const create = mutation({
 // Rename / edit a project
 // ---------------------------------------------------------------------------
 
-export const update = mutation({
+export const update = authedMutation({
   args: {
     id: v.id("projects"),
     name: v.optional(v.string()),
     description: v.optional(v.string()),
+    citationStyle: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const patch: Record<string, string> = {};
+    if (args.citationStyle !== undefined) {
+      // Validated the same way `create` validates it, and for the same reason:
+      // the value decides which CSL style the renderer loads.
+      const chosen = CITATION_STYLES.find((s) => s === args.citationStyle);
+      if (!chosen) {
+        throw new Error(`Unknown citation style: ${args.citationStyle}`);
+      }
+      patch.citationStyle = chosen;
+    }
     if (args.name !== undefined) {
       const name = args.name.trim();
       if (!name) throw new Error("Project name is required");
@@ -247,7 +258,7 @@ const PROJECT_PHASE = {
  * Documents are handed to the same teardown a single delete uses, so each one
  * cancels its queued work, frees its files, and cascades its own derived rows.
  */
-export const remove = mutation({
+export const remove = authedMutation({
   args: { id: v.id("projects") },
   returns: v.null(),
   handler: async (ctx, args) => {

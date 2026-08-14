@@ -5,12 +5,13 @@
  * the settings page reads `list` and `totals`.
  */
 
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { ApiUsage, UsageLogger } from "./interfazeCost";
+import { authedQuery } from "./authz";
 
 /** Shard count for the denormalized usage totals (see schema.apiUsageTotals). */
 export const TOTALS_SHARDS = 8;
@@ -103,7 +104,7 @@ export const record = internalMutation({
  * rows that all point at the same document, so the naive per-row `get` did up
  * to 100 reads to answer a question with a handful of distinct answers.
  */
-export const list = query({
+export const list = authedQuery({
   args: {},
   handler: async (ctx) => {
     const logs = await ctx.db.query("apiLogs").order("desc").take(100);
@@ -149,7 +150,7 @@ export const pruneOldLogs = internalMutation({
   },
 });
 
-export const totals = query({
+export const totals = authedQuery({
   args: {},
   handler: async (ctx) => {
     // At most TOTALS_SHARDS rows (+1 legacy unsharded row), so this stays a

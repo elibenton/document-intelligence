@@ -1,6 +1,6 @@
-import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
+import { authedMutation, authedQuery } from "./authz";
 
 // ---------------------------------------------------------------------------
 // Get a single entity
@@ -14,7 +14,7 @@ import type { Doc } from "./_generated/dataModel";
 // List all entities (for homepage grouped display)
 // ---------------------------------------------------------------------------
 
-export const listAll = query({
+export const listAll = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     // Ordered by mentionCount, not creation time: the client sorts by mentions,
@@ -33,7 +33,7 @@ export const listAll = query({
 // Pin an entity in its type group
 // ---------------------------------------------------------------------------
 
-export const setStarred = mutation({
+export const setStarred = authedMutation({
   args: { id: v.id("entities"), starred: v.boolean() },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -61,7 +61,7 @@ function displayType(entity: Doc<"entities">): string {
   return current ?? entity.types?.[0] ?? entity.type;
 }
 
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const mentions = await ctx.db
@@ -129,7 +129,7 @@ export const byDocument = query({
  * It stays optional only so links minted before scoping existed still resolve
  * (to an arbitrary project's match); every in-app link passes it.
  */
-export const getBySlug = query({
+export const getBySlug = authedQuery({
   args: { slug: v.string(), projectId: v.optional(v.id("projects")) },
   handler: async (ctx, args) => {
     return await ctx.db
@@ -147,7 +147,7 @@ export const getBySlug = query({
 // Get which documents a given entity appears in (for cross-doc dropdown)
 // ---------------------------------------------------------------------------
 
-export const documentsForEntity = query({
+export const documentsForEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
     const mentions = await ctx.db
@@ -183,7 +183,7 @@ export const documentsForEntity = query({
 // (entity page "Appears In" detail)
 // ---------------------------------------------------------------------------
 
-export const mentionsForEntity = query({
+export const mentionsForEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
     const mentions = await ctx.db

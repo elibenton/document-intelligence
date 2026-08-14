@@ -11,7 +11,7 @@
  * runs are skipped and search falls back to full-text + entity-graph legs.
  */
 
-import { internalAction, internalMutation, internalQuery, action } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -19,6 +19,7 @@ import type { UsageLogger } from "./interfazeCost";
 import { usageLogger } from "./apiLogs";
 import { healthReporter } from "./providerHealth";
 import type { HealthReporter, ProviderStatus } from "./providerHealth";
+import { authedAction } from "./authz";
 
 export const EMBEDDING_MODEL = "gemini-embedding-2";
 export const EMBEDDING_DIMENSIONS = 1536;
@@ -259,7 +260,7 @@ export const embedDocument = internalAction({
  * to find out. Rate-limit retries are off so the answer comes back in
  * seconds rather than ~110s of backoff.
  */
-export const checkHealth = action({
+export const checkHealth = authedAction({
   args: {},
   handler: async (ctx): Promise<{ status: ProviderStatus; message?: string }> => {
     const health = healthReporter(ctx);

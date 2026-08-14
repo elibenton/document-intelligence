@@ -1,7 +1,8 @@
-import { query, internalMutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { authedQuery } from "./authz";
 
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: v.array(
     v.object({

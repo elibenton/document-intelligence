@@ -1,5 +1,5 @@
-import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { authedMutation, authedQuery } from "./authz";
 
 /**
  * Highlights and comments the user drew on a document's pages.
@@ -35,7 +35,7 @@ function normalizeComment(comment: string | undefined): string | undefined {
  * and the notes panel groups by section, so one document-wide subscription
  * serves both rather than one per mounted page.
  */
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const rows = await ctx.db
@@ -50,7 +50,7 @@ export const byDocument = query({
   },
 });
 
-export const create = mutation({
+export const create = authedMutation({
   args: {
     documentId: v.id("documents"),
     pageNumber: v.number(),
@@ -90,7 +90,7 @@ export const create = mutation({
  * swatches and the comment box can each patch the half they own; passing an
  * empty comment clears it back to a bare highlight.
  */
-export const update = mutation({
+export const update = authedMutation({
   args: {
     id: v.id("annotations"),
     color: v.optional(colorValidator),
@@ -110,7 +110,7 @@ export const update = mutation({
   },
 });
 
-export const remove = mutation({
+export const remove = authedMutation({
   args: { id: v.id("annotations") },
   handler: async (ctx, args) => {
     await ctx.db.delete(args.id);

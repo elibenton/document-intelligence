@@ -11,6 +11,8 @@
 import type * as analyzePrompt from "../analyzePrompt.js";
 import type * as annotations from "../annotations.js";
 import type * as apiLogs from "../apiLogs.js";
+import type * as auth from "../auth.js";
+import type * as authz from "../authz.js";
 import type * as blocks from "../blocks.js";
 import type * as clips from "../clips.js";
 import type * as crons from "../crons.js";
@@ -74,6 +76,8 @@ declare const fullApi: ApiFromModules<{
   analyzePrompt: typeof analyzePrompt;
   annotations: typeof annotations;
   apiLogs: typeof apiLogs;
+  auth: typeof auth;
+  authz: typeof authz;
   blocks: typeof blocks;
   clips: typeof clips;
   crons: typeof crons;
@@ -155,6 +159,7 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
+  betterAuth: import("@convex-dev/better-auth/_generated/component.js").ComponentApi<"betterAuth">;
   processingWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"processingWorkpool">;
   renderWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"renderWorkpool">;
   staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;

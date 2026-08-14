@@ -1,5 +1,6 @@
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { authedQuery } from "./authz";
 
 // Visual objects are produced by the same whole-document Interfaze completion
 // as OCR and metadata, then stored here for page overlays.
@@ -41,7 +42,7 @@ export const saveDetections = internalMutation({
   },
 });
 
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     return await ctx.db

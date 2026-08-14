@@ -1,8 +1,9 @@
-import { mutation, query } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import { internalQuery } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import type { TemplateCategory } from "./projectTemplates";
+import { authedMutation, authedQuery } from "./authz";
 
 /**
  * The enforced primary-category taxonomy: user-managed rows that back both
@@ -31,18 +32,26 @@ function slugify(label: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export const list = query({
+async function readCategories(ctx: QueryCtx, projectId: Id<"projects">) {
+  const rows = await ctx.db
+    .query("documentCategories")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  return rows.sort((a, b) => a.order - b.order);
+}
+
+export const list = authedQuery({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const rows = await ctx.db
-      .query("documentCategories")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    return rows.sort((a, b) => a.order - b.order);
-  },
+  handler: async (ctx, args) => readCategories(ctx, args.projectId),
 });
 
-export const create = mutation({
+/** The same list, for the Analyze prompt. See documents.getInternal. */
+export const listInternal = internalQuery({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => readCategories(ctx, args.projectId),
+});
+
+export const create = authedMutation({
   args: {
     projectId: v.id("projects"),
     label: v.string(),
@@ -124,7 +133,7 @@ export async function seedCategories(
 }
 
 /** Edits label/description/color. `key` is immutable — documents reference it. */
-export const update = mutation({
+export const update = authedMutation({
   args: {
     id: v.id("documentCategories"),
     label: v.optional(v.string()),
@@ -151,7 +160,7 @@ export const update = mutation({
   },
 });
 
-export const remove = mutation({
+export const remove = authedMutation({
   args: { id: v.id("documentCategories") },
   handler: async (ctx, args) => {
     const category = await ctx.db.get(args.id);
@@ -185,7 +194,7 @@ const BREAKDOWN_LIMIT = 5000;
  * common first. Powers the "what the AI extraction has pulled out and put
  * into each of the categories" view in Settings.
  */
-export const bySecondaryType = query({
+export const bySecondaryType = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const categories = await ctx.db

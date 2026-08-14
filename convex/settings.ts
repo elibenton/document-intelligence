@@ -1,6 +1,7 @@
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { authedMutation, authedQuery } from "./authz";
 
 const SETTINGS_KEY = "global";
 const DEFAULT_LANGUAGE_CODE = "en";
@@ -19,7 +20,7 @@ function normalizeLanguageCode(value: string): string {
   return code;
 }
 
-export const get = query({
+export const get = authedQuery({
   args: {},
   returns: settingsResultValidator,
   handler: async (ctx) => {
@@ -51,7 +52,7 @@ export const getInternal = internalQuery({
   },
 });
 
-export const updateDefaultLanguage = mutation({
+export const updateDefaultLanguage = authedMutation({
   args: { languageCode: v.string() },
   returns: settingsResultValidator,
   handler: async (ctx, args) => {

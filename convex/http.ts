@@ -2,8 +2,16 @@ import { registerStaticRoutes } from "@convex-dev/static-hosting";
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { components, internal } from "./_generated/api";
+import { authComponent, createAuth } from "./auth";
 
 const http = httpRouter();
+
+// Better Auth's /api/auth/* routes. Position in this file is cosmetic: Convex
+// matches exact paths first, then prefixes longest-first, so `/api/auth/`
+// always beats the `/` catch-all registerStaticRoutes adds at the bottom
+// regardless of registration order. `cors: true` is for `vite dev`; see
+// convex/auth.ts.
+authComponent.registerRoutes(http, createAuth, { cors: true });
 
 // ---------------------------------------------------------------------------
 // POST /clip — web clipper ingestion endpoint.

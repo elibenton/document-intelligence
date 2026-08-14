@@ -1,5 +1,8 @@
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import { authedQuery } from "./authz";
 
 /**
  * Semantic document kinds.
@@ -16,15 +19,23 @@ import { v } from "convex/values";
  * to prevent rather than cause.
  */
 
+function readKinds(ctx: QueryCtx, projectId: Id<"projects">) {
+  return ctx.db
+    .query("documentKinds")
+    .withIndex("by_project_and_name", (q) => q.eq("projectId", projectId))
+    .take(200);
+}
+
 /** This project's document kinds. */
-export const list = query({
+export const list = authedQuery({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("documentKinds")
-      .withIndex("by_project_and_name", (q) => q.eq("projectId", args.projectId))
-      .take(200);
-  },
+  handler: async (ctx, args) => readKinds(ctx, args.projectId),
+});
+
+/** The same list, for the Analyze prompt. See documents.getInternal. */
+export const listInternal = internalQuery({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => readKinds(ctx, args.projectId),
 });
 
 /** Register a kind the AI named for this project, if it is new. */

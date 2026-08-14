@@ -1,12 +1,13 @@
-import { query, internalQuery } from "./_generated/server";
+import { internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { authedQuery } from "./authz";
 
 /**
  * Page list for a document, stripped to what the viewer needs (numbers +
  * dimensions). Full page markdown and embeddings stay server-side — they can
  * be many MB per document and were being pushed to every open document page.
  */
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const pages = await ctx.db
@@ -70,7 +71,7 @@ export const openingTextByDocument = internalQuery({
  * server rendering was removed, so callers were falling back to a hardcoded
  * aspect ratio while the true dimensions sat here all along.
  */
-export const dimensionsByPage = query({
+export const dimensionsByPage = authedQuery({
   args: { documentId: v.id("documents"), pageNumber: v.number() },
   handler: async (ctx, args) => {
     const page = await ctx.db

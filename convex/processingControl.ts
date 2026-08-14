@@ -1,8 +1,9 @@
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { components } from "./_generated/api";
 import { v } from "convex/values";
 import { processingPool, PROCESSING_MAX_PARALLELISM } from "./processingPool";
+import { authedMutation, authedQuery } from "./authz";
 
 const CONTROL_KEY = "global";
 
@@ -41,7 +42,7 @@ async function writeControl(
   });
 }
 
-export const get = query({
+export const get = authedQuery({
   args: {},
   returns: controlValidator,
   handler: async (ctx) => {
@@ -65,7 +66,7 @@ export const getInternal = internalQuery({
   },
 });
 
-export const setPaused = mutation({
+export const setPaused = authedMutation({
   args: { paused: v.boolean() },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -122,7 +123,7 @@ export const resumeAfterProviderBlock = internalMutation({
   },
 });
 
-export const cancelWaiting = mutation({
+export const cancelWaiting = authedMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {

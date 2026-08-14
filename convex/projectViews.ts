@@ -1,5 +1,5 @@
-import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { authedMutation, authedQuery } from "./authz";
 
 /**
  * Per-project list configuration: the Library and Entities views, and the
@@ -34,7 +34,7 @@ const viewConfigValidator = v.object({
 });
 
 /** Null when the project has never been customized — the client uses defaults. */
-export const get = query({
+export const get = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     return await ctx.db
@@ -49,7 +49,7 @@ export const get = query({
  * dragging the divider doesn't have to send the view configs back, and
  * toggling a property doesn't have to send the split ratio.
  */
-export const save = mutation({
+export const save = authedMutation({
   args: {
     projectId: v.id("projects"),
     splitRatio: v.optional(v.number()),

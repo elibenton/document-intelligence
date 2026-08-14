@@ -1,6 +1,6 @@
-import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { PROCESSING_MAX_PARALLELISM } from "./processingPool";
+import { authedQuery } from "./authz";
 
 const jobValidator = v.object({
   _id: v.id("processingJobs"),
@@ -44,7 +44,7 @@ function median(values: number[]): number {
     : sorted[middle];
 }
 
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: v.array(jobValidator),
   handler: async (ctx, args) => {
@@ -60,7 +60,7 @@ export const byDocument = query({
  * duration is intentionally used instead of an average so one provider timeout
  * cannot make every following estimate wildly pessimistic.
  */
-export const estimateByDocument = query({
+export const estimateByDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: estimateValidator,
   handler: async (ctx, args) => {

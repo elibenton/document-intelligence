@@ -1,14 +1,11 @@
-import {
-  action,
-  internalMutation,
-  mutation,
-} from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import { internalAction, internalMutation } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
 import { vOnCompleteArgs } from "@convex-dev/workpool";
+import { authedAction, authedMutation } from "./authz";
 
 // Watchdog: actions that hit Convex's 10-minute kill never run their catch
 // blocks, stranding documents in "parsing"/"extracting" with a "running" job
@@ -20,7 +17,7 @@ export const CANCELED_MESSAGE =
 
 
 /** Public retry hook for the transcript UI */
-export const runTranscription = action({
+export const runTranscription = authedAction({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -60,14 +57,18 @@ export const runTranscription = action({
 // user to confirm the suggested template.
 // ---------------------------------------------------------------------------
 
-export const runFullPipeline = action({
+export const runFullPipeline = authedAction({
   args: {
     documentId: v.id("documents"),
     bypassCache: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const document = await ctx.runQuery(api.documents.get, {
+    // getInternal, not the authenticated get: this action has identity today,
+    // but nothing about the read needs it, and the day someone schedules this
+    // pipeline the difference is a silent Unauthenticated. No convex/ module
+    // should reference `api.*` — see convex/authz.ts.
+    const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
     if (!document) throw new Error("Document not found");
@@ -134,7 +135,7 @@ export const runFullPipeline = action({
  * geometry are built on, so it is re-run only when it failed, via
  * runFullPipeline. Analyze is text-in and cheap, so it stays retryable forever.
  */
-export const runAnalyze = action({
+export const runAnalyze = authedAction({
   args: {
     documentId: v.id("documents"),
     promptOverride: v.optional(v.string()),
@@ -172,7 +173,7 @@ export const runAnalyze = action({
  * user re-uploading anything. Clearing errorCode alongside the status keeps
  * the banner from lingering after the retry starts.
  */
-export const retryBlocked = mutation({
+export const retryBlocked = authedMutation({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {
@@ -274,32 +275,47 @@ export const retryBlocked = mutation({
  * step needs its own re-run, the way Analyze and Extract have theirs.
  * `createJob` returning false is what keeps a second click from stacking runs.
  */
-export const runRelationships = action({
+async function enqueueRelationships(
+  ctx: ActionCtx,
+  documentId: Id<"documents">
+): Promise<null> {
+  const shouldEnqueue: boolean = await ctx.runMutation(
+    internal.processing.createJob,
+    { documentId, stage: "relationships" }
+  );
+  if (!shouldEnqueue) return null;
+  const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
+  const workId = await processingPool.enqueueAction(
+    ctx,
+    internal.relationshipsNode.extract,
+    { documentId },
+    processingEnqueueOptions(paused, { documentId, stage: "relationships" })
+  );
+  await ctx.runMutation(internal.processing.attachWorkId, {
+    documentId,
+    stage: "relationships",
+    workId,
+  });
+  return null;
+}
+
+export const runRelationships = authedAction({
   args: { documentId: v.id("documents") },
   returns: v.null(),
-  handler: async (ctx, args) => {
-    const shouldEnqueue: boolean = await ctx.runMutation(
-      internal.processing.createJob,
-      { documentId: args.documentId, stage: "relationships" }
-    );
-    if (!shouldEnqueue) return null;
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-    const workId = await processingPool.enqueueAction(
-      ctx,
-      internal.relationshipsNode.extract,
-      { documentId: args.documentId },
-      processingEnqueueOptions(paused, {
-        documentId: args.documentId,
-        stage: "relationships",
-      })
-    );
-    await ctx.runMutation(internal.processing.attachWorkId, {
-      documentId: args.documentId,
-      stage: "relationships",
-      workId,
-    });
-    return null;
-  },
+  handler: async (ctx, args) => enqueueRelationships(ctx, args.documentId),
+});
+
+/**
+ * The same enqueue, scheduled by the metadata pass rather than clicked.
+ *
+ * `ctx.scheduler` does not carry the caller's identity, so scheduling the
+ * authenticated `runRelationships` throws Unauthenticated the moment it runs —
+ * silently, from the user's point of view, because nothing is awaiting it.
+ */
+export const runRelationshipsInternal = internalAction({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => enqueueRelationships(ctx, args.documentId),
 });
 
 

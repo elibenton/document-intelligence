@@ -1,6 +1,6 @@
-import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { recountEntity } from "./entityResolution";
+import { authedMutation, authedQuery } from "./authz";
 
 /**
  * Pending merge suggestions for one project, with both entities hydrated for
@@ -9,7 +9,7 @@ import { recountEntity } from "./entityResolution";
  * this project's pairs. Without this every project's homepage listed every
  * other project's merges.
  */
-export const listPending = query({
+export const listPending = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const pending = await ctx.db
@@ -48,7 +48,7 @@ export const listPending = query({
  * relationships; teach the source name (and its aliases) as target aliases;
  * merge stable types; delete the source.
  */
-export const accept = mutation({
+export const accept = authedMutation({
   args: { id: v.id("mergeSuggestions") },
   handler: async (ctx, args) => {
     const suggestion = await ctx.db.get(args.id);
@@ -150,7 +150,7 @@ export const accept = mutation({
 });
 
 /** Reject: keep both entities; remember the pair so it isn't re-suggested. */
-export const reject = mutation({
+export const reject = authedMutation({
   args: { id: v.id("mergeSuggestions") },
   handler: async (ctx, args) => {
     const suggestion = await ctx.db.get(args.id);

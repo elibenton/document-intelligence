@@ -1,5 +1,5 @@
-import { query } from "./_generated/server";
 import { v } from "convex/values";
+import { authedQuery } from "./authz";
 
 /**
  * The Analyze instruction, in one place.
@@ -124,6 +124,35 @@ const TITLE_RULE =
   "Never invent parties, places, or identifiers. When the unique element is genuinely not established, name the document by its type alone rather than guessing at one. " +
   "Title Case. No file extension, no quotes, no trailing period. Do not describe the file format, and do not restate the original filename when it is meaningless (a scanner code, a hash, IMG_1234).";
 
+/**
+ * The citation rule.
+ *
+ * A bibliography needs facts the pipeline never collected — who published it,
+ * what it appeared in, which court issued it, what volume and page. They ride
+ * along on this call rather than becoming a second one: Analyze already holds
+ * the whole document, and an extra API call re-sends it and bills for it.
+ *
+ * The same bargain as DATE_RULE and PLACE_RULE, and for a sharper reason here.
+ * A citation is a claim a reader will check. A plausible invented publisher is
+ * worse than a citation that is visibly incomplete, because incomplete is
+ * something the user can see and fix, and wrong is something they will repeat
+ * in print. Empty is the correct answer for every field the document does not
+ * itself supply.
+ *
+ * Deliberately silent on the date, the URL and the title: those are already
+ * known (document_date, sourceUrl, display_title) and are filled in
+ * deterministically when the citation is rendered. Asking again would pay
+ * tokens for a worse copy of a fact already in hand.
+ */
+const CITATION_RULE =
+  "Fill in `citation` with the bibliographic facts this document states about itself, for formatting a reference to it. " +
+  "Every field is optional and an empty string is the correct answer whenever the document does not supply it — do not infer a publisher from a logo, a court from a case caption's style, or a journal from formatting. " +
+  "Choose `type` from the list; when nothing fits, use \"document\". " +
+  "Give `contributors` only for people or bodies credited with producing the document — authors, editors, translators — not everyone it mentions. Use `family` and `given` for a person, and `literal` alone for an organization. " +
+  "`container_title` is the larger work this appeared in: a journal, a newspaper, a website, or a reporter for a decided case. " +
+  "`authority` is the issuing court or agency, and `number` the docket, report or form number as printed. " +
+  "Leave the whole object empty rather than half-guessing: a citation nobody can check is worse than one that is visibly incomplete.";
+
 export function buildAnalyzePrompt(options: {
   csv: boolean;
   kindNames: string[];
@@ -138,8 +167,8 @@ export function buildAnalyzePrompt(options: {
     ? ` Original filename: "${options.fileName}".`
     : "";
   return options.csv
-    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE}`
-    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE}`;
+    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}`
+    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}`;
 }
 
 /**
@@ -182,7 +211,7 @@ function isCsv(name: string, mimeType: string, mediaType?: string): boolean {
 }
 
 /** The prompt the next Analyze run would use, for the retry dialog to pre-fill. */
-export const forDocument = query({
+export const forDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: v.union(v.string(), v.null()),
   handler: async (ctx, args) => {
@@ -386,6 +415,108 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
           properties: { key: { type: "string" }, value: { type: "string" } },
           required: ["key", "value"],
         },
+      },
+      // Declared last, deliberately.
+      //
+      // Property order here is a reasoning chain — evidence → kind → category →
+      // title → dates — and `display_title` depends on no date existing in
+      // context yet. Anything inserted mid-list moves every field after it and
+      // is a behaviour change worth a before/after run. Appending cannot
+      // disturb that order, and it also gives the model the whole analysis in
+      // context before it is asked for bibliographic facts, which is exactly
+      // what naming a publisher or a court wants.
+      //
+      // Not `required`: unlike the other objects here, a document that supplies
+      // none of this should return nothing rather than an object of empty
+      // strings it had to fill in.
+      citation: {
+        type: "object",
+        description:
+          "Bibliographic facts for formatting a reference to this document. See the citation rule in the instruction — empty is the correct answer for anything the document does not state.",
+        properties: {
+          type: {
+            type: "string",
+            enum: [
+              "article-journal",
+              "article-newspaper",
+              "book",
+              "chapter",
+              "report",
+              "legal_case",
+              "legislation",
+              "patent",
+              "webpage",
+              "manuscript",
+              "speech",
+              "dataset",
+              "personal_communication",
+              "document",
+            ],
+            description:
+              'What kind of thing this is, bibliographically. "document" when nothing else fits.',
+          },
+          contributors: {
+            type: "array",
+            description:
+              "Who is credited with producing the document, in the order printed. Empty when it names no one.",
+            items: {
+              type: "object",
+              properties: {
+                role: {
+                  type: "string",
+                  enum: ["author", "editor", "translator"],
+                },
+                family: {
+                  type: "string",
+                  description: "Family name, for a person. Empty for a body.",
+                },
+                given: {
+                  type: "string",
+                  description: "Given name(s), for a person. Empty for a body.",
+                },
+                literal: {
+                  type: "string",
+                  description:
+                    "The whole name, for an organization or agency. Empty for a person.",
+                },
+              },
+              required: ["role", "family", "given", "literal"],
+            },
+          },
+          container_title: {
+            type: "string",
+            description:
+              "The larger work this appeared in — journal, newspaper, website, or reporter.",
+          },
+          publisher: { type: "string" },
+          publisher_place: { type: "string" },
+          volume: { type: "string" },
+          issue: { type: "string" },
+          pages: { type: "string", description: 'Page range as printed, e.g. "18-24".' },
+          edition: { type: "string" },
+          number: {
+            type: "string",
+            description: "Docket, report or form number, as printed.",
+          },
+          authority: {
+            type: "string",
+            description: "The issuing court or agency.",
+          },
+          jurisdiction: { type: "string" },
+          genre: {
+            type: "string",
+            description:
+              'A descriptive label where the type alone is thin — "Deposition transcript", "Working paper".',
+          },
+          doi: { type: "string" },
+          isbn: { type: "string" },
+          url: {
+            type: "string",
+            description:
+              "A URL printed in the document itself. Not where the file came from.",
+          },
+        },
+        required: ["type", "contributors"],
       },
     },
     required: [

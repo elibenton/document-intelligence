@@ -123,6 +123,47 @@ export default defineSchema({
     // document_date.evidence is: it makes guessing feel expensive.
     documentPlaceEvidence: v.optional(v.string()),
     tags: v.optional(v.array(v.string())),
+    // Bibliographic facts Analyze read off the document, for formatting a
+    // reference to it (src/lib/citation/). A real object rather than a JSON
+    // string like `metadata` because the UI renders and edits single fields.
+    //
+    // Every field is optional and absent means the document never stated it —
+    // never "not extracted yet". Absent for documents analyzed before this
+    // existed, and re-analyzing is what fills them; nothing is backfilled,
+    // because a backfill here is an Interfaze call per document.
+    //
+    // Deliberately holds nothing already known elsewhere: the date comes from
+    // documentDate, the URL and access date from sourceUrl/uploadedAt, and the
+    // title from displayName. Those are merged in when a citation is rendered.
+    citation: v.optional(
+      v.object({
+        type: v.optional(v.string()),
+        contributors: v.optional(
+          v.array(
+            v.object({
+              role: v.string(), // "author" | "editor" | "translator"
+              family: v.optional(v.string()),
+              given: v.optional(v.string()),
+              literal: v.optional(v.string()),
+            })
+          )
+        ),
+        containerTitle: v.optional(v.string()),
+        publisher: v.optional(v.string()),
+        publisherPlace: v.optional(v.string()),
+        volume: v.optional(v.string()),
+        issue: v.optional(v.string()),
+        pages: v.optional(v.string()),
+        edition: v.optional(v.string()),
+        number: v.optional(v.string()),
+        authority: v.optional(v.string()),
+        jurisdiction: v.optional(v.string()),
+        genre: v.optional(v.string()),
+        doi: v.optional(v.string()),
+        isbn: v.optional(v.string()),
+        url: v.optional(v.string()),
+      })
+    ),
     // Detailed metadata extractor output (JSON string), human-editable
     metadata: v.optional(v.string()),
     // Nested table of contents from the Analyze pass. Stored flat with a

@@ -20,16 +20,12 @@
  *                  citations that deep-link into the document viewer.
  */
 
-import {
-  query,
-  mutation,
-  internalQuery,
-  internalMutation,
-} from "./_generated/server";
+import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
+import { authedMutation, authedQuery } from "./authz";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -88,7 +84,7 @@ function titleOf(doc: { name: string; displayName?: string }): string {
   return doc.displayName?.trim() || doc.name;
 }
 
-export const suggest = query({
+export const suggest = authedQuery({
   args: { q: v.string(), projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const q = args.q.trim();
@@ -216,7 +212,7 @@ export const suggest = query({
 const MAX_SAVED_SEARCHES = 50;
 
 
-export const start = mutation({
+export const start = authedMutation({
   args: {
     query: v.string(),
     projectId: v.id("projects"),
@@ -267,7 +263,7 @@ export const start = mutation({
 });
 
 
-export const get = query({
+export const get = authedQuery({
   args: { id: v.id("searches") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.id);
@@ -275,7 +271,7 @@ export const get = query({
 });
 
 
-export const recent = query({
+export const recent = authedQuery({
   args: { projectId: v.id("projects") },
   returns: v.array(
     v.object({

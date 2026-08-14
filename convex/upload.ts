@@ -1,16 +1,17 @@
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import { type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
 import { renderEnqueueOptions, renderPool } from "./renderPool";
+import { authedMutation, authedQuery } from "./authz";
 
 // Interfaze accepts URLs in prompt text up to 80 MB. Keep headroom for its
 // fetch/redirect accounting and mirror the browser preflight's safe ceiling.
 const AUDIO_URL_SAFE_BYTES = 70_000_000;
 
-export const generateUploadUrl = mutation(async (ctx) => {
+export const generateUploadUrl = authedMutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
 });
 
@@ -84,7 +85,7 @@ async function findByContentHash(
  * It exists to explain the two rows that will otherwise look identical in the
  * library, which is the actual complaint behind "check the file name".
  */
-export const findDuplicate = query({
+export const findDuplicate = authedQuery({
   args: {
     projectId: v.id("projects"),
     contentHash: v.string(),
@@ -111,7 +112,7 @@ export const findDuplicate = query({
   },
 });
 
-export const createDocument = mutation({
+export const createDocument = authedMutation({
   args: {
     projectId: v.id("projects"),
     name: v.string(),

@@ -1,4 +1,4 @@
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import {
   resolveEntity,
@@ -11,6 +11,7 @@ import {
   relationLabel,
   relationSortIndex,
 } from "./relationTypes";
+import { authedQuery } from "./authz";
 
 // ---------------------------------------------------------------------------
 // Mutation: resolve names to entities and store relationship rows
@@ -252,7 +253,7 @@ function isShownType(entity: Doc<"entities">): boolean {
  * `hidden` is returned rather than silently dropped: a panel that quietly shows
  * a third of what it found reads as "this document has few connections".
  */
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const rows = await ctx.db
@@ -310,7 +311,7 @@ export const byDocument = query({
   },
 });
 
-export const forEntity = query({
+export const forEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
     const asSource = await ctx.db

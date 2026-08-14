@@ -1,8 +1,9 @@
-import { mutation, query, internalQuery } from "./_generated/server";
+import { internalQuery } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import type { TemplateEntityType } from "./projectTemplates";
+import { authedMutation, authedQuery } from "./authz";
 
 /**
  * Entity types a project looks for beyond people and organizations.
@@ -31,7 +32,7 @@ function toKey(label: string): string {
 /** The two the code owns. A project may not redeclare them. */
 const RESERVED = new Set(["person", "organization", "people", "organizations"]);
 
-export const list = query({
+export const list = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     return await ctx.db
@@ -84,7 +85,7 @@ export async function seedEntityTypes(
   }
 }
 
-export const create = mutation({
+export const create = authedMutation({
   args: {
     projectId: v.id("projects"),
     label: v.string(),
@@ -124,7 +125,7 @@ export const create = mutation({
  * they are real findings from documents that really were read that way, and
  * deleting them would silently discard work the user asked for.
  */
-export const remove = mutation({
+export const remove = authedMutation({
   args: { id: v.id("projectEntityTypes") },
   returns: v.null(),
   handler: async (ctx, args) => {

@@ -25,6 +25,15 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
 
+  // Auth is same-origin in production — static hosting serves this app from the
+  // same .convex.site origin Better Auth's routes are mounted on. So an OAuth
+  // callback, an email verification link or a magic link arrives here as a
+  // plain same-origin navigation, and the branch below would cache its response
+  // as the app shell. On the happy path that is merely wrong; on the error path
+  // it serves an auth error page as the app on the next offline navigation.
+  // Never cache anything under the auth prefix.
+  if (new URL(request.url).pathname.startsWith("/api/auth/")) return;
+
   // Navigations: network first, so a deploy is picked up immediately; the
   // cached shell only stands in when the network is gone.
   if (request.mode === "navigate") {

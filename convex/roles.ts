@@ -1,8 +1,8 @@
-import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { authedMutation, authedQuery } from "./authz";
 
 /** Roles an entity plays, grouped with the asserting document's name. */
-export const forEntity = query({
+export const forEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
     const rows = await ctx.db
@@ -25,7 +25,7 @@ export const forEntity = query({
 });
 
 /** Role rows for a document, hydrated with entity names (sidebar display). */
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const rows = await ctx.db
@@ -49,7 +49,7 @@ export const byDocument = query({
 });
 
 /** Human edit: add a role for an entity on a document. */
-export const addRole = mutation({
+export const addRole = authedMutation({
   args: {
     entityId: v.id("entities"),
     documentId: v.id("documents"),
@@ -73,7 +73,7 @@ export const addRole = mutation({
   },
 });
 
-export const removeRole = mutation({
+export const removeRole = authedMutation({
   args: { id: v.id("entityRoles") },
   handler: async (ctx, args) => {
     await ctx.db.delete(args.id);

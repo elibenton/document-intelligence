@@ -23,7 +23,7 @@
 import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { chatCompletion } from "./interfaze";
 import { usageLogger } from "./apiLogs";
 import { normalizeTitle } from "./rename";
@@ -90,7 +90,7 @@ interface DocumentMetadata {
  * (an action calling an action would burn a second action slot for nothing).
  */
 async function renamePass(ctx: ActionCtx, documentId: Id<"documents">) {
-  const document = await ctx.runQuery(api.documents.get, { id: documentId });
+  const document = await ctx.runQuery(internal.documents.getInternal, { id: documentId });
   if (!document) return;
 
   const apiKey = process.env.INTERFAZE_API_KEY;

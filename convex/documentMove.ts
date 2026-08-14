@@ -1,10 +1,11 @@
-import { mutation, internalMutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { CASCADE_BATCH, sweepOrphanEntities } from "./documents";
 import { slugify } from "./slug";
+import { authedMutation } from "./authz";
 
 /**
  * Move a document to another project, after the fact.
@@ -57,7 +58,7 @@ const DENORMALIZED_TABLES = [
   "annotations",
 ] as const;
 
-export const moveToProject = mutation({
+export const moveToProject = authedMutation({
   args: {
     documentId: v.id("documents"),
     targetProjectId: v.id("projects"),
@@ -236,9 +237,14 @@ async function restampProjectId(
  * Matched on `slug`, which is `slugify(name)` and never changes after creation
  * — a merge deletes the loser rather than renaming the winner — so it is the
  * same identity the rest of the app resolves `/entity/:slug` by. Counts start
- * at zero on a freshly created twin and are added to by the caller; `starred`
- * and `aliases` come across because they are human judgements about who this
- * is, not facts about the source project.
+ * at zero on a freshly created twin and are added to by the caller.
+ *
+ * `aliases` come across because they are a claim about who this is, and true
+ * wherever the entity appears. `starred` deliberately does not: it is curation
+ * of one project's sidebar, not a fact about the entity, and copying it strands
+ * empty rows. A starred twin is invisible to `sweepOrphanEntities` — which
+ * spares starred entities on purpose — so a document that moves in and out
+ * again leaves a 0-mention entity behind forever. Observed, not theorized.
  */
 async function twinEntity(
   ctx: MutationCtx,
@@ -264,7 +270,6 @@ async function twinEntity(
     avgConfidence: source.avgConfidence,
     aliases: source.aliases,
     isCustom: source.isCustom,
-    starred: source.starred,
     slug,
   });
 }

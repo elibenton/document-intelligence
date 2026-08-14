@@ -1,5 +1,5 @@
-import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { authedMutation, authedQuery } from "./authz";
 
 /**
  * All blocks for a document, WITHOUT the heavy fields (`words`, `html`).
@@ -8,7 +8,7 @@ import { v } from "convex/values";
  * client on every reactive update. Used for TOC, search, and mention counts;
  * overlays that need word boxes fetch a single page via `byDocumentPage`.
  */
-export const byDocument = query({
+export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     // This is a lightweight navigation/search summary, not the overlay data
@@ -42,7 +42,7 @@ export const byDocument = query({
 
 /** Full blocks (including word-level OCR boxes) for a single page — cheap
  * because only the handful of pages currently rendered subscribe to it. */
-export const byDocumentPage = query({
+export const byDocumentPage = authedQuery({
   args: { documentId: v.id("documents"), pageNumber: v.number() },
   handler: async (ctx, args) => {
     const page = await ctx.db
@@ -65,7 +65,7 @@ export const byDocumentPage = query({
   },
 });
 
-export const updateType = mutation({
+export const updateType = authedMutation({
   args: { id: v.id("blocks"), blockType: v.string() },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.id, { blockType: args.blockType });
@@ -80,7 +80,7 @@ export const updateType = mutation({
 const norm = (s: string) =>
   s.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").replace(/\s+/g, " ").trim();
 
-export const locateText = query({
+export const locateText = authedQuery({
   args: { documentId: v.id("documents"), text: v.string() },
   handler: async (ctx, args) => {
     const target = norm(args.text);

@@ -10,10 +10,11 @@
  * client helpers, mirroring how `usageLogger` is threaded through.
  */
 
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { authedQuery } from "./authz";
 
 export type ProviderStatus =
   | "ok"
@@ -98,7 +99,7 @@ export const report = internalMutation({
 });
 
 /** Every tracked provider's current state, for the settings page. */
-export const list = query({
+export const list = authedQuery({
   args: {},
   handler: async (ctx) => {
     return await ctx.db.query("providerHealth").take(20);
