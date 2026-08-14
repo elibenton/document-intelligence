@@ -218,30 +218,48 @@ function ProjectDropOverlay({
     <>
       {(isDragging || isPreparing || uploads.length > 0 || dropError) && (
         <div
-          className={`fixed bottom-4 left-4 z-50 flex w-[min(26rem,calc(100vw-2rem))] flex-col gap-1.5 rounded-xl bg-background/95 shadow-xl backdrop-blur ${
+          className={`fixed z-50 flex flex-col gap-1.5 rounded-xl bg-background/95 shadow-xl backdrop-blur ${
+            // While a drag is over the window the panel becomes the target
+            // itself — the bottom-left quarter of the page. It grows out of
+            // the same corner the progress card occupies, so the card does not
+            // jump on drop.
             isDragging
-              ? "pointer-events-none border-2 border-dashed border-primary p-5"
-              : "pointer-events-auto border p-2"
+              ? "pointer-events-none bottom-4 left-4 h-[25vh] min-h-[11rem] w-[max(25vw,20rem)] max-w-[calc(100vw-2rem)] items-center justify-center border-2 border-dashed border-primary p-6"
+              : "pointer-events-auto bottom-4 left-4 w-[min(26rem,calc(100vw-2rem))] border p-2"
           }`}
           role="status"
           aria-live="polite"
         >
-          {(isDragging || isPreparing) && (
-            <div className="flex items-center gap-3">
-              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
-                <UploadCloud className="h-5 w-5" />
+          {isDragging ? (
+            <div className="flex flex-col items-center gap-3 text-center">
+              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
+                <UploadCloud className="h-7 w-7" />
               </span>
-              <span className="min-w-0">
-                <span className="block font-semibold">
-                  {isPreparing
-                    ? "Preparing upload…"
-                    : "Drop files or folders to upload"}
+              <span>
+                <span className="block text-lg font-semibold text-balance">
+                  Drop files or folders to upload
                 </span>
-                <span className="block text-xs text-muted-foreground">
+                <span className="block text-sm text-muted-foreground">
                   PDFs, CSVs, images, audio, and video
                 </span>
               </span>
             </div>
+          ) : (
+            isPreparing && (
+              <div className="flex items-center gap-3">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
+                  <UploadCloud className="h-5 w-5" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block font-semibold">
+                    Preparing upload…
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    PDFs, CSVs, images, audio, and video
+                  </span>
+                </span>
+              </div>
+            )
           )}
           {dropError && !isDragging && !isPreparing && (
             <div className="flex items-start gap-2 px-1 py-1 text-sm text-destructive">
@@ -257,9 +275,10 @@ function ProjectDropOverlay({
               </button>
             </div>
           )}
-          {uploads.map((item) => (
-            <UploadRow key={item.id} item={item} />
-          ))}
+          {/* The drag state is a target, not a status panel: in-flight rows
+              step aside for it and come back when the drag ends. */}
+          {!isDragging &&
+            uploads.map((item) => <UploadRow key={item.id} item={item} />)}
         </div>
       )}
     </>
