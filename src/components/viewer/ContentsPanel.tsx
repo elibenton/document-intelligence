@@ -7,7 +7,12 @@ import {
 } from "./TableOfContents";
 import { buildTocHeaders, sectionForPage } from "./tocHeaders";
 import { DocumentSearch } from "./DocumentSearch";
-import { MIN_QUERY_LENGTH, searchBlocks } from "./blockSearch";
+import {
+  MIN_QUERY_LENGTH,
+  buildSearchIndex,
+  normalizeQuery,
+  searchIndex,
+} from "./blockSearch";
 
 interface ContentsPanelProps {
   blocks: TocBlock[];
@@ -60,11 +65,14 @@ export function ContentsPanel({
     return () => clearTimeout(timer);
   }, [draft, onSearchChange]);
 
+  // The index depends only on the blocks, so typing re-scans a prebuilt string
+  // instead of re-normalizing every block on each committed keystroke.
+  const index = useMemo(() => buildSearchIndex(blocks), [blocks]);
   const outcome = useMemo(
-    () => searchBlocks(blocks, searchQuery),
-    [blocks, searchQuery]
+    () => searchIndex(index, searchQuery),
+    [index, searchQuery]
   );
-  const searching = searchQuery.trim().length >= MIN_QUERY_LENGTH;
+  const searching = normalizeQuery(searchQuery).length >= MIN_QUERY_LENGTH;
 
   // Label each hit with the section it falls under, so results read as
   // places in the document rather than raw page numbers.
@@ -90,7 +98,6 @@ export function ContentsPanel({
           <DocumentSearch
             hits={hits}
             totalMatches={outcome.totalMatches}
-            query={searchQuery.trim()}
             currentPage={currentPage}
             onNavigate={onNavigate}
           />

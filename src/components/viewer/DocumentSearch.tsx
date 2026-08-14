@@ -48,7 +48,6 @@ function groupBySection(hits: SearchResultRow[]): ResultGroup[] {
 interface DocumentSearchProps {
   hits: SearchResultRow[];
   totalMatches: number;
-  query: string;
   currentPage: number;
   /** 1-based, matching the viewer's own page numbering. */
   onNavigate: (page: number) => void;
@@ -62,7 +61,6 @@ interface DocumentSearchProps {
 export function DocumentSearch({
   hits,
   totalMatches,
-  query,
   currentPage,
   onNavigate,
 }: DocumentSearchProps) {
@@ -85,7 +83,7 @@ export function DocumentSearch({
                 const displayPage = hit.pageNumber + 1;
                 return (
                   <button
-                    key={hit.blockId}
+                    key={hit.key}
                     onClick={() => onNavigate(displayPage)}
                     className={cn(
                       "flex items-start gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent",
@@ -93,7 +91,10 @@ export function DocumentSearch({
                     )}
                   >
                     <p className="line-clamp-5 min-w-0 flex-1 leading-relaxed text-foreground">
-                      <HighlightedSnippet text={hit.snippet} query={query} />
+                      <HighlightedSnippet
+                        text={hit.snippet}
+                        query={hit.matchText}
+                      />
                     </p>
                     <span className="shrink-0 pt-px text-2xs tabular-nums text-foreground">
                       p. {displayPage}
