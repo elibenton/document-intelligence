@@ -118,7 +118,11 @@ export function SplitPane({
           onCommit(clamp(ratio + step));
         }}
         title="Drag to resize · double-click to reset"
-        className="group relative mx-1 shrink-0 self-stretch px-1 cursor-col-resize outline-none"
+        // `--split-divider-inset` drops the rule below the panes' sticky
+        // headers, so the vertical line starts where their bottom border
+        // does instead of running up between the two header rows. The
+        // padding is on the wrapper so the drag target follows the rule.
+        className="group relative mx-4 shrink-0 self-stretch px-1 pt-[var(--split-divider-inset,0px)] cursor-col-resize outline-none"
       >
         <span
           className={cn(

@@ -75,6 +75,13 @@ export default defineSchema({
     // rename pass; clearing the title clears this too, re-opening the door.
     displayNameSource: v.optional(v.string()),
     storageId: v.id("_storage"),
+    // Hex SHA-256 of the file the user selected, computed in the browser
+    // before the bytes are sent. Identity is the content, not the filename:
+    // the same PDF re-downloaded under a new name is the same document, and a
+    // rewritten file that kept its name is not. Absent on web clips (nothing
+    // was uploaded) and on rows predating this field, so a missing hash never
+    // means "unique" — see `by_project_hash` in convex/upload.ts.
+    contentHash: v.optional(v.string()),
     mimeType: v.string(),
     // Objective media type, detected at upload: "pdf" | "csv" | "image" | "audio" | "video" | "webScrape"
     mediaType: v.optional(v.string()),
@@ -203,6 +210,12 @@ export default defineSchema({
     // Exact, bounded lookups for "is this category in use" and the Settings
     // per-category breakdown — an unindexed field would force a full scan.
     .index("by_primaryCategory", ["primaryCategory"])
+    // Duplicate detection, both pre-upload from the browser and as the
+    // backstop inside createDocument. Exact-equality lookups, so they have to
+    // be indexes: filtering `by_project` would read the whole project on
+    // every dropped file.
+    .index("by_project_hash", ["projectId", "contentHash"])
+    .index("by_project_name", ["projectId", "name"])
     .searchIndex("search_name", {
       searchField: "name",
       filterFields: ["projectId"],

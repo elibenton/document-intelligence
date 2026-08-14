@@ -87,10 +87,15 @@ export const get = query({
 });
 
 /**
- * Pipeline status for the handful of documents the upload overlay is still
- * holding. The overlay keeps a file in its own card until ingest reaches a
- * terminal state, and the library hides those rows until then, so it needs the
- * stage of a few known ids — not a subscription per library row.
+ * Pipeline status for the handful of documents the progress overlay is still
+ * holding. The overlay keeps a card until the work it is watching reaches a
+ * terminal state, so it needs the stage of a few known ids — not a
+ * subscription per library row.
+ *
+ * `analyzeStatus` rides along because Analyze is the one stage with no state of
+ * its own on the document: a re-analyzed document sits at "parsed"/"completed"
+ * from start to finish, so `status` alone can never say the pass is running or
+ * done. Same indexed read `list` already makes for the library's analyze label.
  *
  * A deleted document reports "missing" so the overlay releases the card
  * instead of holding it forever.
@@ -101,10 +106,19 @@ export const ingestStates = query({
     return await Promise.all(
       args.ids.map(async (id) => {
         const doc = await ctx.db.get(id);
+        const job = doc
+          ? await ctx.db
+              .query("processingJobs")
+              .withIndex("by_document", (q) =>
+                q.eq("documentId", id).eq("stage", "analyze")
+              )
+              .first()
+          : null;
         return {
           _id: id,
           status: doc?.status ?? "missing",
-          errorMessage: doc?.errorMessage,
+          analyzeStatus: job?.status ?? null,
+          errorMessage: doc?.errorMessage ?? job?.errorMessage,
         };
       })
     );

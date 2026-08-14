@@ -5,7 +5,6 @@ import { ArrowLeft, Plus, RotateCw, Star, Tag, Trash2, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
-import { AddFilesButton } from "@/components/documents/AddFilesButton";
 import { LibraryRow } from "@/components/documents/LibraryRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,14 +44,20 @@ import { counted } from "@/lib/plural";
  */
 function SelectionToolbar({
   selected,
+  rows,
+  projectId,
   onClear,
 }: {
   selected: Id<"documents">[];
+  /** The library's rows, for naming the cards a re-analysis puts up. */
+  rows: LibraryDoc[];
+  projectId: Id<"projects">;
   onClear: () => void;
 }) {
   const addKinds = useMutation(api.documents.addKinds);
   const remove = useMutation(api.documents.remove);
   const reanalyze = useAction(api.processing.runAnalyze);
+  const { trackAnalyze } = useUploads();
   const allKinds = useQuery(api.kinds.list);
 
   const [tagOpen, setTagOpen] = useState(false);
@@ -153,6 +158,16 @@ function SelectionToolbar({
             confirmLabel: "Re-analyze",
           });
           if (!ok) return;
+          // Cards first, then the work: the overlay should answer "did that do
+          // anything?" straight away rather than after a round trip each.
+          const byId = new Map(rows.map((row) => [row._id, row]));
+          trackAnalyze(
+            projectId,
+            selected.map((id) => {
+              const row = byId.get(id);
+              return { id, name: row?.displayName || row?.name || "Document" };
+            })
+          );
           void run((id) => reanalyze({ documentId: id }));
         }}
       >
@@ -564,6 +579,10 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
           </div>
 
           <SplitPane
+            // Height of both panes' sticky header: the 1.75rem control row,
+            // its pb-2, and the border-b itself. The divider rule starts
+            // below that line rather than beside the headings.
+            className="[--split-divider-inset:calc(1.75rem+0.5rem+1px)]"
             ratio={views.splitRatio}
             defaultRatio={DEFAULT_SPLIT_RATIO}
             onCommit={views.setSplitRatio}
@@ -575,11 +594,12 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                     {selected.length > 0 ? (
                       <SelectionToolbar
                         selected={selected}
+                        rows={libraryRows}
+                        projectId={projectId}
                         onClear={clearSelection}
                       />
                     ) : (
                       <div className="flex min-w-0 items-center gap-1">
-                        <AddFilesButton projectId={projectId} />
                         <ViewBar
                           defs={DOCUMENT_PROPERTIES}
                           config={views.library}
@@ -587,11 +607,6 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                           rows={libraryRows}
                           query={libraryQuery}
                           onQueryChange={setLibraryQuery}
-                          onReset={() => {
-                            setLibraryQuery("");
-                            views.resetLibrary();
-                          }}
-                          isDefault={views.libraryIsDefault}
                         />
                       </div>
                     )}
@@ -648,11 +663,6 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                       rows={entityRows}
                       query={entityQuery}
                       onQueryChange={setEntityQuery}
-                      onReset={() => {
-                        setEntityQuery("");
-                        views.resetEntities();
-                      }}
-                      isDefault={views.entitiesIsDefault}
                     />
                   </div>
                 </div>

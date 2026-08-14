@@ -6,19 +6,21 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { UploadContext, type UploadItem } from "@/hooks/uploadContext";
 import { isSupportedUpload, UNSUPPORTED_REASON } from "@/lib/uploadTypes";
 import { isAudioUpload, preflightAudio } from "@/lib/audioPreflight";
 import { isPdfUpload, preflightPdf } from "@/lib/pdfPreflight";
+import { sha256Hex } from "@/lib/contentHash";
 
 let nextUploadId = 0;
 
 /** How long a finished card lingers before the document joins the library. */
 const DONE_LINGER_MS = 2500;
 const ERROR_LINGER_MS = 8000;
+const DUPLICATE_LINGER_MS = 6000;
 
 /** Upload a file with progress events (fetch can't report upload progress). */
 function uploadWithProgress(
@@ -57,10 +59,13 @@ function uploadWithProgress(
  * and the library has to know which documents it must *not* show yet.
  */
 export function UploadProvider({ children }: { children: ReactNode }) {
+  const convex = useConvex();
   const generateUploadUrl = useMutation(api.upload.generateUploadUrl);
   const createDocument = useMutation(api.upload.createDocument);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const timersRef = useRef<number[]>([]);
+  /** Documents whose retirement timer is already queued. */
+  const finalizedRef = useRef(new Set<string>());
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -84,6 +89,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         ...prev,
         {
           id,
+          kind: "upload",
           projectId,
           name: file.name,
           size: file.size,
@@ -104,7 +110,35 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       }
 
       try {
+        // Identity check before anything expensive: hashing reads the file the
+        // browser already has, so a re-drop of a file the project holds costs
+        // one indexed query instead of a transfer, a render and four billable
+        // Interfaze calls. Audio conversion happens after this deliberately —
+        // the hash names the file the user chose, not the encoder's output.
+        const contentHash = await sha256Hex(file).catch(() => undefined);
+        const existing = contentHash
+          ? await convex.query(api.upload.findDuplicate, {
+              projectId,
+              contentHash,
+              name: file.name,
+            })
+          : { exact: null, sameName: null };
+        if (existing.exact) {
+          patchUpload(id, {
+            status: "duplicate",
+            documentId: existing.exact._id,
+            detail: `Identical to "${existing.exact.name}", already in this project.`,
+          });
+          timersRef.current.push(
+            window.setTimeout(() => removeUpload(id), DUPLICATE_LINGER_MS)
+          );
+          return undefined;
+        }
+
         let uploadFile = file;
+        const nameWarning = existing.sameName
+          ? [`Another file here is also named "${existing.sameName.name}". Its contents differ, so this was uploaded as a separate document.`]
+          : [];
         if (isPdfUpload(file)) {
           patchUpload(id, { detail: "Inspecting PDF structure…" });
           const preflight = await preflightPdf(file);
@@ -117,7 +151,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           }
           patchUpload(id, {
             detail: preflight.message,
-            warnings: preflight.warnings.map((warning) => warning.message),
+            warnings: [
+              ...nameWarning,
+              ...preflight.warnings.map((warning) => warning.message),
+            ],
           });
         } else if (isAudioUpload(file)) {
           const preflight = await preflightAudio(file);
@@ -147,6 +184,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        if (nameWarning.length && !isPdfUpload(file)) {
+          patchUpload(id, { warnings: nameWarning });
+        }
         patchUpload(id, { status: "uploading", progress: 0 });
         const url = await generateUploadUrl();
         const { storageId } = await uploadWithProgress(
@@ -155,12 +195,26 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           (percent) => patchUpload(id, { progress: percent })
         );
         patchUpload(id, { progress: 100, status: "finalizing" });
-        const documentId = await createDocument({
+        const { documentId, duplicateOf } = await createDocument({
           projectId,
           name: uploadFile.name,
           storageId,
           mimeType: uploadFile.type,
+          contentHash,
         });
+        // Lost a race with a concurrent upload of the same bytes; the server
+        // kept the first row and discarded these.
+        if (duplicateOf) {
+          patchUpload(id, {
+            status: "duplicate",
+            documentId,
+            detail: `Identical to "${duplicateOf}", already in this project.`,
+          });
+          timersRef.current.push(
+            window.setTimeout(() => removeUpload(id), DUPLICATE_LINGER_MS)
+          );
+          return undefined;
+        }
         // Not "done": the bytes have landed but the pipeline hasn't run. The
         // card holds the file until `ingestStates` reports a terminal status.
         patchUpload(id, {
@@ -180,7 +234,51 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         return undefined;
       }
     },
-    [generateUploadUrl, createDocument, patchUpload, removeUpload]
+    [convex, generateUploadUrl, createDocument, patchUpload, removeUpload]
+  );
+
+  /**
+   * Put a card up for each document about to be re-analyzed.
+   *
+   * Cards go up before the work is enqueued, so the overlay answers "did that
+   * do anything?" immediately rather than after a round trip per document. A
+   * document already on screen is skipped: pressing Re-analyze twice should not
+   * stack two cards for one pass.
+   */
+  const trackAnalyze = useCallback(
+    (
+      projectId: Id<"projects">,
+      documents: { id: Id<"documents">; name: string }[]
+    ) => {
+      setUploads((prev) => {
+        const watched = new Set(
+          prev
+            .filter((u) => u.kind === "analyze" && u.documentId)
+            .map((u) => u.documentId)
+        );
+        const added = documents
+          .filter((doc) => !watched.has(doc.id))
+          .map<UploadItem>((doc) => ({
+            id: `analyze-${nextUploadId++}`,
+            kind: "analyze",
+            projectId,
+            name: doc.name,
+            size: 0,
+            progress: 0,
+            status: "ingesting",
+            stage: "analyze",
+            documentId: doc.id,
+          }));
+        if (added.length === 0) return prev;
+        // A card for this document may have been retired earlier in the
+        // session; clear the guard so this pass gets its own linger timer.
+        for (const item of added) {
+          if (item.documentId) finalizedRef.current.delete(item.documentId);
+        }
+        return [...prev, ...added];
+      });
+    },
+    []
   );
 
   // Watch the documents still being held. The args are derived from a joined
@@ -199,22 +297,52 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   );
   const states = useQuery(api.documents.ingestStates, ingestArgs);
 
-  const finalizedRef = useRef(new Set<string>());
   useEffect(() => {
     if (!states) return;
 
     const byId = new Map(states.map((state) => [state._id, state]));
+
+    /**
+     * What ends the card, per kind.
+     *
+     * An upload watches the document's own status. A re-analysis watches the
+     * analyze job instead, because the document sits at "parsed"/"completed"
+     * throughout — reading `status` there would call the pass finished the
+     * instant it started. A missing document ends either kind: it was deleted
+     * while the card was up.
+     */
+    const outcomeOf = (
+      item: UploadItem,
+      state: NonNullable<typeof states>[number]
+    ): { settled: "done" | "error" | null; stage: string } => {
+      if (state.status === "missing") return { settled: "done", stage: "" };
+      if (item.kind === "analyze") {
+        if (state.analyzeStatus === "completed") {
+          return { settled: "done", stage: "" };
+        }
+        if (state.analyzeStatus === "failed") {
+          return { settled: "error", stage: "" };
+        }
+        // "pending" and a job row not yet written both read as queued.
+        return { settled: null, stage: "analyze" };
+      }
+      if (state.status === "completed") return { settled: "done", stage: "" };
+      if (state.status === "failed") return { settled: "error", stage: "" };
+      return { settled: null, stage: state.status };
+    };
+
     setUploads((prev) => {
       let changed = false;
       const next = prev.map((item) => {
         if (item.status !== "ingesting" || !item.documentId) return item;
         const state = byId.get(item.documentId);
         if (!state) return item;
-        if (state.status === "completed" || state.status === "missing") {
+        const { settled, stage } = outcomeOf(item, state);
+        if (settled === "done") {
           changed = true;
           return { ...item, status: "done" as const, stage: undefined };
         }
-        if (state.status === "failed") {
+        if (settled === "error") {
           changed = true;
           return {
             ...item,
@@ -222,48 +350,53 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             error: state.errorMessage ?? "Processing failed.",
           };
         }
-        if (state.status === item.stage) return item;
+        if (stage === item.stage) return item;
         changed = true;
-        return { ...item, stage: state.status };
+        return { ...item, stage };
       });
       return changed ? next : prev;
     });
 
-    // Release the document to the library a beat after it settles, so the card
-    // is seen finishing rather than vanishing. Guarded by a ref: a re-run
-    // before the state patch lands would otherwise queue the timer twice.
-    for (const state of states) {
-      const terminal =
-        state.status === "completed" ||
-        state.status === "failed" ||
-        state.status === "missing";
-      if (!terminal || finalizedRef.current.has(state._id)) continue;
-      finalizedRef.current.add(state._id);
-      const delay =
-        state.status === "failed" ? ERROR_LINGER_MS : DONE_LINGER_MS;
+    // Retire the card a beat after it settles, so it is seen finishing rather
+    // than vanishing. Guarded by a ref: a re-run before the state patch lands
+    // would otherwise queue the timer twice.
+    for (const item of uploads) {
+      if (item.status !== "ingesting" || !item.documentId) continue;
+      const state = byId.get(item.documentId);
+      if (!state) continue;
+      const { settled } = outcomeOf(item, state);
+      if (!settled || finalizedRef.current.has(item.documentId)) continue;
+      finalizedRef.current.add(item.documentId);
+      const documentId = item.documentId;
       timersRef.current.push(
         window.setTimeout(
-          () =>
-            setUploads((prev) =>
-              prev.filter((u) => u.documentId !== state._id)
-            ),
-          delay
+          () => setUploads((prev) => prev.filter((u) => u.documentId !== documentId)),
+          settled === "error" ? ERROR_LINGER_MS : DONE_LINGER_MS
         )
       );
     }
-  }, [states]);
+  }, [states, uploads]);
 
   const heldDocumentIds = useMemo(() => {
     const held = new Set<Id<"documents">>();
     for (const item of uploads) {
-      if (item.documentId) held.add(item.documentId);
+      // A duplicate points at a document that is already in the library and
+      // must stay visible — holding it would blank the row it duplicates. A
+      // re-analysis is the same case: the document never left the library.
+      if (
+        item.documentId &&
+        item.status !== "duplicate" &&
+        item.kind !== "analyze"
+      ) {
+        held.add(item.documentId);
+      }
     }
     return held;
   }, [uploads]);
 
   const value = useMemo(
-    () => ({ uploads, upload, heldDocumentIds }),
-    [uploads, upload, heldDocumentIds]
+    () => ({ uploads, upload, trackAnalyze, heldDocumentIds }),
+    [uploads, upload, trackAnalyze, heldDocumentIds]
   );
 
   return (

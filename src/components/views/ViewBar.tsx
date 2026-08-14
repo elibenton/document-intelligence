@@ -40,8 +40,6 @@ interface ViewBarProps<T> {
   rows: T[];
   query: string;
   onQueryChange: (query: string) => void;
-  onReset: () => void;
-  isDefault: boolean;
 }
 
 export function ViewBar<T>({
@@ -51,8 +49,6 @@ export function ViewBar<T>({
   rows,
   query,
   onQueryChange,
-  onReset,
-  isDefault,
 }: ViewBarProps<T>) {
   return (
     <div className="flex items-center gap-1 bg-background">
@@ -61,17 +57,6 @@ export function ViewBar<T>({
       <FilterPanel defs={defs} config={config} onChange={onChange} rows={rows} />
       <SortPanel defs={defs} config={config} onChange={onChange} />
       <ToolbarSearch value={query} onChange={onQueryChange} />
-      {(!isDefault || query !== "") && (
-        <button
-          type="button"
-          onClick={onReset}
-          aria-label="Reset this view"
-          title="Reset this view"
-          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button>
-      )}
     </div>
   );
 }

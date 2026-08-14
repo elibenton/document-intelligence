@@ -40,7 +40,7 @@ function App() {
             >
               Skip to content
             </a>
-            <div className="min-h-screen flex flex-col bg-background text-foreground max-w-[1800px] mx-auto border-x border-border">
+            <div className="min-h-screen flex flex-col bg-background text-foreground max-w-[1800px] mx-auto">
               <ProcessingBlockerBanner />
               <ProcessingQueueBanner />
               <GlobalDropOverlay />

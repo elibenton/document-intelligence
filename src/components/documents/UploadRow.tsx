@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Files } from "lucide-react";
 import { Link } from "react-router";
 import type { UploadItem } from "@/hooks/uploadContext";
 import { Progress } from "@/components/ui/progress";
@@ -10,12 +10,18 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Document `status` values seen while the card is holding the file. */
+/**
+ * Stage values seen while the card is holding work. The first four are the
+ * document's own `status` during an upload; "analyze" is the stage an
+ * `analyze` card sits at for its whole life, since the document's status does
+ * not move while the pass re-runs.
+ */
 const STAGE_LABELS: Record<string, string> = {
   uploaded: "Queued…",
   parsing: "Reading document…",
   parsed: "Analyzing…",
   extracting: "Extracting…",
+  analyze: "Re-analyzing…",
 };
 
 function statusText(item: UploadItem): string {
@@ -32,6 +38,8 @@ function statusText(item: UploadItem): string {
       return STAGE_LABELS[item.stage ?? ""] ?? "Processing…";
     case "done":
       return "Ready";
+    case "duplicate":
+      return "Already added";
     default:
       return "Failed";
   }
@@ -51,6 +59,8 @@ export function UploadRow({ item }: { item: UploadItem }) {
           <CheckCircle2 className="size-4 shrink-0 text-green-600 dark:text-green-400" />
         ) : item.status === "error" ? (
           <AlertCircle className="size-4 shrink-0 text-destructive" />
+        ) : item.status === "duplicate" ? (
+          <Files className="size-4 shrink-0 text-muted-foreground" />
         ) : (
           <Spinner className="size-4 shrink-0 text-primary" />
         )}

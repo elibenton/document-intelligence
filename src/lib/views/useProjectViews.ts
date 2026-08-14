@@ -24,11 +24,6 @@ const DEFAULTS = {
   entities: DEFAULT_ENTITIES_VIEW as ViewConfig,
 };
 
-/** Structural equality, so "is this the default view?" survives a round trip. */
-function sameConfig(a: ViewConfig, b: ViewConfig): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 export function useProjectViews(projectId: Id<"projects">) {
   const stored = useQuery(api.projectViews.get, { projectId });
   const save = useMutation(api.projectViews.save);
@@ -102,15 +97,6 @@ export function useProjectViews(projectId: Id<"projects">) {
     [persist]
   );
 
-  const resetLibrary = useCallback(
-    () => setLibrary(DEFAULTS.library),
-    [setLibrary]
-  );
-  const resetEntities = useCallback(
-    () => setEntities(DEFAULTS.entities),
-    [setEntities]
-  );
-
   return {
     library,
     entities,
@@ -118,9 +104,5 @@ export function useProjectViews(projectId: Id<"projects">) {
     setLibrary,
     setEntities,
     setSplitRatio,
-    resetLibrary,
-    resetEntities,
-    libraryIsDefault: sameConfig(library, DEFAULTS.library),
-    entitiesIsDefault: sameConfig(entities, DEFAULTS.entities),
   };
 }

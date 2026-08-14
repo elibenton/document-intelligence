@@ -1,5 +1,6 @@
-import { mutation } from "./_generated/server";
+import { mutation, query, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
@@ -52,16 +53,93 @@ export function detectMediaType(mimeType: string, name = ""): string {
   return "other";
 }
 
+/**
+ * The document in `projectId` that `contentHash` already belongs to, if any.
+ *
+ * A missing hash is never a match: rows uploaded before the field existed, and
+ * web clips (which have no selected file), both carry none, and treating those
+ * as equal to each other would collapse unrelated documents.
+ */
+async function findByContentHash(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+  contentHash: string | undefined
+) {
+  if (!contentHash) return null;
+  return await ctx.db
+    .query("documents")
+    .withIndex("by_project_hash", (q) =>
+      q.eq("projectId", projectId).eq("contentHash", contentHash)
+    )
+    .first();
+}
+
+/**
+ * Whether a file is already in this project, asked *before* the bytes are
+ * uploaded — the browser hashes the file it is about to send, so the duplicate
+ * costs one indexed read instead of a full transfer.
+ *
+ * `sameName` is reported separately and is deliberately not a duplicate: the
+ * user re-exporting "invoice.pdf" with a correction wants the new version.
+ * It exists to explain the two rows that will otherwise look identical in the
+ * library, which is the actual complaint behind "check the file name".
+ */
+export const findDuplicate = query({
+  args: {
+    projectId: v.id("projects"),
+    contentHash: v.string(),
+    name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const exact = await findByContentHash(ctx, args.projectId, args.contentHash);
+    if (exact) {
+      return {
+        exact: { _id: exact._id, name: exact.displayName ?? exact.name },
+        sameName: null,
+      };
+    }
+    const sameName = await ctx.db
+      .query("documents")
+      .withIndex("by_project_name", (q) =>
+        q.eq("projectId", args.projectId).eq("name", args.name)
+      )
+      .first();
+    return {
+      exact: null,
+      sameName: sameName ? { _id: sameName._id, name: sameName.name } : null,
+    };
+  },
+});
+
 export const createDocument = mutation({
   args: {
     projectId: v.id("projects"),
     name: v.string(),
     storageId: v.id("_storage"),
     mimeType: v.string(),
+    /** Hex SHA-256 of the selected file; see documents.contentHash. */
+    contentHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const storedFile = await ctx.db.system.get("_storage", args.storageId);
     if (!storedFile) throw new Error("Uploaded file not found in storage");
+
+    // Backstop for the browser's pre-upload check: two tabs, or the same file
+    // twice in one folder drop, can both pass it. Nothing has been enqueued
+    // yet, so dropping the redundant blob here costs only the transfer that
+    // already happened — no second billable pipeline run.
+    const duplicate = await findByContentHash(
+      ctx,
+      args.projectId,
+      args.contentHash
+    );
+    if (duplicate) {
+      await ctx.storage.delete(args.storageId);
+      return {
+        documentId: duplicate._id,
+        duplicateOf: duplicate.displayName ?? duplicate.name,
+      };
+    }
 
     const verifiedMimeType = storedFile.contentType || args.mimeType;
     const mediaType = detectMediaType(verifiedMimeType, args.name);
@@ -70,6 +148,7 @@ export const createDocument = mutation({
       projectId: args.projectId,
       name: args.name,
       storageId: args.storageId,
+      contentHash: args.contentHash,
       mimeType: verifiedMimeType,
       mediaType,
       status: "uploaded",
@@ -85,7 +164,7 @@ export const createDocument = mutation({
           args.mimeType ? ` (${args.mimeType})` : ""
         } — upload a PDF, DOCX, CSV, image, audio, or video file.`,
       });
-      return documentId;
+      return { documentId, duplicateOf: null };
     }
 
     // Keep oversized recordings out of a provider request that cannot
@@ -96,7 +175,7 @@ export const createDocument = mutation({
         status: "failed",
         errorMessage: `${Math.round(storedFile.size / 1_000_000)} MB audio needs optimization before Interfaze can transcribe it. Automatic audio optimization is not connected yet.`,
       });
-      return documentId;
+      return { documentId, duplicateOf: null };
     }
 
     const isRecording = mediaType === "audio" || mediaType === "video";
@@ -142,6 +221,6 @@ export const createDocument = mutation({
       );
     }
 
-    return documentId;
+    return { documentId, duplicateOf: null };
   },
 });
