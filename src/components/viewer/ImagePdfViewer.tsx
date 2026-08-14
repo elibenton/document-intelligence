@@ -56,6 +56,7 @@ import { SelectionPopover, type SelectionAnchor } from "./SelectionPopover";
  * handed, not against PAGE_WIDTH (see PageOverlays), so zooming carries them
  * along. */
 import { PAGE_WIDTH } from "./zoom";
+import { PdfPageSkeleton } from "./PdfPageSkeleton";
 
 const PDF_TEXT_TOKEN_SELECTOR = "[data-pdf-text-token]";
 
@@ -566,14 +567,17 @@ export function ImagePdfViewer({
                     cssHeight={surfaceHeight}
                     onPageSize={handlePageSize}
                   />
-                ) : (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-xs text-muted-foreground">
-                      {pdfError
-                        ? `Could not open the PDF: ${pdfError}`
-                        : `Loading page ${pageNumber}…`}
+                ) : pdfError ? (
+                  <div className="absolute inset-0 flex items-center justify-center p-6">
+                    <span className="text-center text-xs text-muted-foreground">
+                      Could not open the PDF: {pdfError}
                     </span>
                   </div>
+                ) : (
+                  <PdfPageSkeleton
+                    pageNumber={pageNumber}
+                    label={`Loading page ${pageNumber}`}
+                  />
                 )}
 
                 {isNear ? (

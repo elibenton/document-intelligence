@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import { PdfPageSkeleton } from "./PdfPageSkeleton";
 
 /**
  * One page of a PDF, drawn in the browser at the size it is displayed.
@@ -101,11 +102,10 @@ export function PdfPageCanvas({
         aria-label={`Page ${pageNumber}`}
       />
       {!painted && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-xs text-muted-foreground">
-            Rendering page {pageNumber}…
-          </span>
-        </div>
+        <PdfPageSkeleton
+          pageNumber={pageNumber}
+          label={`Rendering page ${pageNumber}`}
+        />
       )}
     </>
   );
