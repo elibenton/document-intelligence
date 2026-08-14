@@ -8,6 +8,7 @@ import { renderEnqueueOptions, renderPool } from "./renderPool";
 import { authedMutation, authedQuery } from "./authz";
 import { PROVIDER_URL_SAFE_BYTES } from "./interfazeLimits";
 import { requireProject } from "./ownership";
+import { requireBudget } from "./budget";
 
 export const generateUploadUrl = authedMutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
@@ -121,6 +122,7 @@ export const createDocument = authedMutation({
     contentHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireBudget(ctx, ctx.user._id);
     await requireProject(ctx, args.projectId);
     const storedFile = await ctx.db.system.get("_storage", args.storageId);
     if (!storedFile) throw new Error("Uploaded file not found in storage");

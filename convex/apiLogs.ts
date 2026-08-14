@@ -13,6 +13,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { ApiUsage, UsageLogger } from "./interfazeCost";
 import { authedQuery } from "./authz";
+import { chargeUsage } from "./budget";
 
 /** Shard count for the denormalized usage totals (see schema.apiUsageTotals). */
 export const TOTALS_SHARDS = 8;
@@ -84,6 +85,11 @@ export const record = internalMutation({
       error: args.error?.slice(0, 500),
       ownerId,
     });
+
+    // The spend ledger the cap is read from. Here rather than at the call
+    // sites for the same reason ownerId is resolved here: this mutation is the
+    // one place every billable call passes through.
+    await chargeUsage(ctx, ownerId, args.costUsd);
 
     // Spread the running total across shards: parallel chunk parses all log
     // at once, and a single counter row would make every one of them contend

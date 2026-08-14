@@ -596,6 +596,34 @@ export default defineSchema({
 
   // App-wide preferences. `global` is the only current key; keeping it
   // explicit makes the singleton index-safe and leaves room for future scopes.
+  // What each account has spent, and what it is allowed to spend.
+  //
+  // Separate from `apiUsageTotals` rather than a dimension on it. That table is
+  // sharded eight ways and read with a hardcoded `.take(TOTALS_SHARDS + 1)`
+  // (convex/apiLogs.ts), so adding an account dimension there would grow it to
+  // accounts × 8 and make lifetime spend silently under-report. This table is
+  // one row per account and is read by user id.
+  //
+  // Unsharded, unlike the deployment totals, because the contention that forced
+  // sharding there is a *deployment-wide* fan-out — twenty parallel chunk
+  // parses all incrementing one row. Here those writes are already split
+  // across accounts, and one account's own concurrency is bounded by the
+  // workpool. If a single account ever fans out wide enough to conflict with
+  // itself, this shards the same way that one did.
+  userUsage: defineTable({
+    userId: v.string(),
+    // Cumulative, never reset. `apiLogs` detail is pruned after 30 days
+    // (convex/crons.ts), so a spend cap cannot be computed from it — this is
+    // the ledger, the same way apiUsageTotals is for the deployment.
+    spentUsd: v.number(),
+    // What this account may spend before work stops. Per-account rather than a
+    // constant so raising someone's ceiling is a row edit, not a deploy — that
+    // is the whole mechanism behind "reach out and I'll grant you more".
+    // Absent means the default in convex/budget.ts.
+    limitUsd: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
   // Per-user preferences. One row per account, created on first write.
   //
   // This was `appSettings`, a single `key: "global"` row — so one user

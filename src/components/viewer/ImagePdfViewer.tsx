@@ -389,9 +389,15 @@ export function ImagePdfViewer({
     Map<number, { width: number; height: number }>
   >(new Map());
 
-  useEffect(() => {
+  // Measurements belong to the document that produced them, so a new `pdf`
+  // clears them. Done during render rather than in an effect: an effect would
+  // let one paint happen against the old document's geometry before the reset
+  // landed, which is the stretched-page bug above in miniature.
+  const [seenPdf, setSeenPdf] = useState(pdf);
+  if (pdf !== seenPdf) {
+    setSeenPdf(pdf);
     setPdfPageSizes(new Map());
-  }, [pdf]);
+  }
 
   const handlePageSize = useCallback(
     (pageNumber: number, size: { width: number; height: number }) => {

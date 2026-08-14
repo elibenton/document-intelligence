@@ -15,6 +15,7 @@ import type * as apiLogs from "../apiLogs.js";
 import type * as auth from "../auth.js";
 import type * as authz from "../authz.js";
 import type * as blocks from "../blocks.js";
+import type * as budget from "../budget.js";
 import type * as clips from "../clips.js";
 import type * as crons from "../crons.js";
 import type * as detections from "../detections.js";
@@ -83,6 +84,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   authz: typeof authz;
   blocks: typeof blocks;
+  budget: typeof budget;
   clips: typeof clips;
   crons: typeof crons;
   detections: typeof detections;

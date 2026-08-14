@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { StatCard } from "@/components/settings/StatCard";
+import { AccountLimitCell } from "@/components/settings/AccountLimitCell";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,12 @@ const pct = (part: number, whole: number) =>
 export default function AdminPage() {
   const [days, setDays] = useState<number>(30);
   const data = useQuery(api.admin.usage, { days });
+  // A separate query rather than a field on `usage`: convex/admin.ts is fenced
+  // to apiLogs and apiUsageTotals only, and widening that fence to reach the
+  // budget ledger would cost more than joining two results here.
+  const budgets = useQuery(api.budget.allBudgets);
+  const limitFor = (account: string) =>
+    budgets?.find((b) => b.userId === account);
 
   return (
     <PageShell
@@ -212,7 +219,8 @@ export default function AdminPage() {
                     </th>
                     <th className="py-2 pr-4 font-medium text-right">Input</th>
                     <th className="py-2 pr-4 font-medium text-right">Output</th>
-                    <th className="py-2 font-medium text-right">Errors</th>
+                    <th className="py-2 pr-4 font-medium text-right">Errors</th>
+                    <th className="py-2 font-medium text-right">Limit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -252,11 +260,21 @@ export default function AdminPage() {
                       <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">
                         {formatTokens(a.completionTokens)}
                       </td>
-                      <td className="py-2 text-right tabular-nums">
+                      <td className="py-2 pr-4 text-right tabular-nums">
                         {a.errors > 0 ? (
                           <span className="text-destructive">{a.errors}</span>
                         ) : (
                           "—"
+                        )}
+                      </td>
+                      <td className="py-2 text-right">
+                        {limitFor(a.account) ? (
+                          <AccountLimitCell
+                            userId={a.account}
+                            limitUsd={limitFor(a.account)!.limitUsd}
+                          />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
                         )}
                       </td>
                     </tr>
@@ -264,7 +282,7 @@ export default function AdminPage() {
                   {data.byAccount.length === 0 && (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="py-4 text-center text-muted-foreground"
                       >
                         No calls in this window.

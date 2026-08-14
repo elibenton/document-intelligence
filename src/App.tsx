@@ -11,6 +11,7 @@ import SearchPage from "./pages/SearchPage";
 import SettingsPage from "./pages/SettingsPage";
 import AdminPage from "./pages/AdminPage";
 import ProjectSettingsPage from "./pages/ProjectSettingsPage";
+import { BudgetBanner } from "./components/BudgetBanner";
 import { ProcessingBlockerBanner } from "./components/ProcessingBlockerBanner";
 import { ProcessingQueueBanner } from "./components/ProcessingQueueBanner";
 import { SiteFooter } from "./components/SiteFooter";
@@ -75,6 +76,7 @@ export default function App() {
                 navigations, including in and out of the viewer. */}
             <Authenticated>
               <UploadProvider>
+                <BudgetBanner />
                 <ProcessingBlockerBanner />
                 <ProcessingQueueBanner />
                 <GlobalDropOverlay />

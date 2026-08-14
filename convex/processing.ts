@@ -7,6 +7,7 @@ import { processingEnqueueOptions, processingPool } from "./processingPool";
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { authedAction, authedMutation } from "./authz";
 import { keepOwned, requireDocumentFromAction } from "./ownership";
+import { requireBudget, requireBudgetFromAction } from "./budget";
 
 // Watchdog: actions that hit Convex's 10-minute kill never run their catch
 // blocks, stranding documents in "parsing"/"extracting" with a "running" job
@@ -23,6 +24,7 @@ export const runTranscription = authedAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireDocumentFromAction(ctx, args.documentId);
+    await requireBudgetFromAction(ctx);
     const shouldEnqueue: boolean = await ctx.runMutation(
       internal.processing.createJob,
       {
@@ -67,6 +69,7 @@ export const runFullPipeline = authedAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireDocumentFromAction(ctx, args.documentId);
+    await requireBudgetFromAction(ctx);
     // getInternal, not the authenticated get: this action has identity today,
     // but nothing about the read needs it, and the day someone schedules this
     // pipeline the difference is a silent Unauthenticated. No convex/ module
@@ -147,6 +150,7 @@ export const runAnalyze = authedAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireDocumentFromAction(ctx, args.documentId);
+    await requireBudgetFromAction(ctx);
     const shouldEnqueue: boolean = await ctx.runMutation(
       internal.processing.createJob,
       { documentId: args.documentId, stage: "analyze" }
@@ -181,6 +185,7 @@ export const retryBlocked = authedMutation({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {
+    await requireBudget(ctx, ctx.user._id);
     // Owner-scoped for the same reason processingBlocker is: this writes, so
     // an unscoped version lets any signed-in user re-enqueue every blocked
     // document in the deployment and spend someone else's API budget doing it.
@@ -314,6 +319,7 @@ export const runRelationships = authedAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireDocumentFromAction(ctx, args.documentId);
+    await requireBudgetFromAction(ctx);
     return await enqueueRelationships(ctx, args.documentId);
   },
 });

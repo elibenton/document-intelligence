@@ -6,6 +6,7 @@ import type { Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
 import { languageForDocument, languageForProject } from "./settings";
+import { requireBudget } from "./budget";
 
 const MAX_TRANSLATED_PAGES_PER_DOCUMENT = 2_000;
 
@@ -530,6 +531,7 @@ export const retry = authedMutation({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireBudget(ctx, ctx.user._id);
     await requireDocument(ctx, args.documentId);
     const { defaultLanguageCode: languageCode, translationVersion } =
       await languageForDocument(ctx, args.documentId);

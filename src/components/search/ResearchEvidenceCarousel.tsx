@@ -10,6 +10,9 @@ import { useQuery } from "convex/react";
 import ReactMarkdown from "react-markdown";
 import { ArrowUpRight, ChevronLeft, ChevronRight, FileText } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
+import { useCitations } from "@/lib/citation/useCitations";
+import type { Formatter } from "@/lib/citation/format";
+import type { CitationStyle } from "../../../convex/projectTemplates";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Tooltip } from "@/components/ui/tooltip";
 
@@ -85,17 +88,56 @@ function matchingBoxes(
   }));
 }
 
-function citationMarkdown(answer: string) {
-  return answer.replace(/\[(\d+)](?!\()/g, "[$1](#citation-$1)");
+/**
+ * Turn the model's `[n]` markers into links to their evidence card, and — for a
+ * project on a real citation style — replace the visible label with that
+ * style's own in-text form.
+ *
+ * The anchor is always `#citation-n`, whatever the label says, because the
+ * marker's *position* is what ties a claim to a page. The stored answer keeps
+ * its plain `[n]` forever: style is applied here, at render, which is what lets
+ * a project switch from numbered to Chicago and have every answer it already
+ * has re-format instead of going stale.
+ */
+function citationMarkdown(
+  answer: string,
+  formatter: Formatter | null,
+  inline: boolean
+) {
+  return answer.replace(/\[(\d+)](?!\()/g, (_match, digits: string) => {
+    const number = Number(digits);
+    const label = inline && formatter ? formatter.inText(number - 1) : `[${number}]`;
+    // The label can contain brackets of its own; an unescaped "]" would end the
+    // markdown link early and spill the rest into the paragraph.
+    const safe = label.replace(/([[\]])/g, "\\$1");
+    return `[${safe}](#citation-${number})`;
+  });
+}
+
+/**
+ * Whether this style's in-text form belongs *in* the sentence.
+ *
+ * APA and MLA are parenthetical — "(Berman, 2013)" reads inline, which is what
+ * they are for. A Chicago note is a complete sentence ("Sheri Berman, "The
+ * Promise of the Arab Spring," Foreign Affairs 92, no. 1 (2013): 64–74.") and
+ * belongs in a note, with a number in the text pointing at it — which is
+ * exactly what the numbered badge already is. Dropping a whole note into the
+ * middle of a paragraph would be the wrong rendering of a correct citation.
+ */
+function hasInlineCitations(style: CitationStyle): boolean {
+  return style === "apa" || style === "mla";
 }
 
 function CitationButton({
   number,
+  label,
   result,
   active,
   onSelect,
 }: {
   number: number;
+  /** The style's own in-text form, when it has one. Absent = numbered badge. */
+  label?: string;
   result: ResearchResult;
   active: boolean;
   onSelect: () => void;
@@ -122,13 +164,15 @@ function CitationButton({
           aria-label={`Citation ${number}: ${result.documentName}, page ${result.pageNumber + 1}`}
           // Single-select among N, not a toggle.
           aria-current={active ? "true" : undefined}
-          className={`inline-flex size-5 items-center justify-center rounded-full border text-2xs font-semibold leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          className={`inline-flex items-center justify-center rounded-full border text-2xs font-semibold leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            label ? "px-1.5 py-0.5" : "size-5"
+          } ${
             active
               ? "border-warning bg-warning/80 text-foreground"
               : "border-primary/25 bg-primary/5 text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground"
           }`}
         >
-          {number}
+          {label ?? number}
         </button>
       </Tooltip>
     </span>
@@ -260,10 +304,21 @@ function CitationPage({
 export function ResearchAnswerWithEvidence({
   answer,
   results,
+  projectId,
 }: {
   answer: string;
   results: ResearchResult[];
+  /** Whose citation style to render in. Null falls back to numbered sources. */
+  projectId: Id<"projects"> | null;
 }) {
+  // Deduped: the same document can supply two evidence pages, and a
+  // bibliography lists a source once however often it is cited.
+  const citedDocumentIds = useMemo(
+    () => [...new Set(results.map((r) => r.documentId))],
+    [results]
+  );
+  const { formatter, style } = useCitations(projectId, citedDocumentIds);
+  const inlineCitations = hasInlineCitations(style);
   const firstCitation = useMemo(() => {
     const first = answer.match(/\[(\d+)]/);
     const number = first ? Number(first[1]) : 1;
@@ -313,6 +368,7 @@ export function ResearchAnswerWithEvidence({
       return (
         <CitationButton
           number={number}
+          label={inlineCitations ? formatter?.inText(number - 1) : undefined}
           result={result}
           active={activeCitation === number}
           onSelect={() => selectCitation(number)}
@@ -326,10 +382,30 @@ export function ResearchAnswerWithEvidence({
       <div className="max-w-3xl">
         <div className="prose prose-sm dark:prose-invert max-w-none mb-8 [&_p]:leading-relaxed">
           <ReactMarkdown components={markdownComponents}>
-            {citationMarkdown(answer)}
+            {citationMarkdown(answer, formatter, inlineCitations)}
           </ReactMarkdown>
         </div>
       </div>
+
+      {/* The bibliography, in the style's own order and format. Absent for a
+          numbered project, where the evidence cards already are the list. */}
+      {formatter && formatter.bibliography().length > 0 && (
+        <section aria-labelledby="references-heading" className="mb-8 max-w-3xl">
+          <h2 id="references-heading" className="text-sm font-semibold">
+            References
+          </h2>
+          <ul className="mt-2 space-y-2">
+            {formatter.bibliography().map((entry) => (
+              <li
+                key={entry.id}
+                className="text-sm leading-relaxed text-muted-foreground"
+              >
+                {entry.text}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {results.length > 0 && (
         <section aria-labelledby="evidence-pages-heading" className="mb-4">

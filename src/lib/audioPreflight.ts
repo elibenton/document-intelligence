@@ -1,3 +1,9 @@
+import {
+  PROVIDER_FILE_OBJECT_SAFE_BYTES,
+  PROVIDER_URL_SAFE_BYTES,
+} from "../../convex/interfazeLimits";
+import { formatBytes } from "./formatBytes";
+
 const AUDIO_EXTENSIONS = new Set([
   "aac",
   "flac",
@@ -9,12 +15,9 @@ const AUDIO_EXTENSIONS = new Set([
   "webm",
 ]);
 
-/**
- * Interfaze documents 20 MB for file objects and 80 MB for URLs in prompts.
- * Keep deliberate headroom for provider-side size accounting and redirects.
- */
-export const AUDIO_LARGE_TRANSFER_BYTES = 18_000_000;
-export const AUDIO_URL_SAFE_BYTES = 70_000_000;
+/** Both ceilings are the provider's, shared with the pipeline that enforces them. */
+export const AUDIO_LARGE_TRANSFER_BYTES = PROVIDER_FILE_OBJECT_SAFE_BYTES;
+export const AUDIO_URL_SAFE_BYTES = PROVIDER_URL_SAFE_BYTES;
 
 export type AudioContainer =
   | "aac"
@@ -110,10 +113,6 @@ function containerFromExtension(file: File): AudioContainer {
   const ext = extensionOf(file.name);
   if (ext === "oga") return "ogg";
   return AUDIO_EXTENSIONS.has(ext) ? (ext as AudioContainer) : "unknown";
-}
-
-function formatBytes(bytes: number): string {
-  return `${(bytes / 1_000_000).toFixed(bytes >= 10_000_000 ? 0 : 1)} MB`;
 }
 
 function formatDuration(seconds: number | null): string | null {

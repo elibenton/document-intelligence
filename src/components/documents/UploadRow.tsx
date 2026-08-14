@@ -3,12 +3,7 @@ import { Link } from "react-router";
 import type { UploadItem } from "@/hooks/uploadContext";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+import { formatBytes } from "@/lib/formatBytes";
 
 /**
  * Stage values seen while the card is holding work. The first four are the

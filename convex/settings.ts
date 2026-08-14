@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
 import { ownedProjects } from "./ownership";
+import { requireBudget } from "./budget";
 
 const DEFAULT_LANGUAGE_CODE = "en";
 const BACKFILL_BATCH_SIZE = 12;
@@ -103,6 +104,7 @@ export const updateDefaultLanguage = authedMutation({
   args: { languageCode: v.string() },
   returns: settingsResultValidator,
   handler: async (ctx, args) => {
+    await requireBudget(ctx, ctx.user._id);
     const languageCode = normalizeLanguageCode(args.languageCode);
     const existing = await ctx.db
       .query("userSettings")

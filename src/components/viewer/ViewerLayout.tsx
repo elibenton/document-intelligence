@@ -223,16 +223,19 @@ export function ViewerLayout({
     if (layout.leftForced) setLeftPinned(true);
   }, [layout.leftCollapsed, layout.leftForced]);
 
-  // Same "user beats the ladder" pinning as toggleLeft, but read through a ref
-  // so the effect fires on the caller's bump alone and not every time the
-  // resolved layout changes.
-  const layoutRef = useRef(layout);
-  layoutRef.current = layout;
-  useEffect(() => {
-    if (!revealLeft) return;
-    setLeftHidden(false);
-    if (layoutRef.current.leftForced) setLeftPinned(true);
-  }, [revealLeft]);
+  // Same "user beats the ladder" pinning as toggleLeft, driven by the caller
+  // bumping `revealLeft`. Adjusted during render like the pins above rather
+  // than in an effect: comparing against the previous bump is what makes this
+  // fire on the caller's signal alone, so `layout` can simply be read — the
+  // ref this used to need existed only to dodge an effect's dependency array.
+  const [seenReveal, setSeenReveal] = useState(revealLeft);
+  if (revealLeft !== seenReveal) {
+    setSeenReveal(revealLeft);
+    if (revealLeft) {
+      setLeftHidden(false);
+      if (layout.leftForced) setLeftPinned(true);
+    }
+  }
 
   const toggleSidebar = useCallback(() => {
     if (!layout.sidebarCollapsed) {

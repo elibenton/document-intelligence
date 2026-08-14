@@ -1,4 +1,6 @@
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { PROVIDER_URL_SAFE_BYTES } from "../../convex/interfazeLimits";
+import { formatBytes } from "./formatBytes";
 
 /**
  * Client-side gate for PDF uploads.
@@ -16,10 +18,12 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
  */
 
 /**
- * Interfaze accepts file objects up to 20 MB. PDFs currently use a structured
- * file part (for visual grounding), so keep headroom for provider accounting.
+ * The ceiling is the provider's 80 MB URL limit, not the 20 MB file-object one.
+ * Between the two, the pipeline switches transport rather than refusing the
+ * document (convex/interfaze.ts:fileUrlContent) — an oversized PDF now costs
+ * more to read instead of being rejected at upload.
  */
-export const PDF_INTERFAZE_SAFE_BYTES = 18_000_000;
+export const PDF_INTERFAZE_SAFE_BYTES = PROVIDER_URL_SAFE_BYTES;
 
 /**
  * Measured, not documented: a 45-page file came back complete, while 60, 150 and
@@ -45,8 +49,7 @@ export type PdfWarningCode =
   | "no_text_layer"
   | "page_limit_truncation"
   | "large_pages"
-  | "form_fields_ignored"
-  | "annotations_ignored";
+  | "form_fields_ignored";
 
 export interface PdfWarning {
   code: PdfWarningCode;
@@ -100,11 +103,6 @@ export function hasPdfHeader(bytes: Uint8Array): boolean {
     }
   }
   return false;
-}
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1_000_000) return `${Math.max(1, Math.round(bytes / 1_000))} KB`;
-  return `${(bytes / 1_000_000).toFixed(bytes >= 10_000_000 ? 0 : 1)} MB`;
 }
 
 function isPasswordError(error: unknown): boolean {
@@ -282,7 +280,9 @@ export async function preflightPdf(file: File): Promise<PdfPreflightResult> {
       ok: false,
       code: "provider_size_limit",
       pageCount: null,
-      message: `This ${formatBytes(file.size)} PDF is over the current 18 MB safe limit. Compress it below 18 MB and try again.`,
+      message: `This ${formatBytes(file.size)} PDF is over the ${formatBytes(
+        PDF_INTERFAZE_SAFE_BYTES
+      )} limit we can send for reading. Split or compress it and try again.`,
     };
   }
 
@@ -330,7 +330,6 @@ export async function preflightPdf(file: File): Promise<PdfPreflightResult> {
       let widest = 0;
       const sampleCount = Math.min(pageCount, TEXT_LAYER_SAMPLE_PAGES);
       const unreadable: PageReadability[] = [];
-      let annotated = false;
 
       for (let index = 1; index <= sampleCount; index += 1) {
         const page = await pdf.getPage(index);
@@ -345,14 +344,6 @@ export async function preflightPdf(file: File): Promise<PdfPreflightResult> {
             viewport.height
           );
           if (readability !== "readable") unreadable.push(readability);
-
-          if (!annotated) {
-            const annotations = await page.getAnnotations();
-            annotated = annotations.some(
-              (annotation: { contents?: string; subtype?: string }) =>
-                annotation.subtype !== "Link" && Boolean(annotation.contents)
-            );
-          }
         } finally {
           page.cleanup();
         }
@@ -400,13 +391,6 @@ export async function preflightPdf(file: File): Promise<PdfPreflightResult> {
           message:
             "This is a fillable form. Text typed into its fields is not read — " +
             "only text printed on the page. Flatten the form (print to PDF) to include the answers.",
-        });
-      }
-      if (annotated) {
-        warnings.push({
-          code: "annotations_ignored",
-          message:
-            "Comments and sticky notes in this PDF are not read — only the page text itself.",
         });
       }
 

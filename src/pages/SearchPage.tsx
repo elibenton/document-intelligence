@@ -190,6 +190,7 @@ export default function SearchPage() {
                 <ResearchAnswerWithEvidence
                   answer={search.answer}
                   results={search.results ?? []}
+                  projectId={projectId}
                 />
               ) : search?.status === "synthesizing" ? (
                 <div className="max-w-3xl space-y-2 mb-8">

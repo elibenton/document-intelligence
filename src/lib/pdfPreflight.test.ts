@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyPage,
-  formatBytes,
   hasPdfHeader,
   isPdfUpload,
   preflightPdf,
   PDF_INTERFAZE_SAFE_BYTES,
   type PageReadability,
 } from "./pdfPreflight";
+import { formatBytes } from "./formatBytes";
 
 // ---------------------------------------------------------------------------
 // Fixture bytes
@@ -220,10 +220,14 @@ describe("preflightPdf byte-level gates", () => {
   });
 
   it("rejects a file over the provider's transfer ceiling", async () => {
-    const oversize = new Uint8Array(PDF_INTERFAZE_SAFE_BYTES + 1);
-    oversize.set(PDF_HEADER);
-    const result = await preflightPdf(file(oversize));
+    // The size is spoofed rather than allocated: the ceiling is now the 80 MB
+    // URL limit, and a real buffer that big is an absurd price for one assert.
+    const oversize = file(PDF_HEADER);
+    Object.defineProperty(oversize, "size", {
+      value: PDF_INTERFAZE_SAFE_BYTES + 1,
+    });
+    const result = await preflightPdf(oversize);
     expect(result.ok === false && result.code).toBe("provider_size_limit");
-    expect(result.ok === false && result.message).toContain("18 MB");
+    expect(result.ok === false && result.message).toContain("70 MB");
   });
 });

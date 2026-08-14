@@ -27,6 +27,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
 import { requireProject, requireSearch } from "./ownership";
 import { languageForDocument, languageForProject } from "./settings";
+import { requireBudget } from "./budget";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -217,6 +218,7 @@ export const start = authedMutation({
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    await requireBudget(ctx, ctx.user._id);
     await requireProject(ctx, args.projectId);
     const q = args.query.trim();
     if (!q) throw new Error("Empty search query");
