@@ -5,6 +5,14 @@ import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 
 import { beginDocumentTeardown } from "./documents";
+import { seedCategories } from "./documentCategories";
+import { seedEntityTypes } from "./projectEntityTypes";
+import {
+  CITATION_STYLES,
+  DEFAULT_TEMPLATE_KEY,
+  templateByKey,
+  type CitationStyle,
+} from "./projectTemplates";
 import { slugify } from "./slug";
 
 // ---------------------------------------------------------------------------
@@ -114,14 +122,54 @@ async function allocateSlug(
   }
 }
 
+/**
+ * Create a project and everything it starts out believing.
+ *
+ * The template supplies the categories, entity types and citation style; the
+ * three optional overrides are what the new-project dialog sends when the user
+ * edited them in the review step, before the project existed. Sending nothing
+ * but a `templateKey` is the common path and the one the wire is cheap for.
+ *
+ * All of it lands in this one transaction on purpose: a project that is briefly
+ * visible without its categories is a project whose first upload can be
+ * analyzed against an empty taxonomy and filed as "other".
+ */
 export const create = mutation({
   args: {
     name: v.string(),
     description: v.optional(v.string()),
+    templateKey: v.optional(v.string()),
+    citationStyle: v.optional(v.string()),
+    categories: v.optional(
+      v.array(
+        v.object({
+          label: v.string(),
+          description: v.string(),
+          color: v.string(),
+        })
+      )
+    ),
+    entityTypes: v.optional(
+      v.array(v.object({ label: v.string(), description: v.string() }))
+    ),
   },
   handler: async (ctx, args) => {
     const name = args.name.trim();
     if (!name) throw new Error("Project name is required");
+
+    const template = templateByKey(args.templateKey ?? DEFAULT_TEMPLATE_KEY);
+    if (!template) throw new Error(`Unknown project template: ${args.templateKey}`);
+
+    // Validated rather than trusted: this is a public endpoint, and the value
+    // decides which CSL style the renderer loads.
+    let citationStyle: CitationStyle = template.citationStyle;
+    if (args.citationStyle) {
+      const chosen = CITATION_STYLES.find((s) => s === args.citationStyle);
+      if (!chosen) {
+        throw new Error(`Unknown citation style: ${args.citationStyle}`);
+      }
+      citationStyle = chosen;
+    }
 
     // The slug comes back with the id because the caller navigates straight to
     // /p/:slug, and re-deriving it client-side would miss the -2 suffix that
@@ -131,8 +179,13 @@ export const create = mutation({
       name,
       slug,
       description: args.description,
+      citationStyle,
       createdAt: Date.now(),
     });
+
+    await seedCategories(ctx, id, args.categories ?? template.categories);
+    await seedEntityTypes(ctx, id, args.entityTypes ?? template.entityTypes);
+
     return { id, slug };
   },
 });
@@ -179,7 +232,8 @@ const PROJECT_PHASE = {
   entities: 1,
   searches: 2,
   views: 3,
-  done: 4,
+  taxonomy: 4,
+  done: 5,
 } as const;
 
 /**
@@ -238,6 +292,33 @@ export const drainProjectDeletion = internalMutation({
         .take(PROJECT_ROW_BATCH);
       for (const row of views) await ctx.db.delete(row._id);
       more = views.length === PROJECT_ROW_BATCH;
+    } else if (args.phase === PROJECT_PHASE.taxonomy) {
+      // What the project believed: its categories, the kinds it accumulated,
+      // and the entity types it was told to look for. These became per-project
+      // rows without their own owner, so deleting the project has to take them
+      // — otherwise every deleted project leaves its vocabulary behind forever.
+      const categories = await ctx.db
+        .query("documentCategories")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .take(PROJECT_ROW_BATCH);
+      for (const row of categories) await ctx.db.delete(row._id);
+
+      const kinds = await ctx.db
+        .query("documentKinds")
+        .withIndex("by_project_and_name", (q) => q.eq("projectId", projectId))
+        .take(PROJECT_ROW_BATCH);
+      for (const row of kinds) await ctx.db.delete(row._id);
+
+      const entityTypes = await ctx.db
+        .query("projectEntityTypes")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .take(PROJECT_ROW_BATCH);
+      for (const row of entityTypes) await ctx.db.delete(row._id);
+
+      more =
+        categories.length === PROJECT_ROW_BATCH ||
+        kinds.length === PROJECT_ROW_BATCH ||
+        entityTypes.length === PROJECT_ROW_BATCH;
     } else {
       return null;
     }

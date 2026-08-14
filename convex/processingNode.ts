@@ -165,11 +165,9 @@ export const runDocumentUnderstanding = internalAction({
     const fileUrl = await requireFileUrl(ctx, document);
     const csv = isCsvDocument(document);
     const csvPages = csv ? await csvSearchPages(ctx, document) : null;
-    const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {});
-    const kindNames = kinds.map((kind) => kind.name);
-    const categories: Doc<"documentCategories">[] = await ctx.runQuery(
-      api.documentCategories.list,
-      {}
+    const { kindNames, categories } = await projectTaxonomy(
+      ctx,
+      document.projectId
     );
     const log = usageLogger(ctx, { documentId: args.documentId });
 
@@ -321,6 +319,30 @@ export const runDocumentUnderstanding = internalAction({
 });
 
 /**
+ * The vocabulary Analyze is shown for one document: its project's categories
+ * and the kinds that project has already named.
+ *
+ * A document outside any project gets neither. That is deliberate — the
+ * alternative is showing it some other project's taxonomy, and both halves of
+ * the prompt it feeds (the category enum, the kind-reuse clause) are claims
+ * about what *this* corpus contains.
+ */
+async function projectTaxonomy(
+  ctx: ActionCtx,
+  projectId: Id<"projects"> | undefined
+): Promise<{ kindNames: string[]; categories: Doc<"documentCategories">[] }> {
+  if (!projectId) return { kindNames: [], categories: [] };
+  const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {
+    projectId,
+  });
+  const categories: Doc<"documentCategories">[] = await ctx.runQuery(
+    api.documentCategories.list,
+    { projectId }
+  );
+  return { kindNames: kinds.map((kind) => kind.name), categories };
+}
+
+/**
  * Analyze: text in, structured metadata out. Shared by the upload pipeline and
  * by the standalone retry action below, so a re-run sends exactly what the
  * first run sent unless the user edited the prompt.
@@ -422,17 +444,16 @@ export const runAnalyze = internalAction({
         );
       }
 
-      const kinds: Doc<"documentKinds">[] = await ctx.runQuery(api.kinds.list, {});
-      const categories: Doc<"documentCategories">[] = await ctx.runQuery(
-        api.documentCategories.list,
-        {}
+      const { kindNames, categories } = await projectTaxonomy(
+        ctx,
+        document.projectId
       );
       await analyzeAndStore(ctx, {
         documentId: args.documentId,
         pageTexts,
         apiKey,
         csv: isCsvDocument(document),
-        kindNames: kinds.map((kind) => kind.name),
+        kindNames,
         categories,
         log: usageLogger(ctx, { documentId: args.documentId }),
         // An unchanged prompt would only hit the semantic cache, which is the

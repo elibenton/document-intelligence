@@ -1,5 +1,8 @@
 import { mutation, query, internalQuery } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import type { TemplateEntityType } from "./projectTemplates";
 
 /**
  * Entity types a project looks for beyond people and organizations.
@@ -51,6 +54,35 @@ export const listInternal = internalQuery({
       .collect();
   },
 });
+
+/**
+ * Give a brand-new project its starting entity types, in the creating
+ * transaction. Same bargain as `seedCategories`: one key rule shared with
+ * `create` below, and an unusable entry is skipped rather than thrown on, so a
+ * template can never make a project uncreatable.
+ */
+export async function seedEntityTypes(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  types: TemplateEntityType[]
+): Promise<void> {
+  const taken = new Set<string>();
+  for (const type of types) {
+    const label = type.label.trim();
+    const description = type.description.trim();
+    if (!label || !description) continue;
+    const key = toKey(label);
+    if (!key || RESERVED.has(key) || taken.has(key)) continue;
+    taken.add(key);
+    await ctx.db.insert("projectEntityTypes", {
+      projectId,
+      key,
+      label,
+      description,
+      createdAt: Date.now(),
+    });
+  }
+}
 
 export const create = mutation({
   args: {

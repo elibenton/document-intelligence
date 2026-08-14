@@ -1,10 +1,18 @@
-import { internalMutation, mutation, query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import type { TemplateCategory } from "./projectTemplates";
 
 /**
  * The enforced primary-category taxonomy: user-managed rows that back both
  * the AI classification prompt (convex/analyzePrompt.ts,
  * convex/metadataNode.ts) and the dark half of the DocTypePills pill.
+ *
+ * Per project. A project's categories are seeded from the template chosen when
+ * it was created (convex/projectTemplates.ts) and edited from its settings
+ * page; two projects sharing a key share nothing else. `key` is unique within a
+ * project, not across the deployment.
  *
  * "other" is a reserved sentinel, not a row — the honest bucket for an
  * off-taxonomy AI answer. It can't be created, edited, or deleted here.
@@ -24,15 +32,19 @@ function slugify(label: string): string {
 }
 
 export const list = query({
-  args: {},
-  handler: async (ctx) => {
-    const rows = await ctx.db.query("documentCategories").collect();
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("documentCategories")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
     return rows.sort((a, b) => a.order - b.order);
   },
 });
 
 export const create = mutation({
   args: {
+    projectId: v.id("projects"),
     label: v.string(),
     description: v.string(),
     color: v.string(),
@@ -50,16 +62,22 @@ export const create = mutation({
 
     const existing = await ctx.db
       .query("documentCategories")
-      .withIndex("by_key", (q) => q.eq("key", key))
+      .withIndex("by_project_and_key", (q) =>
+        q.eq("projectId", args.projectId).eq("key", key)
+      )
       .first();
     if (existing) {
       throw new Error(`A category named "${existing.label}" already exists`);
     }
 
-    const all = await ctx.db.query("documentCategories").collect();
+    const all = await ctx.db
+      .query("documentCategories")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
     const nextOrder = all.reduce((max, c) => Math.max(max, c.order), -1) + 1;
 
     return await ctx.db.insert("documentCategories", {
+      projectId: args.projectId,
       key,
       label,
       description: args.description.trim().slice(0, MAX_DESCRIPTION),
@@ -69,6 +87,41 @@ export const create = mutation({
     });
   },
 });
+
+/**
+ * Give a brand-new project its starting categories, in the creating
+ * transaction — a project is never briefly visible without them.
+ *
+ * Lives here rather than in projects.ts so seeded and hand-added categories
+ * derive their key, and enforce their length caps, through the same code. A
+ * label that slugifies to nothing, to "other", or to a key already taken is
+ * skipped rather than thrown on: this runs behind project creation, and a
+ * template typo should not be able to make a project uncreatable.
+ */
+export async function seedCategories(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  categories: TemplateCategory[]
+): Promise<void> {
+  const taken = new Set<string>();
+  let order = 0;
+  for (const category of categories) {
+    const label = category.label.trim().slice(0, MAX_LABEL);
+    if (!label) continue;
+    const key = slugify(label);
+    if (!key || key === OTHER_KEY || taken.has(key)) continue;
+    taken.add(key);
+    await ctx.db.insert("documentCategories", {
+      projectId,
+      key,
+      label,
+      description: category.description.trim().slice(0, MAX_DESCRIPTION),
+      color: category.color,
+      order: order++,
+      createdAt: Date.now(),
+    });
+  }
+}
 
 /** Edits label/description/color. `key` is immutable — documents reference it. */
 export const update = mutation({
@@ -105,9 +158,13 @@ export const remove = mutation({
     if (!category) return;
 
     // Indexed exact lookup, not a scan — accurate regardless of corpus size.
+    // Scoped to the category's own project: another project's documents filed
+    // under the same key are a different taxonomy and have no say here.
     const inUse = await ctx.db
       .query("documents")
-      .withIndex("by_primaryCategory", (q) => q.eq("primaryCategory", category.key))
+      .withIndex("by_project_and_category", (q) =>
+        q.eq("projectId", category.projectId).eq("primaryCategory", category.key)
+      )
       .first();
     if (inUse) {
       throw new Error(
@@ -129,16 +186,21 @@ const BREAKDOWN_LIMIT = 5000;
  * into each of the categories" view in Settings.
  */
 export const bySecondaryType = query({
-  args: {},
-  handler: async (ctx) => {
-    const categories = await ctx.db.query("documentCategories").collect();
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const categories = await ctx.db
+      .query("documentCategories")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
     const keys = [...categories.map((c) => c.key), OTHER_KEY];
 
     return await Promise.all(
       keys.map(async (key) => {
         const docs = await ctx.db
           .query("documents")
-          .withIndex("by_primaryCategory", (q) => q.eq("primaryCategory", key))
+          .withIndex("by_project_and_category", (q) =>
+            q.eq("projectId", args.projectId).eq("primaryCategory", key)
+          )
           .take(BREAKDOWN_LIMIT);
 
         const kindCounts = new Map<string, number>();
@@ -158,54 +220,5 @@ export const bySecondaryType = query({
         };
       })
     );
-  },
-});
-
-const DEFAULT_CATEGORIES = [
-  {
-    key: "legal",
-    label: "Legal",
-    description:
-      "Instruments with legal force or filed in a legal proceeding — pleadings, orders, contracts, deeds, subpoenas.",
-    color: "violet",
-  },
-  {
-    key: "government",
-    label: "Government",
-    description:
-      "Records a public agency produced or received while administering something — permits, inspection reports, agency correspondence, public-records responses.",
-    color: "blue",
-  },
-  {
-    key: "business",
-    label: "Business",
-    description:
-      "Records internal to a private organization — invoices, memos, financial statements, board minutes, personnel files.",
-    color: "amber",
-  },
-  {
-    key: "published",
-    label: "Published",
-    description:
-      "Anything issued to a general audience — news articles, press releases, books, academic papers, web pages.",
-    color: "teal",
-  },
-];
-
-/** One-off: materializes the four categories every existing document's
- *  primaryCategory already assumes. Idempotent — run once via
- *  `npx convex run documentCategories:seedDefaults`. */
-export const seedDefaults = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const existing = await ctx.db.query("documentCategories").take(1);
-    if (existing.length > 0) return;
-    for (let i = 0; i < DEFAULT_CATEGORIES.length; i++) {
-      await ctx.db.insert("documentCategories", {
-        ...DEFAULT_CATEGORIES[i],
-        order: i,
-        createdAt: Date.now(),
-      });
-    }
   },
 });

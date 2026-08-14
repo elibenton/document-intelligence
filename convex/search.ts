@@ -133,25 +133,27 @@ export const suggest = query({
     }
 
     const targetLanguageCode = await defaultLanguageCode(ctx);
-    const translatedPageHits = await ctx.db
-      .query("pageTranslations")
-      .withSearchIndex("search_text", (s) =>
-        s
-          .search("text", q)
-          .eq("targetLanguageCode", targetLanguageCode)
-          .eq("status", "complete")
-      )
-      .take(15);
-
-    // Pages carry no projectId — over-fetch and keep only this project's docs
-    const pageHits = await ctx.db
-      .query("pages")
-      .withSearchIndex("search_text", (s) => s.search("text", q))
-      .take(15);
+    const [translatedPageHits, pageHits] = await Promise.all([
+      ctx.db
+        .query("pageTranslations")
+        .withSearchIndex("search_text", (s) =>
+          s
+            .search("text", q)
+            .eq("targetLanguageCode", targetLanguageCode)
+            .eq("status", "complete")
+            .eq("projectId", args.projectId)
+        )
+        .take(PAGE_SUGGESTIONS * 2),
+      ctx.db
+        .query("pages")
+        .withSearchIndex("search_text", (s) =>
+          s.search("text", q).eq("projectId", args.projectId)
+        )
+        .take(PAGE_SUGGESTIONS * 2),
+    ]);
 
     const docNames = new Map<Id<"documents">, string>();
     for (const doc of documents) docNames.set(doc._id, titleOf(doc));
-    const inProject = new Map<Id<"documents">, boolean>();
     const pages = [];
     const mergedPageHits = [
       ...translatedPageHits.map((translation) => ({
@@ -168,13 +170,11 @@ export const suggest = query({
       const key = `${page.documentId}:${page.pageNumber}`;
       if (seenPages.has(key)) continue;
       let name = docNames.get(page.documentId);
-      if (name === undefined || !inProject.has(page.documentId)) {
+      if (name === undefined) {
         const doc = await ctx.db.get(page.documentId);
-        inProject.set(page.documentId, doc?.projectId === args.projectId);
         name = doc ? titleOf(doc) : "Unknown document";
         docNames.set(page.documentId, name);
       }
-      if (!inProject.get(page.documentId)) continue;
       seenPages.add(key);
       pages.push({
         pageId: page._id,
@@ -384,7 +384,10 @@ export const plannerContext = internalQuery({
       }
     }
 
-    const kinds = await ctx.db.query("documentKinds").take(50);
+    const kinds = await ctx.db
+      .query("documentKinds")
+      .withIndex("by_project_and_name", (q) => q.eq("projectId", args.projectId))
+      .take(50);
     return {
       entityNames: entities.map((e) => `${e.name} (${e.type})`),
       roles: [...roles].slice(0, PLANNER_VOCAB_CAP),
@@ -399,21 +402,9 @@ export const plannerContext = internalQuery({
 // Retrieval legs
 // ---------------------------------------------------------------------------
 
-/** Cached "does this document belong to the project" check. */
-async function docInProject(
-  ctx: { db: { get: (id: Id<"documents">) => Promise<Doc<"documents"> | null> } },
-  cache: Map<Id<"documents">, boolean>,
-  documentId: Id<"documents">,
-  projectId: Id<"projects">
-): Promise<boolean> {
-  let ok = cache.get(documentId);
-  if (ok === undefined) {
-    const doc = await ctx.db.get(documentId);
-    ok = doc?.projectId === projectId;
-    cache.set(documentId, ok);
-  }
-  return ok;
-}
+/** Pages each of the text and vector legs contributes to the fusion. */
+const TEXT_LEG_HITS = 16;
+export const VECTOR_LEG_HITS = 16;
 
 
 export const textLeg = internalQuery({
@@ -425,30 +416,32 @@ export const textLeg = internalQuery({
   handler: async (ctx, args): Promise<PageHit[]> => {
     if (!args.keywords.trim()) return [];
     const targetLanguageCode = await defaultLanguageCode(ctx);
-    const translatedHits = await ctx.db
-      .query("pageTranslations")
-      .withSearchIndex("search_text", (s) =>
-        s
-          .search("text", args.keywords)
-          .eq("targetLanguageCode", targetLanguageCode)
-          .eq("status", "complete")
-      )
-      .take(48);
-    // Pages carry no projectId — over-fetch, then keep this project's docs
-    const hits = await ctx.db
-      .query("pages")
-      .withSearchIndex("search_text", (s) =>
-        s.search("text", args.keywords)
-      )
-      .take(48);
-    const cache = new Map<Id<"documents">, boolean>();
+    // Both indexes filter by project, so every row returned is a keeper and
+    // the leg's own cap is the only limit — no global over-fetch to survive.
+    const [translatedHits, hits] = await Promise.all([
+      ctx.db
+        .query("pageTranslations")
+        .withSearchIndex("search_text", (s) =>
+          s
+            .search("text", args.keywords)
+            .eq("targetLanguageCode", targetLanguageCode)
+            .eq("status", "complete")
+            .eq("projectId", args.projectId)
+        )
+        .take(TEXT_LEG_HITS),
+      ctx.db
+        .query("pages")
+        .withSearchIndex("search_text", (s) =>
+          s.search("text", args.keywords).eq("projectId", args.projectId)
+        )
+        .take(TEXT_LEG_HITS),
+    ]);
     const out: PageHit[] = [];
     const seen = new Set<string>();
-    for (const p of translatedHits) {
-      if (out.length >= 16) break;
-      if (!(await docInProject(ctx, cache, p.documentId, args.projectId)))
-        continue;
+    for (const p of [...translatedHits, ...hits]) {
+      if (out.length >= TEXT_LEG_HITS) break;
       const key = `${p.documentId}:${p.pageNumber}`;
+      if (seen.has(key)) continue;
       seen.add(key);
       out.push({
         documentId: p.documentId,
@@ -456,41 +449,23 @@ export const textLeg = internalQuery({
         snippet: makeSnippet(p.text, args.queryText || args.keywords),
       });
     }
-    for (const p of hits) {
-      if (out.length >= 16) break;
-      if (!(await docInProject(ctx, cache, p.documentId, args.projectId)))
-        continue;
-      const key = `${p.documentId}:${p.pageNumber}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({
-        documentId: p.documentId,
-        pageNumber: p.pageNumber,
-        snippet: makeSnippet(
-          p.text,
-          args.queryText || args.keywords
-        ),
-      });
-    }
     return out;
   },
 });
 
 
+/** The vector index is project-filtered at search time, so these ids are
+ *  already scoped — this only turns them back into text. */
 export const hydratePageHits = internalQuery({
   args: {
     pageIds: v.array(v.id("pages")),
     queryText: v.string(),
-    projectId: v.id("projects"),
   },
   handler: async (ctx, args): Promise<PageHit[]> => {
     const out: PageHit[] = [];
-    const cache = new Map<Id<"documents">, boolean>();
-    for (const pageId of args.pageIds.slice(0, 32)) {
+    for (const pageId of args.pageIds.slice(0, VECTOR_LEG_HITS)) {
       const page = await ctx.db.get(pageId);
       if (!page) continue;
-      if (!(await docInProject(ctx, cache, page.documentId, args.projectId)))
-        continue;
       out.push({
         documentId: page.documentId,
         pageNumber: page.pageNumber,

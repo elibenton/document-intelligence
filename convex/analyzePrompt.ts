@@ -188,8 +188,22 @@ export const forDocument = query({
   handler: async (ctx, args) => {
     const document = await ctx.db.get(args.documentId);
     if (!document) return null;
-    const kinds = await ctx.db.query("documentKinds").collect();
-    const categories = await ctx.db.query("documentCategories").collect();
+    // A document outside any project has no taxonomy to be shown: it gets the
+    // same prompt a project with nothing configured would get, which is the
+    // honest answer rather than another project's vocabulary.
+    const projectId = document.projectId;
+    const kinds = projectId
+      ? await ctx.db
+          .query("documentKinds")
+          .withIndex("by_project_and_name", (q) => q.eq("projectId", projectId))
+          .collect()
+      : [];
+    const categories = projectId
+      ? await ctx.db
+          .query("documentCategories")
+          .withIndex("by_project", (q) => q.eq("projectId", projectId))
+          .collect()
+      : [];
     return buildAnalyzePrompt({
       csv: isCsv(document.name, document.mimeType, document.mediaType),
       fileName: document.name,

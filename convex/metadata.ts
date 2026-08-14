@@ -58,14 +58,24 @@ export const saveMetadataResult = internalMutation({
     // deleted); "other" is the honest bucket for it, and the library shows no
     // primary pill for it rather than coloring a word Analyze made up.
     const category = (parsed.primary_category ?? "").trim().toLowerCase();
+    const projectId = document.projectId;
     const validCategories = new Set(
-      (await ctx.db.query("documentCategories").collect()).map((c) => c.key)
+      projectId
+        ? (
+            await ctx.db
+              .query("documentCategories")
+              .withIndex("by_project", (q) => q.eq("projectId", projectId))
+              .collect()
+          ).map((c) => c.key)
+        : []
     );
     const primaryCategory = validCategories.has(category) ? category : OTHER_CATEGORY;
 
-    // Register the kind (never overwrite an existing template)
-    if (kindName) {
+    // Register the kind against this document's project (never overwrite an
+    // existing one). A document outside any project has nowhere to put it.
+    if (kindName && projectId) {
       await ctx.runMutation(internal.kinds.upsert, {
+        projectId,
         name: kindName,
         source: "ai",
       });

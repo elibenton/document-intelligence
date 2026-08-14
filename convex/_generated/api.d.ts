@@ -41,6 +41,7 @@ import type * as processingJobs from "../processingJobs.js";
 import type * as processingNode from "../processingNode.js";
 import type * as processingPool from "../processingPool.js";
 import type * as projectEntityTypes from "../projectEntityTypes.js";
+import type * as projectTemplates from "../projectTemplates.js";
 import type * as projectViews from "../projectViews.js";
 import type * as projects from "../projects.js";
 import type * as providerHealth from "../providerHealth.js";
@@ -102,6 +103,7 @@ declare const fullApi: ApiFromModules<{
   processingNode: typeof processingNode;
   processingPool: typeof processingPool;
   projectEntityTypes: typeof projectEntityTypes;
+  projectTemplates: typeof projectTemplates;
   projectViews: typeof projectViews;
   projects: typeof projects;
   providerHealth: typeof providerHealth;

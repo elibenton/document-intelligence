@@ -12,7 +12,7 @@ import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { PageHit } from "./search";
+import { VECTOR_LEG_HITS, type PageHit } from "./search";
 import { chatCompletion } from "./interfaze";
 import { usageLogger } from "./apiLogs";
 import { healthReporter } from "./providerHealth";
@@ -195,12 +195,12 @@ export const execute = internalAction({
             });
             const matches = await ctx.vectorSearch("pages", "by_embedding", {
               vector,
-              limit: 16,
+              limit: VECTOR_LEG_HITS,
+              filter: (q) => q.eq("projectId", args.projectId),
             });
             return await ctx.runQuery(internal.search.hydratePageHits, {
               pageIds: matches.map((m) => m._id),
               queryText: args.query,
-              projectId: args.projectId,
             });
           } catch {
             return []; // vector leg is best-effort

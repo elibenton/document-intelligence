@@ -194,12 +194,16 @@ export const updateIdentity = mutation({
       patch.primaryKind = kinds[0];
       patch.kindSource = "human";
 
-      // Register anything new so it becomes a pill for every other document.
-      for (const name of kinds) {
-        await ctx.runMutation(internal.kinds.upsert, {
-          name,
-          source: "human",
-        });
+      // Register anything new so it becomes a pill for every other document
+      // in the same project.
+      if (doc.projectId) {
+        for (const name of kinds) {
+          await ctx.runMutation(internal.kinds.upsert, {
+            projectId: doc.projectId,
+            name,
+            source: "human",
+          });
+        }
       }
     }
 
@@ -232,11 +236,14 @@ export const addKinds = mutation({
       kindSource: "human",
     });
 
-    for (const name of added) {
-      await ctx.runMutation(internal.kinds.upsert, {
-        name,
-        source: "human",
-      });
+    if (doc.projectId) {
+      for (const name of added) {
+        await ctx.runMutation(internal.kinds.upsert, {
+          projectId: doc.projectId,
+          name,
+          source: "human",
+        });
+      }
     }
   },
 });
@@ -279,10 +286,10 @@ type DocumentScopedTable = (typeof DOCUMENT_SCOPED_TABLES)[number];
  * table fits all of them. The cascade's cost is transactions, not rows, and a
  * transaction that never approaches its limits never fails.
  */
-const CASCADE_BATCH = 128;
+export const CASCADE_BATCH = 128;
 
 /** Orphan candidates examined per transaction — each costs a few index reads. */
-const ORPHAN_BATCH = 8;
+export const ORPHAN_BATCH = 8;
 
 /**
  * Delete one batch from a document-scoped table.
@@ -533,7 +540,7 @@ async function drainMentions(
  * a dangling id. They are drained a batch at a time; an entity with more edges
  * than one batch stays a candidate and is finished on a later pass.
  */
-async function sweepOrphanEntities(
+export async function sweepOrphanEntities(
   ctx: MutationCtx,
   candidates: Id<"entities">[]
 ): Promise<Id<"entities">[]> {

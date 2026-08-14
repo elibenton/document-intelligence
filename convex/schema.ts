@@ -364,7 +364,7 @@ export default defineSchema({
     .index("by_document", ["documentId", "pageNumber"])
     .searchIndex("search_text", {
       searchField: "text",
-      filterFields: ["documentId"],
+      filterFields: ["documentId", "projectId"],
     })
     // Semantic search over page text. Embeddings are generated after
     // parse/transcribe when GEMINI_API_KEY is set (Gemini Embedding 2 @ 1536);
@@ -372,7 +372,7 @@ export default defineSchema({
     .vectorIndex("by_embedding", {
       vectorField: "embedding",
       dimensions: 1536,
-      filterFields: ["documentId"],
+      filterFields: ["documentId", "projectId"],
     }),
 
   // One current-or-cached translation per page and target language. Rows are
@@ -402,7 +402,7 @@ export default defineSchema({
     .index("by_page_and_target", ["pageId", "targetLanguageCode"])
     .searchIndex("search_text", {
       searchField: "text",
-      filterFields: ["targetLanguageCode", "status"],
+      filterFields: ["targetLanguageCode", "status", "projectId"],
     }),
 
   blocks: defineTable({
