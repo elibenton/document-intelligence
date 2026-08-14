@@ -34,15 +34,18 @@ export function ViewPopover({
       <PopoverTrigger
         aria-label={label}
         title={label}
+        // A control that is doing something colours its own icon. The filled
+        // square plus a corner dot said the same thing twice, and the square
+        // collided with the one the open popup already draws — so an open
+        // filter panel and an applied filter looked identical.
         className={cn(
-          "relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[popup-open]:bg-accent data-[popup-open]:text-foreground",
-          active && "bg-accent text-foreground"
+          "relative grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-accent data-[popup-open]:bg-accent",
+          active
+            ? "text-active hover:text-active data-[popup-open]:text-active"
+            : "text-muted-foreground hover:text-foreground data-[popup-open]:text-foreground"
         )}
       >
         <Icon className="size-3.5" />
-        {active && (
-          <span className="absolute bottom-1 right-1 size-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
-        )}
       </PopoverTrigger>
       {/* The z-50 that keeps this above row controls now lives on the shared
           Positioner — this call site was the one missing it. */}

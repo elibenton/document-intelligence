@@ -71,6 +71,10 @@
     --destructive: oklch(0.577 0.245 27.325);
     --success: oklch(0.52 0.13 155);
     --warning: oklch(0.55 0.12 75);
+    /* "This control is doing something" — a filtered list, an applied sort.
+       Its own hue rather than --primary, which is near-black here and could
+       not read as a state at all. */
+    --active: oklch(0.52 0.2 262);
     --border: oklch(0.905 0 0);
     --border-subtle: oklch(0.945 0 0);
     --input: oklch(0.86 0 0);
@@ -103,6 +107,7 @@
     --destructive: oklch(0.704 0.191 22.216);
     --success: oklch(0.75 0.16 155);
     --warning: oklch(0.79 0.14 75);
+    --active: oklch(0.72 0.16 262);
     --border: oklch(1 0 0 / 14%);
     --border-subtle: oklch(1 0 0 / 7%);
     --input: oklch(1 0 0 / 20%);
@@ -122,6 +127,7 @@
     --color-destructive: var(--destructive);
     --color-success: var(--success);
     --color-warning: var(--warning);
+    --color-active: var(--active);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);

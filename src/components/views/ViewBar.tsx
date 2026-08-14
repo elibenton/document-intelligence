@@ -593,12 +593,15 @@ export function ToolbarSearch({
         aria-expanded={expanded}
         title="Search"
         onClick={() => setExpanded((current) => !current)}
-        className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        // Same rule as the view controls: an active search colours its icon.
+        className={cn(
+          "relative grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-accent",
+          value
+            ? "text-active hover:text-active"
+            : "text-muted-foreground hover:text-foreground"
+        )}
       >
         <Search className="size-3.5" />
-        {value && (
-          <span className="absolute bottom-1 right-1 size-1.5 rounded-full bg-blue-500 ring-1 ring-background" />
-        )}
       </button>
       {expanded && (
         <input
