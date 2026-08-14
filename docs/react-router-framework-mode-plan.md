@@ -1,8 +1,14 @@
 # React Router framework mode (`ssr: false`) — plan
 
-**Status:** steps 1–4 landed 2026-08-14; steps 5–7 (typed params, per-route
-ErrorBoundary, preview deploy) still open. Verified against `react-router@8.3.0`
-and `@react-router/dev@8.3.0`.
+**Status:** done, deployed 2026-08-14. Verified against `react-router@8.3.0` and
+`@react-router/dev@8.3.0`.
+
+Step 7 read "deploy to a preview deployment before prod". That step no longer
+means anything: prod (`dusty-seahorse-93`) has never been provisioned — no
+functions, no environment variables, empty database — so dev is the live
+deployment and is what this shipped to. `npm run deploy` was repointed at it.
+Provisioning prod is its own piece of work, and needs the eight secrets and a
+data story before a deploy target.
 
 **Measured after the change:** initial JS for `/settings` is **649 KB**, down
 from the **1339 KB** entry chunk. pdf.js, citeproc and the landing/demo bundle
