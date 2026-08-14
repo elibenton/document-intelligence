@@ -77,13 +77,21 @@ export const authedAction = customAction(
  * The owner. A constant rather than an env var on purpose: it lives in git, so
  * changing who can read everyone's spend is a reviewable diff rather than a
  * dashboard action, and it cannot skew between deployments the way the VITE_*
- * values in docs/auth-plan.md §4 can. `grep -rn ADMIN_EMAIL convex/` is the
+ * values in docs/auth-plan.md §4 can. `grep -rn ADMIN_USER_ID convex/` is the
  * whole audit. A second admin turns this into an array.
  *
- * Compared case-insensitively because it costs nothing and removes the question
- * of whether Better Auth normalises what it stores.
+ * A Better Auth user id and not the email address it belongs to. The email was
+ * a *claim*: `convex/auth.ts` sets `requireEmailVerification: false`, so before
+ * the account existed anyone who signed up as eliunited@gmail.com would have
+ * been admin. An id cannot be claimed by signing up — and it could not be
+ * written down until the account it names existed, which is why this landed
+ * after the gate rather than with it (docs/admin-usage-plan.md §3.4).
+ *
+ * The trade is that this constant is now deployment-specific: the same email
+ * signing up on a fresh deployment gets a different id, and admin there is
+ * nobody until this is updated. That is the correct direction to fail.
  */
-const ADMIN_EMAIL = "eliunited@gmail.com";
+const ADMIN_USER_ID = "k17459c0gfmnejsavanan8gbg18cfxrg"; // eliunited@gmail.com
 
 /**
  * Extends the sign-in check rather than restating it — same `getAuthUser` call,
@@ -96,7 +104,7 @@ const ADMIN_EMAIL = "eliunited@gmail.com";
  */
 const adminOnly = customCtx(async (ctx: QueryCtx) => {
   const user = await authComponent.getAuthUser(ctx);
-  if (user.email.toLowerCase() !== ADMIN_EMAIL) {
+  if (user._id !== ADMIN_USER_ID) {
     throw new ConvexError("Not authorized");
   }
   return { user };
@@ -111,11 +119,11 @@ export const adminQuery = customQuery(query, adminOnly);
 
 /**
  * Whether the caller is the owner. Any signed-in user may ask; the answer is a
- * boolean, never the address — so the admin's email is not a target published
- * in the client bundle.
+ * boolean, never the id — so the admin account is not a target published in the
+ * client bundle.
  */
 export const isAdmin = authedQuery({
   args: {},
   returns: v.boolean(),
-  handler: async (ctx) => ctx.user.email.toLowerCase() === ADMIN_EMAIL,
+  handler: async (ctx) => ctx.user._id === ADMIN_USER_ID,
 });
