@@ -1,6 +1,6 @@
 ---
 name: ui-component
-description: Add or change a UI component in document-intelligence — any new screen, panel, dialog, popover, button, form control, or Tailwind styling under src/. Routes to the shared Base UI primitive instead of hand-rolling, and to the keyboard verification protocol. Use before writing JSX, not after. Triggers on "add a button/dialog/modal/dropdown/tab/menu/form", "new panel or screen", "style this component", "make this look like…", or any edit to src/components/** or src/pages/**.
+description: Add or change a UI component in Haystack — any new screen, panel, dialog, popover, button, form control, or Tailwind styling under src/. Routes to the shared Base UI primitive instead of hand-rolling, and to the keyboard verification protocol. Use before writing JSX, not after. Triggers on "add a button/dialog/modal/dropdown/tab/menu/form", "new panel or screen", "style this component", "make this look like…", or any edit to src/components/** or src/pages/**.
 ---
 
 # Adding or changing UI
@@ -8,7 +8,7 @@ description: Add or change a UI component in document-intelligence — any new s
 ## 1. Does the primitive exist? (before writing JSX)
 
 ```
-ls /Users/elicohen/document-intelligence/src/components/ui/
+ls src/components/ui/
 ```
 
 Base UI wrappers: `button`, `input`, `textarea`, `dialog`, `tabs`, `badge`,

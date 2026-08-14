@@ -14,9 +14,9 @@ already catch — those run in CI and repeating them is noise.
 Default to the uncommitted diff:
 
 ```
-git -C /Users/elicohen/document-intelligence diff -- src/
-git -C /Users/elicohen/document-intelligence diff --cached -- src/
-git -C /Users/elicohen/document-intelligence status --porcelain -- src/
+git diff -- src/
+git diff --cached -- src/
+git status --porcelain -- src/
 ```
 
 Only added and modified lines are in scope. Pre-existing violations in an

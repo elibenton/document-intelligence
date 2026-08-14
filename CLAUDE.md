@@ -63,8 +63,12 @@ Cache-key composition is undocumented, so log the hit rate rather than assume it
 **Size ceilings are per transport, and this is the recurring trap.** URL in
 prompt *text* is 80MB; base64 and binary file objects are 20MB. This app sends a
 URL wrapped in a `file` part — the *file-object* transport — so 20MB applies even
-though no bytes are inlined here. The preflight gate is sized to that.
-URL-in-text would lift it but measured 11× the cost for identical results.
+though no bytes are inlined here. URL-in-text lifts it but measured 11× the cost
+for identical results, so `fileUrlContent` sends a file part by default and falls
+back to text only above 19MB; both numbers live in `convex/interfazeLimits.ts`
+and the browser preflights import them, so the gate a user sees and the gate the
+pipeline enforces cannot drift. Nobody has ever measured what actually happens
+past 20MB — the old 18MB gate blocked those files before they were sent.
 
 **Other constraints:** one task per call; precontext entries are per
 task-invocation, not per page; `total_pages` is undocumented, so assert rather
@@ -118,6 +122,15 @@ in `apiUsageTotals`, which is never pruned.
 - **Deploying is not git.** `npm run deploy` publishes the frontend to Convex
   static hosting; `npx convex dev` pushes backend functions and schema. Pushing
   a commit deploys nothing.
+- **`AGENTS.md` is a symlink to this file.** One source of truth, two names, so
+  a non-Claude agent reads the same principles. Edit `CLAUDE.md`; never replace
+  the symlink with a copy.
+- **A hook lints each file as it is edited.** `.claude/hooks/lint-edited-file.sh`
+  runs eslint on the single `.ts`/`.tsx` file a tool just wrote and hands any
+  error back. Scoped to one file deliberately: this repo is often edited by more
+  than one process at once, so a whole-repo error count is not a stable
+  baseline — measured drifting 2 → 4 → 3 within minutes. It makes the fence
+  below fire at edit time; it does not replace `npm run lint`.
 
 ## Cost shape (measured, 12-page born-digital English PDF)
 
@@ -159,5 +172,17 @@ line-height, tracking and weight in the scale with no error.
 unverified until it has been driven Tab / Shift-Tab / Enter / Escape, with the
 focus ring visible at every stop and focus back on the trigger after close.
 `npx tsc -b` and `npm run lint` catch the import rules; nothing but doing it
-catches a broken focus trap. Note `npm run lint` has 2 known pre-existing errors
-in `src/components/viewer/` — the gate is "still exactly 2", not "clean".
+catches a broken focus trap. `src/` lints clean as of the viewer render-phase
+fixes; keep it there. Still treat a repo-wide count as a smell rather than a
+gate — it drifts while another session or your editor is writing, so "is it
+still exactly N" answers the wrong question. The gate is that the file *you*
+touched lints clean, which the edit-time hook already enforces.
+
+**Reset state during render, not in an effect.** Both viewer errors were the
+same shape: work that belongs in the render pass deferred into `useEffect`,
+which buys a wasted render and, in `ImagePdfViewer`, one paint against the
+previous document's geometry. Compare against the previous value and adjust
+inline — `if (next !== seen) { setSeen(next); … }` — the way the pin-drop lines
+in `ViewerLayout` already did. A ref written during render is the same mistake
+wearing a disguise: `layoutRef` existed only to dodge an effect's dependency
+array, so removing the effect deleted the ref too.

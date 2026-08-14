@@ -68,6 +68,32 @@ npm run deploy   # publish the frontend to Convex static hosting
 nothing. Commits are atomic and go straight to `main` — no feature branches, no
 PRs.
 
+### Checks that run without you
+
+`src/` lints clean, and `npx tsc -b` and `npm test` (176 tests, well under a
+second) pass. Don't read a repo-wide lint count as a pass/fail gate, though: it
+moves whenever a second process is writing to the tree. The gate is that the
+file *you* changed lints clean.
+
+If you use Claude Code, one hook enforces exactly that. `.claude/settings.json`
+runs `.claude/hooks/lint-edited-file.sh` after every file write; it lints the
+single `.ts`/`.tsx` file that just changed and hands back any error. That is
+what makes the design-system fence in `eslint.config.js` — the rules that stop a
+hand-rolled dialog or an off-scale `text-[11px]` — fire while the code is being
+written rather than at build time. Editing outside this repo, non-TypeScript
+files, and `convex/_generated/` are all no-ops. Nothing here is required to
+build or run the app; delete the hook block and everything still works.
+
+It calls three things. `eslint` is a devDependency, so `npm install` covers it.
+`jq` and `node` are not in the project: `jq` ships with macOS at `/usr/bin/jq`,
+and `node` may not be on the PATH a hook inherits at all — if you use a version
+manager (mise, nvm, asdf), node lives outside the default PATH and eslint's
+`#!/usr/bin/env node` shim fails. The script prepends the usual shim
+directories to cover that. If it still can't find a tool it exits 0 and lets the
+edit through: a toolchain problem should never block your work, so a broken hook
+degrades to no hook. On Linux, or if `jq` is missing, `brew install jq` /
+`apt install jq` restores it.
+
 ---
 
 ## 2. The mental model
@@ -217,6 +243,16 @@ src/
   lib/             pure helpers — preflight, geometry, types (this is what's tested)
 extension/         browser web-clipper, posts to /clip
 docs/              findings worth keeping: PDF edge cases, provider bug reports
+
+CLAUDE.md          principles + gotchas for anyone (human or agent) writing here
+AGENTS.md          → symlink to CLAUDE.md. One file, two names; edit CLAUDE.md
+.claude/
+  settings.json    hooks (see "Checks that run without you" above)
+  hooks/           the hook scripts themselves
+  agents/ skills/  hand-written: the ui-reviewer agent, the ui-component skill
+  skills/convex-*  → symlinks into .agents/skills/, written by
+                     `npx convex ai-files install`. Don't hand-edit; reinstall
+.agents/skills/    the real files those symlinks point at
 ```
 
 Routes (`src/App.tsx`): `/` projects → `/p/:projectId` library → `/documents/:id`

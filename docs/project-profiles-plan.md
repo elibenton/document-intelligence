@@ -333,8 +333,8 @@ deploys; do not compress them.
 | 4 | `projectTemplates.ts`, `projects.citationStyle`, seeding in `projects.create` | **done** — verified against the deployment: the legal template seeds 6 categories, 2 entity types and `citationStyle: "chicago"` in the creating transaction. Template categories carry no `key`; it is derived from the label by `documentCategories`' own slugify, which reproduces the four existing keys exactly. Project deletion gained a `taxonomy` phase — per-project categories, kinds and entity types had no owner and every deleted project would have stranded them. |
 | 5 | New-project dialog with template picker | **built, not yet verified in the browser** — the auth gate landed from the concurrent auth work and the preview now requires a sign-in. Typecheck and lint clean. |
 | 6 | `/p/:slug/settings` — citation style, categories, entity types | **built, unverified** — all three sections present. `projects.update` gained a validated `citationStyle`. The entity-type editor is the first place these can be listed or removed at all; before it, a type added from the document page was permanent and invisible. |
-| 7 | Analyze `citation` block: schema, `CITATION_RULE`, sanitizers, storage | before/after corpus run |
-| 8 | `citeproc` + CSL styles + `src/lib/citation` + rendering in search | |
+| 7 | Analyze `citation` block: schema, `CITATION_RULE`, sanitizers, storage | **done and measured** — see §7a. Extraction is accurate; the reasoning chain is undisturbed; the fields that moved were shown to be nondeterministic by a control run. |
+| 8 | `citeproc` + CSL styles + `src/lib/citation` + rendering in search | **formatter done and verified against real extracted data** (§8a); rendering into the search answer still to wire |
 | 9 | *(optional)* citation preview / edit / copy on the document page | |
 
 The project settings page was pulled forward into step 2 on purpose: scoping
@@ -402,6 +402,107 @@ before/after corpus diff is the entire point of it.
 
 Unblocking needs one of: a signed-in preview session, or a way to run
 authenticated Convex calls (a dev bypass, or a token the CLI can present).
+
+## 7a. What the citation run measured
+
+Three documents, chosen for different bibliographic shapes, re-analyzed with the
+`citation` block appended:
+
+| Document | Extracted |
+| --- | --- |
+| Berman, *The Promise of the Arab Spring* | `article-journal`, container **Foreign Affairs**, vol 92, issue 1, pp 64–74, publisher Council on Foreign Relations — all correct against the real article |
+| Roe v. SFBSC preliminary approval order | `legal_case`, authority the full court name, both docket numbers, pp 1–34, Judge Beeler as author |
+| Franwell/CDFA agreement | `document` (no clean CSL type for a contract), authority CDFA, both parties as `literal` contributors, jurisdiction, agreement number |
+
+**The before/after diff was not a control, and this is the trap worth
+remembering.** Two of the three documents gained a `documentPlace` and one
+changed its `displayName` and `documentDate` — which looks like the new field
+disturbing the chain. It is not. The stored "before" state is whatever prompt
+version each document was last analyzed under, which for these was old enough to
+predate `PLACE_RULE` entirely. A stale baseline is not a control.
+
+The real control was re-running one document a second time under the *identical*
+new prompt. `displayName` and `documentDate` differed again between those two
+runs — and the second run's date matched the original. So those fields are simply
+unstable on that document (it is also the one truncated at 47%), and the
+appended block is not implicated. `primary_kind` and `primary_category` — the
+fields the declaration-order chain exists to protect — were identical across all
+four runs.
+
+This is what `apiLogs.outputHash` was added for: two uncached runs differing *is*
+the nondeterminism measurement. Any future field added to this schema should be
+checked the same way — same prompt twice, not before versus after.
+
+**Cost: $1.14 for four runs, against my estimate of ~$0.09.** The estimate came
+from the cost shape in CLAUDE.md, which is measured on a 12-page born-digital
+PDF; two of these documents are far larger (the Franwell contract is 276k tokens
+per run and still gets truncated at 47%). The per-document cost of Analyze scales
+with document size, so "≈$0.03/doc" is a floor, not an average — worth fixing in
+the cost note when someone next touches it.
+
+## 8a. The formatter, and three bugs only real data found
+
+`src/lib/citation/` — `cslItem.ts` (document row → CSL-JSON, pure, 11 tests) and
+`format.ts` (lazy engine). The styles are vendored in `styles/`, ~405KB of XML
+plus citeproc itself, all behind a dynamic `import()` that a `numeric` project
+never triggers.
+
+Verified by rendering the three documents Analyze had actually just read, in all
+three styles. It produced, among others:
+
+- `Berman, Sheri. "The Promise of the Arab Spring." Foreign Affairs 92, no. 1 (2013): 64–74.` (Chicago)
+- `(Berman, 2013)` / `(Berman)` in-text (APA / MLA)
+- `Roe v. SFBSC Management Preliminary Approval Order, 14-cv-03616-LB (United States District Court Northern District of California June 30, 2022).`
+
+Three defects surfaced that no amount of reading would have:
+
+1. **An empty `citationsPre` on every call** told citeproc each citation was the
+   only cluster in the document, discarding the ones before it. Three sources
+   produced a one-entry bibliography. `pre` has to accumulate.
+2. **Fixing that broke the in-text form** for every citation after the first:
+   the result array is indexed by each cluster's position in the document, so
+   `find(position === 0)` matched nothing once `pre` was non-empty. Match on
+   `citationID` instead.
+3. **HTML entities reached the reader.** citeproc escapes for HTML output, so
+   APA rendered "Department of Food and Agriculture &#38; Franwell, Inc.".
+   These strings are drawn as text, so the escaping has to come back off.
+
+Each was invisible to `tsc`, to lint, and to a unit test written against my own
+assumptions. They only appeared when three real records went through three real
+style sheets at once.
+
+### Wiring it into the answer — three more
+
+`documents.citationSources` (batched over the answer's cited documents),
+`useCitations` (project style + lazy engine), and the render in
+`ResearchEvidenceCarousel`: the in-text marker, and a References list.
+
+4. **`entry_ids` and `entries` are not parallel.** citeproc lists an id for
+   every item it knows about but emits a string only for the ones the style can
+   lay out. Pairing them by index produced a References list of **seven empty
+   bullets** against the first real answer. Drive the list from `entries`.
+5. **Chicago has no bibliography layout for CSL `document`** (nor `manuscript`)
+   — it renders nothing at all, measured across every combination of author,
+   genre and date. Since Analyze returns `document` for anything without a clean
+   bibliographic type, a Chicago reference list would have silently omitted most
+   of a corpus. The generic bucket is now emitted as `report`, which every style
+   lays out, with `primaryKind` as `genre` so the specific label survives:
+   *"Gold Club Update. Entertainment commission report. 2013."*
+6. **The in-text form has to differ by style.** APA and MLA are parenthetical
+   and belong in the sentence — "(Berman, 2013)". A Chicago note is a complete
+   sentence and belongs in a *note*, with a number in the text pointing at it,
+   which is exactly what the numbered badge already is. Dropping a full note
+   mid-paragraph would have been the wrong rendering of a correct citation.
+   `hasInlineCitations(style)` decides; `CitationButton` grows a pill when there
+   is a label and keeps its circular badge when there is not.
+
+**Still unconfirmed in the browser.** The numeric baseline was verified visually
+(numbered badges, no References). The Chicago render was verified as far as the
+References section appearing and then — after fixes 4 and 5 — at the formatter
+level in node, but the final visual check is blocked: the concurrent auth work
+introduced an `ownedProjects` helper `projects.ts` calls before it exists, so the
+backend does not compile and the app cannot serve queries. Re-check
+`/search?id=…` on a Chicago project once that lands.
 
 ## 6. Verification
 
