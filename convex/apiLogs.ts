@@ -6,6 +6,7 @@
  */
 
 import { internalMutation } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -150,15 +151,19 @@ export const pruneOldLogs = internalMutation({
   },
 });
 
-export const totals = authedQuery({
-  args: {},
-  handler: async (ctx) => {
-    // At most TOTALS_SHARDS rows (+1 legacy unsharded row), so this stays a
-    // fixed-size read no matter how large the log grows.
-    const shards = await ctx.db
-      .query("apiUsageTotals")
-      .take(TOTALS_SHARDS + 1);
-    return shards.reduce(
+/**
+ * Lifetime spend, summed across the shards. Shared with convex/admin.ts so the
+ * settings page and the admin dashboard cannot disagree about what has been
+ * spent.
+ *
+ * Note the fixed-size read below: it is correct only while this table holds at
+ * most TOTALS_SHARDS rows plus one legacy row. Giving `apiUsageTotals` a
+ * per-user dimension would grow it to accounts × shards and make this silently
+ * under-report, with no error anywhere — see docs/admin-usage-plan.md §4.5.
+ */
+export async function readLifetimeTotals(ctx: QueryCtx) {
+  const shards = await ctx.db.query("apiUsageTotals").take(TOTALS_SHARDS + 1);
+  return shards.reduce(
       (sum, t) => ({
         calls: sum.calls + t.calls,
         promptTokens: sum.promptTokens + t.promptTokens,
@@ -177,5 +182,9 @@ export const totals = authedQuery({
         cacheHits: 0,
       }
     );
-  },
+}
+
+export const totals = authedQuery({
+  args: {},
+  handler: async (ctx) => readLifetimeTotals(ctx),
 });

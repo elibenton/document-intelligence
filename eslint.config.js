@@ -95,4 +95,41 @@ export default defineConfig([
       'no-restricted-imports': 'off',
     },
   },
+
+  // ------------------------------------------------------------------
+  // The admin fence.
+  //
+  // convex/admin.ts answers "what is this deployment spending" for one
+  // account, and must never become a way to read anyone else's documents.
+  // That boundary decays the same way the design system does — by addition.
+  // Nobody edits usageByAccount to leak a filename; someone adds
+  // documentBreakdown a year from now and joins `documents` because it was
+  // one line and obviously useful.
+  //
+  // See docs/admin-usage-plan.md §2 for why each of these is unsafe.
+  // ------------------------------------------------------------------
+  {
+    files: ['convex/admin.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'MemberExpression[property.name="get"][object.property.name="db"]',
+          message:
+            'convex/admin.ts must never read a row by id — every id it holds points at user content, and documentId joined to documents.name is a document title. Aggregate from apiLogs and apiUsageTotals only. See docs/admin-usage-plan.md §2.3.',
+        },
+        {
+          selector:
+            'CallExpression[callee.property.name="query"] > Literal:not([value="apiLogs"]):not([value="apiUsageTotals"])',
+          message:
+            'convex/admin.ts may read only apiLogs and apiUsageTotals. Every other table carries document-derived content.',
+        },
+        {
+          selector: 'MemberExpression[property.name="getAnyUserById"]',
+          message:
+            'Returns the full Better Auth user document, including the email. Accounts are pseudonymous in the dashboard — see docs/admin-usage-plan.md §3.4.',
+        },
+      ],
+    },
+  },
 ])

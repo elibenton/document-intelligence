@@ -535,11 +535,17 @@ coherent, shippable feature that leaks nothing.
 
 ## 9. Open questions
 
-- **Does Convex enforce a `returns` validator at runtime, rejecting unlisted
-  fields?** §5.2 is weaker if not. Neither `apiLogs.list` nor `totals` declares
-  one, so existing code gives no evidence. Verify in commit 3.
-- **The eslint selectors in §5.3 are unverified against the AST.** Check each
-  fails on a deliberate violation before trusting it.
+- ~~**Does Convex enforce a `returns` validator at runtime?**~~ **Answered: yes.**
+  A handler returning a field the validator does not list fails with
+  `ReturnsValidationError: Object contains extra field 'leaked' that is not in
+  the validator`. §5.2 is real enforcement, not documentation.
+- ~~**The eslint selectors in §5.3 are unverified against the AST.**~~
+  **Answered: all three fire.** Verified against a file containing one
+  deliberate violation of each, with an allowed `apiLogs` read in the same file
+  staying clean.
+- ~~`customQuery(authedQuery, …)` does not typecheck.~~ **Wrong — it does.**
+  See the correction in §5.1; the real reason to compose at the customization
+  level is that chaining builders calls `getAuthUser` twice.
 - **Whether `promptHash` stays content-free.** It is today, deliberately. If
   anyone adds document text to that hash input, `promptHash` moves from safe to
   unsafe with no signal. Worth a line in the `chatCompletion` comment saying the
