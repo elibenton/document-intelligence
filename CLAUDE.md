@@ -124,3 +124,40 @@ in `apiUsageTotals`, which is never pruned.
 Scan $0.0021 → Analyze $0.0308 → Rename $0.0062 → Extract $0.0271 = **$0.066/doc**.
 Analyze and Extract are ~88% of it. Each *additional* extraction template
 re-sends the whole document at +$0.027.
+
+## UI
+
+**Base UI is the only source of interactive behavior.** `src/components/ui/`
+wraps it; screens import from there, and eslint fails the build if they reach
+past it. This decays by *addition*, not by edit — nobody rewrites the shared
+dialog, they write a new inline one — which is why the fence is a lint rule and
+not a paragraph. The proof it was needed: `ui/dialog.tsx` had exactly one
+consumer while `StageRetryDialog`, `SelectionPopover` and `AnnotationLayer` each
+hand-rolled `createPortal` + `role="dialog"` + a `window` keydown listener. None
+trapped focus, none restored it, and because the listener was on `window` a
+single Escape over the viewer closed the retry dialog too.
+
+Writing `role=`, `aria-modal`, or a focus/Escape `useEffect` by hand is the
+signal that you reached past a primitive. Hand-rolled ARIA is only correct where
+Base UI has no equivalent — `SplitPane` and the PDF overlays qualify; say so in
+an `eslint-disable` with a reason, which leaves a grep-able mark.
+
+**The type scale is closed; nothing enforces it but lint.** `--text-*: initial`
+in `@theme` deletes the *named* steps Tailwind ships, but `text-[11px]` is a
+parser feature and compiles regardless — measured, not assumed. Same for the
+`text-sm/6` slash form, which silently drops the step's tracking and weight
+rather than overriding them. A value that isn't on the scale is a token that was
+never named: add it to `@theme` in `src/index.css`.
+
+**`@theme` vs `@theme inline` is load-bearing.** The colour block is `inline` so
+alpha modifiers read the raw runtime var. The type block must *not* be: its
+paired modifiers (`--text-sm--line-height` and friends) are emitted as real
+custom properties and read at use site, so marking it `inline` erases every
+line-height, tracking and weight in the scale with no error.
+
+**Verification is keyboard-first.** A change to anything interactive is
+unverified until it has been driven Tab / Shift-Tab / Enter / Escape, with the
+focus ring visible at every stop and focus back on the trigger after close.
+`npx tsc -b` and `npm run lint` catch the import rules; nothing but doing it
+catches a broken focus trap. Note `npm run lint` has 2 known pre-existing errors
+in `src/components/viewer/` — the gate is "still exactly 2", not "clean".
