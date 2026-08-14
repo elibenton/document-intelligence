@@ -802,12 +802,29 @@ export default defineSchema({
     outputHash: v.optional(v.string()), // two uncached runs differing = nondeterminism
     errorCode: v.optional(v.string()), // classified, so errors group without parsing
     buildSha: v.optional(v.string()), // which deploy produced this row
+
+    // The account that caused this call, resolved at write time by walking the
+    // document to its project (convex/apiLogs.ts `record`). A v.string() and
+    // never a v.id("users") — the user record lives in the Better Auth
+    // component's tables (docs/auth-plan.md §7.1).
+    //
+    // Optional on the first deploy and forever, with no narrowing step: three
+    // classes of row legitimately have no owner — rows written before accounts
+    // existed, orphans whose document or project has since been deleted, and
+    // any call site holding neither a document nor a project. They aggregate
+    // into an "Unattributed" line, which is honest and is also the only way to
+    // notice if resolution ever silently stops working.
+    //
+    // Attribution is a snapshot: documentMove can move a document to another
+    // project afterwards, and historic rows keep the owner who actually paid.
+    ownerId: v.optional(v.string()),
   })
     // The table had no indexes: `list` worked only by riding by_creation_time.
     // by_operation carries _creationTime as its implicit tiebreaker, so it
     // answers every "last N days of operation X" question on its own.
     .index("by_operation", ["operation"])
-    .index("by_document", ["documentId"]),
+    .index("by_document", ["documentId"])
+    .index("by_owner", ["ownerId"]),
 
   // Denormalized running totals (singleton) so the usage page never has to
   // scan/count the full log.

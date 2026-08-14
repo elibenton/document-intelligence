@@ -73,6 +73,17 @@ export const usage = adminQuery({
     byDay: v.array(
       v.object({ day: v.string(), calls: v.number(), costUsd: v.number() })
     ),
+    byAccount: v.array(
+      v.object({
+        account: v.string(),
+        calls: v.number(),
+        costUsd: v.number(),
+        promptTokens: v.number(),
+        completionTokens: v.number(),
+        errors: v.number(),
+        documentsTouched: v.number(),
+      })
+    ),
   }),
   handler: async (ctx, args) => {
     const lifetime = await readLifetimeTotals(ctx);
@@ -102,6 +113,34 @@ export const usage = adminQuery({
       { calls: number; costUsd: number; errors: number; truncatedOutputs: number; durations: number[] }
     >();
     const days = new Map<string, { calls: number; costUsd: number }>();
+
+    /**
+     * Per-account spend, keyed by a prefix of the opaque Better Auth id.
+     *
+     * Anonymised, not secret: the prefix is stable per account so the rows are
+     * comparable over time, and it is not reversible to a person. The cost is
+     * real — the owner cannot email a runaway account without a second,
+     * deliberate step — and it is the trade this dashboard was asked for. The
+     * alternative is a getAnyUserById join in this file, and once one such join
+     * exists "this file does not join to identity" stops being checkable, which
+     * is why the eslint fence bans that call by name.
+     *
+     * Rows with no owner are a real category, not a rounding error: they
+     * predate accounts, or their document has since been deleted. Showing them
+     * as `Unattributed` is honest, and is also the only way to notice if
+     * resolution in apiLogs.record ever silently stops working.
+     */
+    const accounts = new Map<
+      string,
+      {
+        calls: number;
+        costUsd: number;
+        promptTokens: number;
+        completionTokens: number;
+        errors: number;
+        documents: Set<string>;
+      }
+    >();
 
     for (const row of rows) {
       window.promptTokens += row.promptTokens ?? 0;
@@ -133,6 +172,25 @@ export const usage = adminQuery({
       bucket.calls += 1;
       bucket.costUsd += row.costUsd ?? 0;
       days.set(day, bucket);
+
+      const account = row.ownerId ? row.ownerId.slice(0, 8) : "Unattributed";
+      const acct = accounts.get(account) ?? {
+        calls: 0,
+        costUsd: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        errors: 0,
+        documents: new Set<string>(),
+      };
+      acct.calls += 1;
+      acct.costUsd += row.costUsd ?? 0;
+      acct.promptTokens += row.promptTokens ?? 0;
+      acct.completionTokens += row.completionTokens ?? 0;
+      if (row.status === "error") acct.errors += 1;
+      // Collected only to be counted — the ids never leave this handler, and
+      // the `returns` validator above would reject them if they tried.
+      if (row.documentId) acct.documents.add(row.documentId);
+      accounts.set(account, acct);
     }
 
     window.documentsTouched = documentIds.size;
@@ -157,6 +215,17 @@ export const usage = adminQuery({
       byDay: [...days.entries()]
         .map(([day, d]) => ({ day, calls: d.calls, costUsd: d.costUsd }))
         .sort((a, b) => a.day.localeCompare(b.day)),
+      byAccount: [...accounts.entries()]
+        .map(([account, a]) => ({
+          account,
+          calls: a.calls,
+          costUsd: a.costUsd,
+          promptTokens: a.promptTokens,
+          completionTokens: a.completionTokens,
+          errors: a.errors,
+          documentsTouched: a.documents.size,
+        }))
+        .sort((a, b) => b.costUsd - a.costUsd),
     };
   },
 });

@@ -23,13 +23,14 @@ export const TOTALS_SHARDS = 8;
  */
 export function usageLogger(
   ctx: ActionCtx,
-  meta?: { documentId?: Id<"documents"> }
+  meta?: { documentId?: Id<"documents">; projectId?: Id<"projects"> }
 ): UsageLogger {
   return async (usage: ApiUsage) => {
     try {
       await ctx.runMutation(internal.apiLogs.record, {
         ...usage,
         documentId: meta?.documentId,
+        projectId: meta?.projectId,
       });
     } catch (e) {
       console.error("Failed to record API usage:", e);
@@ -51,6 +52,9 @@ export const record = internalMutation({
     cacheHit: v.optional(v.boolean()),
     error: v.optional(v.string()),
     documentId: v.optional(v.id("documents")),
+    // Search logs a project rather than a document — it is asking a question
+    // of the whole corpus. Either one resolves to the same owner below.
+    projectId: v.optional(v.id("projects")),
     // Measurement fields. All optional: rows written before this landed have
     // none of them, and non-Interfaze callers (embeddings) supply none either.
     finishReason: v.optional(v.string()),
@@ -60,9 +64,25 @@ export const record = internalMutation({
     buildSha: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Resolved here rather than at the twelve logging call sites: this mutation
+    // is the one place every recorded call passes through, so a new call site
+    // cannot forget to attribute itself. There is no `ctx.auth` to read — this
+    // runs inside the workpool → scheduler → internal action chain, where
+    // Convex does not propagate identity, so ownership has to arrive as data.
+    const { projectId: metaProjectId, ...row } = args;
+    const projectId =
+      metaProjectId ??
+      (args.documentId
+        ? (await ctx.db.get(args.documentId))?.projectId
+        : undefined);
+    const ownerId = projectId
+      ? (await ctx.db.get(projectId))?.ownerId
+      : undefined;
+
     await ctx.db.insert("apiLogs", {
-      ...args,
+      ...row,
       error: args.error?.slice(0, 500),
+      ownerId,
     });
 
     // Spread the running total across shards: parallel chunk parses all log
@@ -108,7 +128,16 @@ export const record = internalMutation({
 export const list = authedQuery({
   args: {},
   handler: async (ctx) => {
-    const logs = await ctx.db.query("apiLogs").order("desc").take(100);
+    // `by_owner`, not the bare table scan this used to do: the rows carry the
+    // provider's raw error text and join to document names, so an unscoped
+    // feed showed every account the titles of everyone else's documents.
+    // Unattributed rows (pre-auth, or orphaned) belong to nobody and so appear
+    // for nobody — the admin dashboard is where they are accounted for.
+    const logs = await ctx.db
+      .query("apiLogs")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ctx.user._id))
+      .order("desc")
+      .take(100);
     const names = new Map<Id<"documents">, string | undefined>();
     for (const id of new Set(logs.flatMap((l) => (l.documentId ? [l.documentId] : [])))) {
       names.set(id, (await ctx.db.get(id))?.name);

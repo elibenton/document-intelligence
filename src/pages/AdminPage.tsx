@@ -191,6 +191,78 @@ export default function AdminPage() {
           </section>
 
           <section>
+            <SectionHeading>By account</SectionHeading>
+            {/* Accounts are shown as a prefix of their opaque id, never an
+                email — the boundary this page exists to respect is "usage, not
+                identity", and resolving a name here would mean joining to the
+                user record. "Unattributed" is a real row, not a rounding
+                error: it collects calls whose document has since been deleted,
+                and calls made before accounts existed. */}
+            <p className="text-xs text-muted-foreground mb-3">
+              Anonymised account ids. Unattributed covers deleted documents and
+              calls predating accounts.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                    <th className="py-2 pr-4 font-medium">Account</th>
+                    <th className="py-2 pr-4 font-medium text-right">Calls</th>
+                    <th className="py-2 pr-4 font-medium text-right">Cost</th>
+                    <th className="py-2 pr-4 font-medium text-right">
+                      Documents
+                    </th>
+                    <th className="py-2 pr-4 font-medium text-right">Input</th>
+                    <th className="py-2 pr-4 font-medium text-right">Output</th>
+                    <th className="py-2 font-medium text-right">Errors</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byAccount.map((a) => (
+                    <tr key={a.account} className="border-b border-border/50">
+                      <td className="py-2 pr-4 font-mono text-xs">
+                        {a.account}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {a.calls.toLocaleString()}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {usd(a.costUsd)}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {a.documentsTouched.toLocaleString()}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">
+                        {formatTokens(a.promptTokens)}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">
+                        {formatTokens(a.completionTokens)}
+                      </td>
+                      <td className="py-2 text-right tabular-nums">
+                        {a.errors > 0 ? (
+                          <span className="text-destructive">{a.errors}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {data.byAccount.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="py-4 text-center text-muted-foreground"
+                      >
+                        No calls in this window.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
             <SectionHeading>By day</SectionHeading>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

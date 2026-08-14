@@ -138,7 +138,10 @@ export const execute = internalAction({
             projectId: args.projectId,
           });
           const { content } = await chatCompletion(interfazeKey, {
-            usage: { log: usageLogger(ctx), operation: "search_plan" },
+            usage: {
+              log: usageLogger(ctx, { projectId: args.projectId }),
+              operation: "search_plan",
+            },
             systemPrompt:
               "You turn a user's question about a private document corpus into a structured retrieval plan. Only pick entity names, roles, and relation types that appear in the provided known lists — leave arrays empty rather than inventing values.",
             content: [
@@ -190,7 +193,7 @@ export const execute = internalAction({
           if (!geminiKey) return [];
           try {
             const [vector] = await embedTexts([plan.semantic_query], geminiKey, {
-              log: usageLogger(ctx),
+              log: usageLogger(ctx, { projectId: args.projectId }),
               health: healthReporter(ctx),
             });
             const matches = await ctx.vectorSearch("pages", "by_embedding", {
@@ -274,7 +277,10 @@ export const execute = internalAction({
             : "";
         try {
           const { content } = await chatCompletion(interfazeKey, {
-            usage: { log: usageLogger(ctx), operation: "search_answer" },
+            usage: {
+              log: usageLogger(ctx, { projectId: args.projectId }),
+              operation: "search_answer",
+            },
             systemPrompt:
               "You answer questions about a private document corpus. Ground every claim in the numbered sources or the known facts — cite sources inline as [n]. Never use outside knowledge. If the material doesn't answer the question, say what's missing.",
             content: [

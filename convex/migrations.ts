@@ -78,6 +78,59 @@ export const backfillProjectOwners = internalMutation({
 });
 
 /**
+ * Attribute existing API log rows to the account that caused them, so the
+ * admin dashboard is not almost entirely "Unattributed" on its first day.
+ *
+ * Run after backfillProjectOwners — it reads the owner this writes:
+ *   npx convex run migrations:backfillApiLogOwners
+ *
+ * Same shape as backfillPageProjectIds, including the per-document memo: one
+ * 20-page ingest writes ~28 log rows pointing at the same document, so
+ * resolving the project once per document rather than once per row is most of
+ * the work saved. Rows whose document or project is gone stay unattributed,
+ * which is the right answer for an orphan, and rows already carrying an owner
+ * are skipped — so this is safe to re-run and safe to run while the pipeline
+ * is still logging.
+ */
+export const backfillApiLogOwners = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const batch = await ctx.db
+      .query("apiLogs")
+      .paginate({ cursor: args.cursor ?? null, numItems: 200 });
+
+    const ownerByProject = new Map<Id<"projects">, string | undefined>();
+    const projectByDoc = new Map<Id<"documents">, Id<"projects"> | undefined>();
+
+    for (const row of batch.page) {
+      if (row.ownerId !== undefined || !row.documentId) continue;
+      if (!projectByDoc.has(row.documentId)) {
+        projectByDoc.set(
+          row.documentId,
+          (await ctx.db.get(row.documentId))?.projectId
+        );
+      }
+      const projectId = projectByDoc.get(row.documentId);
+      if (projectId === undefined) continue;
+      if (!ownerByProject.has(projectId)) {
+        ownerByProject.set(projectId, (await ctx.db.get(projectId))?.ownerId);
+      }
+      const ownerId = ownerByProject.get(projectId);
+      if (ownerId === undefined) continue;
+      await ctx.db.patch(row._id, { ownerId });
+    }
+
+    if (!batch.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillApiLogOwners, {
+        cursor: batch.continueCursor,
+      });
+    }
+    return null;
+  },
+});
+
+/**
  * Copy each page's project down from its document, for rows written before
  * `pages.projectId` / `pageTranslations.projectId` existed.
  *
