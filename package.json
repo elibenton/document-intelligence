@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "deploy": "npx @convex-dev/static-hosting deploy",
+    "dev": "react-router dev",
+    "build": "react-router typegen && tsc -b && react-router build",
+    "deploy": "npx @convex-dev/static-hosting deploy --dist ./build/client",
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview"
@@ -20,6 +20,7 @@
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@napi-rs/canvas": "^0.1.100",
     "better-auth": "~1.6.15",
+    "citeproc": "^2.4.63",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.33.1",
@@ -33,10 +34,12 @@
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
     "react-router": "^8.3.0",
-    "tailwind-merge": "^3.5.0"
+    "tailwind-merge": "^3.5.0",
+    "isbot": "^5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@react-router/dev": "^8.3.0",
     "@tailwindcss/vite": "^4.2.1",
     "@types/node": "^24.12.0",
     "@types/papaparse": "^5.5.2",

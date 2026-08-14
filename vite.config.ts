@@ -1,5 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
-import react from "@vitejs/plugin-react";
+import { reactRouter } from "@react-router/dev/vite";
 import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "path";
@@ -23,7 +23,7 @@ import { createRequire } from "node:module";
 function pdfjsAssets(): Plugin {
   const dirs = ["wasm", "cmaps", "standard_fonts", "iccs"];
   const root = path.dirname(
-    createRequire(import.meta.url).resolve("pdfjs-dist/package.json")
+    createRequire(import.meta.url).resolve("pdfjs-dist/package.json"),
   );
   const contentTypes: Record<string, string> = {
     ".wasm": "application/wasm",
@@ -41,17 +41,21 @@ function pdfjsAssets(): Plugin {
         // directories. Checking the request string instead would serve
         // `/pdfjs/../package.json`, which normalizes back inside the package.
         const allowed = dirs.some((dir) =>
-          file.startsWith(path.join(root, dir) + path.sep)
+          file.startsWith(path.join(root, dir) + path.sep),
         );
         if (!allowed || !fs.existsSync(file)) return next();
         res.setHeader(
           "Content-Type",
-          contentTypes[path.extname(file)] ?? "application/octet-stream"
+          contentTypes[path.extname(file)] ?? "application/octet-stream",
         );
         fs.createReadStream(file).pipe(res);
       });
     },
     generateBundle() {
+      // Framework mode builds more than one Vite environment, and this hook
+      // fires for each. Without the guard the four directories are emitted into
+      // the prerender output too, where nothing serves them.
+      if (this.environment.name !== "client") return;
       for (const dir of dirs) {
         for (const name of fs.readdirSync(path.join(root, dir))) {
           this.emitFile({
@@ -70,7 +74,9 @@ export default defineConfig({
   server: {
     port: process.env.PORT ? Number(process.env.PORT) : 5173,
   },
-  plugins: [react(), tailwindcss(), pdfjsAssets()],
+  // reactRouter() supplies the React plugin itself, so @vitejs/plugin-react is
+  // no longer listed here — adding both makes Fast Refresh fight itself.
+  plugins: [reactRouter(), tailwindcss(), pdfjsAssets()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

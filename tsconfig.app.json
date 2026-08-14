@@ -26,7 +26,12 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+
+    /* `react-router typegen` writes per-route types into .react-router/types,
+       mirroring the src/ tree. rootDirs merges the two so a route module can
+       import "./+types/RouteName" as if it sat next to the route file. */
+    "rootDirs": [".", "./.react-router/types"]
   },
-  "include": ["src"]
+  "include": ["src", ".react-router/types/**/*"]
 }

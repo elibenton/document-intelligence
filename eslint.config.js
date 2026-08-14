@@ -8,7 +8,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 export default defineConfig([
   // convex/_generated is written by `convex dev`; linting it only produces
   // warnings about disable directives we do not control and cannot keep.
-  globalIgnores(['dist', 'convex/_generated']),
+  globalIgnores(['dist', 'build', '.react-router', 'convex/_generated']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -20,6 +20,31 @@ export default defineConfig([
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
+    },
+    rules: {
+      // A React Router route module exports these alongside its component by
+      // design, and Fast Refresh handles them — the plugin just cannot tell
+      // them from an arbitrary constant. Naming them keeps the rule doing its
+      // real job (catching a helper exported from a component file) instead of
+      // being disabled file-by-file across every route.
+      'react-refresh/only-export-components': [
+        'error',
+        {
+          allowExportNames: [
+            'meta',
+            'links',
+            'headers',
+            'loader',
+            'clientLoader',
+            'action',
+            'clientAction',
+            'shouldRevalidate',
+            'ErrorBoundary',
+            'HydrateFallback',
+            'Layout',
+          ],
+        },
+      ],
     },
   },
 

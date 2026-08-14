@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# React Router framework mode: `build/` replaced `dist/` as the output dir, and
+# `.react-router/` holds the generated per-route types that `react-router
+# typegen` rewrites on every build.
+build
+.react-router
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
