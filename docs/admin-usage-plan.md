@@ -233,8 +233,15 @@ exists, whoever signs up first with `eliunited@gmail.com` *is* the admin. Hence:
 Compare case-insensitively — Better Auth is believed to normalise stored emails
 to lowercase, but the comparison costs nothing and removes the question.
 
-**Accounts are pseudonymous in the UI.** The per-account table shows
-`ownerId.slice(0, 8)`, not an email. Anonymised, not secret: a prefix of an
+**Accounts are pseudonymous in the UI.** ~~The per-account table shows
+`ownerId.slice(0, 8)`, not an email.~~ **Reversed on the owner's instruction
+when Stage B shipped: the table shows the account's name and email.** A
+dashboard whose purpose is noticing a runaway account is not much use if acting
+on what it shows needs a separate lookup elsewhere. The eslint rule banning
+`getAnyUserById` was removed with it; the two rules that keep document content
+out of `convex/admin.ts` are unchanged, because the boundary that matters is
+"cannot read what they wrote", not "cannot tell who they are". The reasoning
+below is kept as the record of the trade that was made. Anonymised, not secret: a prefix of an
 opaque id, consistent per row, not reversible to a person. The cost is real — the
 owner cannot email a runaway account without a second, deliberate step. That is
 the trade the requirement asks for, and the alternative is a `getAnyUserById`

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { adminQuery } from "./authz";
+import { authComponent } from "./auth";
 import { readLifetimeTotals } from "./apiLogs";
 
 /**
@@ -17,7 +18,13 @@ import { readLifetimeTotals } from "./apiLogs";
  * Two things keep that true as this file grows, neither of them a comment: the
  * explicit `returns` validators below, which make an accidental `...row` spread
  * fail rather than leak; and the eslint fence on this path, which bans
- * `ctx.db.get`, any table other than the two, and `getAnyUserById`.
+ * `ctx.db.get` and any table other than the two.
+ *
+ * The one exception is deliberate and narrow: the per-account table resolves a
+ * name and email through the Better Auth component, because the owner asked to
+ * see who is spending. That table holds identity and nothing a user wrote, so
+ * it does not weaken the rule above — "cannot read their documents" is intact,
+ * "cannot tell who they are" is what was traded away.
  */
 
 /**
@@ -76,6 +83,8 @@ export const usage = adminQuery({
     byAccount: v.array(
       v.object({
         account: v.string(),
+        name: v.optional(v.string()),
+        email: v.optional(v.string()),
         calls: v.number(),
         costUsd: v.number(),
         promptTokens: v.number(),
@@ -115,15 +124,20 @@ export const usage = adminQuery({
     const days = new Map<string, { calls: number; costUsd: number }>();
 
     /**
-     * Per-account spend, keyed by a prefix of the opaque Better Auth id.
+     * Per-account spend, keyed by the Better Auth user id.
      *
-     * Anonymised, not secret: the prefix is stable per account so the rows are
-     * comparable over time, and it is not reversible to a person. The cost is
-     * real — the owner cannot email a runaway account without a second,
-     * deliberate step — and it is the trade this dashboard was asked for. The
-     * alternative is a getAnyUserById join in this file, and once one such join
-     * exists "this file does not join to identity" stops being checkable, which
-     * is why the eslint fence bans that call by name.
+     * The name and email are resolved below. An earlier version of this
+     * deliberately showed only an 8-character id prefix, on the reasoning that
+     * the dashboard should be able to measure an account without identifying
+     * it. The owner asked for the names, which is the right call: a dashboard
+     * whose whole purpose is noticing a runaway account is not much use if
+     * acting on what it shows requires a separate lookup somewhere else.
+     *
+     * What that does *not* open is the thing this file exists to prevent. The
+     * identity join reads the Better Auth user table, which holds a name and an
+     * email and nothing a user wrote. Document titles, page text and entities
+     * remain unreachable from here, and the two eslint rules that enforce that
+     * are unchanged.
      *
      * Rows with no owner are a real category, not a rounding error: they
      * predate accounts, or their document has since been deleted. Showing them
@@ -131,7 +145,7 @@ export const usage = adminQuery({
      * resolution in apiLogs.record ever silently stops working.
      */
     const accounts = new Map<
-      string,
+      string | null, // null is the Unattributed bucket; ids cannot collide
       {
         calls: number;
         costUsd: number;
@@ -173,7 +187,7 @@ export const usage = adminQuery({
       bucket.costUsd += row.costUsd ?? 0;
       days.set(day, bucket);
 
-      const account = row.ownerId ? row.ownerId.slice(0, 8) : "Unattributed";
+      const account = row.ownerId ?? null;
       const acct = accounts.get(account) ?? {
         calls: 0,
         costUsd: 0,
@@ -215,17 +229,29 @@ export const usage = adminQuery({
       byDay: [...days.entries()]
         .map(([day, d]) => ({ day, calls: d.calls, costUsd: d.costUsd }))
         .sort((a, b) => a.day.localeCompare(b.day)),
-      byAccount: [...accounts.entries()]
-        .map(([account, a]) => ({
-          account,
-          calls: a.calls,
-          costUsd: a.costUsd,
-          promptTokens: a.promptTokens,
-          completionTokens: a.completionTokens,
-          errors: a.errors,
-          documentsTouched: a.documents.size,
-        }))
-        .sort((a, b) => b.costUsd - a.costUsd),
+      byAccount: (
+        await Promise.all(
+          [...accounts.entries()].map(async ([ownerId, a]) => {
+            // One lookup per distinct account in the window, not per row.
+            // A null user is an account that has since been deleted; its spend
+            // is still real, so the row stays and only the label is missing.
+            const user = ownerId
+              ? await authComponent.getAnyUserById(ctx, ownerId)
+              : null;
+            return {
+              account: ownerId ?? "Unattributed",
+              name: user?.name || undefined,
+              email: user?.email || undefined,
+              calls: a.calls,
+              costUsd: a.costUsd,
+              promptTokens: a.promptTokens,
+              completionTokens: a.completionTokens,
+              errors: a.errors,
+              documentsTouched: a.documents.size,
+            };
+          })
+        )
+      ).sort((a, b) => b.costUsd - a.costUsd),
     };
   },
 });

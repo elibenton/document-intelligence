@@ -192,15 +192,13 @@ export default function AdminPage() {
 
           <section>
             <SectionHeading>By account</SectionHeading>
-            {/* Accounts are shown as a prefix of their opaque id, never an
-                email — the boundary this page exists to respect is "usage, not
-                identity", and resolving a name here would mean joining to the
-                user record. "Unattributed" is a real row, not a rounding
-                error: it collects calls whose document has since been deleted,
-                and calls made before accounts existed. */}
+            {/* "Unattributed" is a real row, not a rounding error: it collects
+                calls whose document has since been deleted, and calls made
+                before accounts existed. Worth keeping visible — if resolution
+                in apiLogs.record ever breaks, this row is where it shows up. */}
             <p className="text-xs text-muted-foreground mb-3">
-              Anonymised account ids. Unattributed covers deleted documents and
-              calls predating accounts.
+              Unattributed covers deleted documents and calls predating
+              accounts.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -220,8 +218,24 @@ export default function AdminPage() {
                 <tbody>
                   {data.byAccount.map((a) => (
                     <tr key={a.account} className="border-b border-border/50">
-                      <td className="py-2 pr-4 font-mono text-xs">
-                        {a.account}
+                      <td className="py-2 pr-4">
+                        {a.name || a.email ? (
+                          <>
+                            <div>{a.name ?? a.email}</div>
+                            {a.name && a.email && (
+                              <div className="text-xs text-muted-foreground">
+                                {a.email}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          // Unattributed, or an account deleted since it spent.
+                          <span className="text-muted-foreground">
+                            {a.account === "Unattributed"
+                              ? "Unattributed"
+                              : "Deleted account"}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 pr-4 text-right tabular-nums">
                         {a.calls.toLocaleString()}

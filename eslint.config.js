@@ -124,11 +124,17 @@ export default defineConfig([
           message:
             'convex/admin.ts may read only apiLogs and apiUsageTotals. Every other table carries document-derived content.',
         },
-        {
-          selector: 'MemberExpression[property.name="getAnyUserById"]',
-          message:
-            'Returns the full Better Auth user document, including the email. Accounts are pseudonymous in the dashboard — see docs/admin-usage-plan.md §3.4.',
-        },
+        // `getAnyUserById` was banned here too, on the reasoning that accounts
+        // should be pseudonymous. That was reversed deliberately: the owner
+        // asked to see who is spending, and a dashboard that cannot name a
+        // runaway account cannot be acted on. The identity join is now allowed
+        // and is confined to `resolveAccounts`.
+        //
+        // The two rules above are the ones that matter and they are unchanged.
+        // The boundary this file defends was never "the admin cannot learn who
+        // someone is" — it is "the admin cannot read what they wrote". Names
+        // and email addresses come from the Better Auth user table; document
+        // titles, page text and entities do not, and still cannot be reached.
       ],
     },
   },
