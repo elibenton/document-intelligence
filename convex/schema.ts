@@ -596,12 +596,28 @@ export default defineSchema({
 
   // App-wide preferences. `global` is the only current key; keeping it
   // explicit makes the singleton index-safe and leaves room for future scopes.
-  appSettings: defineTable({
-    key: v.string(),
+  // Per-user preferences. One row per account, created on first write.
+  //
+  // This was `appSettings`, a single `key: "global"` row — so one user
+  // changing their reading language changed everyone's, and re-queued a
+  // translation for every document in the deployment. Both are the same bug:
+  // a deployment-wide singleton standing in for a per-user fact.
+  //
+  // `userId` is a Better Auth id, `v.string()` and never `v.id("users")`, for
+  // the reason in docs/auth-plan.md §7.1. Nothing here walks to a project,
+  // because a preference belongs to the person rather than to their work; the
+  // pipeline walks *to* this from a document (settings.languageForDocument).
+  //
+  // An absent row means the defaults, so a new account needs no backfill.
+  userSettings: defineTable({
+    userId: v.string(),
     defaultLanguageCode: v.string(),
+    // Bumped on every language change. Translation work carries the version it
+    // was queued under and is dropped when it no longer matches, so switching
+    // language twice quickly cannot leave the first language's results behind.
     translationVersion: v.number(),
     updatedAt: v.number(),
-  }).index("by_key", ["key"]),
+  }).index("by_user", ["userId"]),
 
   // Structured extraction results from Interfaze structured-output extraction
 

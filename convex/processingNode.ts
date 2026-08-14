@@ -113,10 +113,15 @@ async function scheduleTranslation(
   documentId: Id<"documents">
 ): Promise<void> {
   try {
+    // Resolved from the document rather than from a deployment-wide row: the
+    // target language belongs to whoever owns it, and the scheduler this runs
+    // under carries no identity to ask.
     const translationSettings: {
       defaultLanguageCode: string;
       translationVersion: number;
-    } = await ctx.runQuery(internal.settings.getInternal, {});
+    } = await ctx.runQuery(internal.settings.forDocumentInternal, {
+      documentId,
+    });
     await ctx.scheduler.runAfter(0, internal.translationNode.translateDocument, {
       documentId,
       languageCode: translationSettings.defaultLanguageCode,

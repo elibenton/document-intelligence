@@ -24,9 +24,9 @@ import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
 import { authedMutation, authedQuery } from "./authz";
 import { requireProject, requireSearch } from "./ownership";
+import { languageForDocument, languageForProject } from "./settings";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -61,13 +61,7 @@ export type PageHit = {
   snippet: string;
 };
 
-async function defaultLanguageCode(ctx: QueryCtx): Promise<string> {
-  const settings = await ctx.db
-    .query("appSettings")
-    .withIndex("by_key", (q) => q.eq("key", "global"))
-    .unique();
-  return settings?.defaultLanguageCode ?? "en";
-}
+
 
 
 // ---------------------------------------------------------------------------
@@ -130,7 +124,9 @@ export const suggest = authedQuery({
       documents.push(doc);
     }
 
-    const targetLanguageCode = await defaultLanguageCode(ctx);
+    const targetLanguageCode = (
+      await languageForProject(ctx, args.projectId)
+    ).defaultLanguageCode;
     const [translatedPageHits, pageHits] = await Promise.all([
       ctx.db
         .query("pageTranslations")
@@ -434,7 +430,9 @@ export const textLeg = internalQuery({
   },
   handler: async (ctx, args): Promise<PageHit[]> => {
     if (!args.keywords.trim()) return [];
-    const targetLanguageCode = await defaultLanguageCode(ctx);
+    const targetLanguageCode = (
+      await languageForProject(ctx, args.projectId)
+    ).defaultLanguageCode;
     // Both indexes filter by project, so every row returned is a keeper and
     // the leg's own cap is the only limit — no global over-fetch to survive.
     const [translatedHits, hits] = await Promise.all([
@@ -649,7 +647,12 @@ export const hydrateForSynthesis = internalQuery({
     ),
   },
   handler: async (ctx, args) => {
-    const targetLanguageCode = await defaultLanguageCode(ctx);
+    // Every key in a fused result set comes from the same search, and so
+    // from the same project — the first one answers for all of them.
+    const targetLanguageCode = args.keys[0]
+      ? (await languageForDocument(ctx, args.keys[0].documentId))
+          .defaultLanguageCode
+      : "en";
     const out: Array<{
       documentId: Id<"documents">;
       documentName: string;

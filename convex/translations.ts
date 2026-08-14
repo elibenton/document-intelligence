@@ -2,10 +2,11 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
+import { languageForDocument, languageForProject } from "./settings";
 
-const GLOBAL_SETTINGS_KEY = "global";
 const MAX_TRANSLATED_PAGES_PER_DOCUMENT = 2_000;
 
 const contextValidator = v.union(
@@ -24,15 +25,14 @@ export const getContext = internalQuery({
   handler: async (ctx, args) => {
     const document = await ctx.db.get(args.documentId);
     if (!document) return null;
-    const settings = await ctx.db
-      .query("appSettings")
-      .withIndex("by_key", (q) => q.eq("key", GLOBAL_SETTINGS_KEY))
-      .unique();
+    // From the project, not the document, because the document row is already
+    // in hand — languageForDocument would re-read it.
+    const settings = await languageForProject(ctx, document.projectId);
     return {
       sourceLanguageCode: document.sourceLanguageCode,
       sourceLanguageIsMixed: document.sourceLanguageIsMixed,
-      languageCode: settings?.defaultLanguageCode ?? "en",
-      translationVersion: settings?.translationVersion ?? 1,
+      languageCode: settings.defaultLanguageCode,
+      translationVersion: settings.translationVersion,
     };
   },
 });
@@ -166,18 +166,23 @@ export const setSourceLanguage = internalMutation({
   },
 });
 
+/**
+ * Is this queued translation still the one its owner wants?
+ *
+ * Takes the document because the answer is now per-account: work queued under
+ * one user's language must not be validated against another's. Every caller
+ * already has the id, since translation work is always about one document.
+ */
 async function isCurrent(
   ctx: MutationCtx,
+  documentId: Id<"documents">,
   languageCode: string,
   translationVersion: number
 ) {
-  const settings = await ctx.db
-    .query("appSettings")
-    .withIndex("by_key", (q) => q.eq("key", GLOBAL_SETTINGS_KEY))
-    .unique();
+  const settings = await languageForDocument(ctx, documentId);
   return (
-    (settings?.defaultLanguageCode ?? "en") === languageCode &&
-    (settings?.translationVersion ?? 1) === translationVersion
+    settings.defaultLanguageCode === languageCode &&
+    settings.translationVersion === translationVersion
   );
 }
 
@@ -189,7 +194,7 @@ export const beginTranslation = internalMutation({
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.languageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.languageCode, args.translationVersion))) {
       return false;
     }
     const document = await ctx.db.get(args.documentId);
@@ -233,7 +238,7 @@ export const queueTranslation = internalMutation({
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.languageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.languageCode, args.translationVersion))) {
       return false;
     }
     const document = await ctx.db.get(args.documentId);
@@ -261,7 +266,7 @@ export const markNotNeeded = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.languageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.languageCode, args.translationVersion))) {
       return null;
     }
     await ctx.db.patch(args.documentId, {
@@ -299,7 +304,7 @@ export const savePageChunk = internalMutation({
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.targetLanguageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.targetLanguageCode, args.translationVersion))) {
       return false;
     }
     // Read before writing: the document row is only touched at the end of this
@@ -367,7 +372,7 @@ export const activateCachedPage = internalMutation({
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.targetLanguageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.targetLanguageCode, args.translationVersion))) {
       return false;
     }
     const existing = await ctx.db
@@ -400,7 +405,7 @@ export const saveTranscriptBatch = internalMutation({
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.targetLanguageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.targetLanguageCode, args.translationVersion))) {
       return false;
     }
     for (const translation of args.translations) {
@@ -435,7 +440,7 @@ export const completeTranslation = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.languageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.languageCode, args.translationVersion))) {
       return null;
     }
     await ctx.db.patch(args.documentId, {
@@ -470,7 +475,7 @@ export const failTranslation = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.languageCode, args.translationVersion))) {
+    if (!(await isCurrent(ctx, args.documentId, args.languageCode, args.translationVersion))) {
       return null;
     }
     const errorMessage = args.errorMessage.slice(0, 500);
@@ -502,11 +507,9 @@ export const pagesByDocument = authedQuery({
   ),
   handler: async (ctx, args) => {
     await requireDocument(ctx, args.documentId);
-    const settings = await ctx.db
-      .query("appSettings")
-      .withIndex("by_key", (q) => q.eq("key", GLOBAL_SETTINGS_KEY))
-      .unique();
-    const targetLanguageCode = settings?.defaultLanguageCode ?? "en";
+    const targetLanguageCode = (
+      await languageForDocument(ctx, args.documentId)
+    ).defaultLanguageCode;
     const rows = await ctx.db
       .query("pageTranslations")
       .withIndex("by_document_and_target_and_page", (q) =>
@@ -528,12 +531,8 @@ export const retry = authedMutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireDocument(ctx, args.documentId);
-    const settings = await ctx.db
-      .query("appSettings")
-      .withIndex("by_key", (q) => q.eq("key", GLOBAL_SETTINGS_KEY))
-      .unique();
-    const languageCode = settings?.defaultLanguageCode ?? "en";
-    const translationVersion = settings?.translationVersion ?? 1;
+    const { defaultLanguageCode: languageCode, translationVersion } =
+      await languageForDocument(ctx, args.documentId);
     await ctx.runMutation(internal.translations.queueTranslation, {
       documentId: args.documentId,
       languageCode,
