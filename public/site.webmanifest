@@ -1,8 +1,10 @@
 {
+  "id": "/",
   "name": "Document Intelligence",
   "short_name": "DocIntel",
   "description": "Upload PDFs, CSVs, images, and recordings; store and parse every source, extract entities and relationships, and uncover the connections inside your evidence.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#863bff",
@@ -17,5 +19,8 @@
       "sizes": "512x512",
       "type": "image/png"
     }
-  ]
+  ],
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  }
 }
