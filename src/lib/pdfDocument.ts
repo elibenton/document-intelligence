@@ -33,6 +33,14 @@ function open(url: string): Entry {
 
   const task = pdfjs.getDocument({
     url,
+    // Loose runtime assets, served by the pdfjsAssets plugin in vite.config.ts.
+    // Omitting them is silent: a JPEG 2000 scan paints a blank page and only
+    // warns in the console. convex/renderPages.ts passes the same four.
+    wasmUrl: "/pdfjs/wasm/",
+    cMapUrl: "/pdfjs/cmaps/",
+    cMapPacked: true,
+    standardFontDataUrl: "/pdfjs/standard_fonts/",
+    iccUrl: "/pdfjs/iccs/",
     // pdf.js defaults, deliberately. Convex storage does answer range requests
     // (Accept-Ranges: bytes, 206 + Content-Range verified by probe), but
     // disableStream/disableAutoFetch did not make pdf.js issue them here — it
