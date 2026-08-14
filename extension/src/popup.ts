@@ -31,7 +31,7 @@ function showStatus(status: {
         const link = document.createElement("a");
         link.href = `${base}/documents/${status.documentId}`;
         link.target = "_blank";
-        link.textContent = "Open in Document Intelligence";
+        link.textContent = "Open in Haystack";
         statusEl.appendChild(link);
       });
       break;

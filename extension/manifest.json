@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Document Intelligence Clipper",
+  "name": "Haystack Clipper",
   "version": "0.1.0",
-  "description": "Archive and parse the current page into your Document Intelligence project.",
+  "description": "Archive and parse the current page into your Haystack project.",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["https://*.convex.site/*"],
   "background": { "service_worker": "background.js" },

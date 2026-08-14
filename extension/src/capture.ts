@@ -193,7 +193,7 @@ async function buildArchive(options: CaptureOptions): Promise<string> {
   head.insertBefore(metaCharset, head.firstChild);
 
   const banner = `<!--
-  Archived by Document Intelligence Clipper
+  Archived by Haystack Clipper
   Source: ${location.href}
   Clipped: ${new Date().toISOString()}
 -->\n`;
@@ -356,11 +356,11 @@ function extractMetadata(): ClipPayload["metadata"] & { title?: string } {
 
 declare global {
   interface Window {
-    __docIntelCapture: (options: CaptureOptions) => Promise<ClipPayload>;
+    __haystackCapture: (options: CaptureOptions) => Promise<ClipPayload>;
   }
 }
 
-window.__docIntelCapture = async (options: CaptureOptions) => {
+window.__haystackCapture = async (options: CaptureOptions) => {
   const pageMeta = extractMetadata();
 
   // Readability mutates its input — give it a clone

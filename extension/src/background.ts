@@ -60,8 +60,8 @@ async function capture(
     target: { tabId },
     func: (opts: { inlineImages: boolean }) =>
       (window as unknown as {
-        __docIntelCapture: (o: unknown) => Promise<unknown>;
-      }).__docIntelCapture(opts),
+        __haystackCapture: (o: unknown) => Promise<unknown>;
+      }).__haystackCapture(opts),
     args: [{ inlineImages }],
   });
   if (!result?.result) throw new Error("Capture returned no result");
