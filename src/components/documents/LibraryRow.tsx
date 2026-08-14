@@ -69,15 +69,21 @@ export function LibraryRow({
             with a badge on the right — the icon is already the eye's first
             stop, and a column of red marks is scannable in a way trailing text
             is not. */}
-        <span className="group/check relative z-10 grid size-4 shrink-0 place-items-center">
+        {/* The title sits on this container rather than on the icon inside it.
+            On a failed row the icon covers the whole slot, and a title needs
+            pointer events to show — so putting it on the icon made the icon
+            swallow every click meant for the checkbox underneath. The container
+            is the checkbox's own parent, so hovering anywhere in the slot still
+            surfaces the message and nothing intercepts the click. */}
+        <span
+          className="group/check relative z-10 grid size-5 shrink-0 place-items-center"
+          title={failed ? (doc.errorMessage ?? "Processing failed") : undefined}
+        >
           {failed ? (
-            // The wrapper carries the tooltip because lucide icons don't take
-            // a `title` prop, and the error message is the point of the mark.
             <span
               role="img"
               aria-label={`Failed: ${doc.errorMessage ?? "processing failed"}`}
-              title={doc.errorMessage ?? "Processing failed"}
-              className={iconVisibility}
+              className={cn(iconVisibility, "pointer-events-none")}
             >
               <CircleAlert className="size-4 text-destructive" />
             </span>
