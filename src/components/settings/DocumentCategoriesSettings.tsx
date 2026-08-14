@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
-import type { Doc } from "../../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
   CATEGORY_COLOR_KEYS,
   CATEGORY_COLOR_PALETTE,
@@ -201,7 +201,7 @@ function CategoryRow({
   );
 }
 
-function AddCategoryForm() {
+function AddCategoryForm({ projectId }: { projectId: Id<"projects"> }) {
   const create = useMutation(api.documentCategories.create);
   const [label, setLabel] = useState("");
   const [description, setDescription] = useState("");
@@ -214,7 +214,12 @@ function AddCategoryForm() {
     setSaving(true);
     setError(null);
     try {
-      await create({ label: label.trim(), description: description.trim(), color });
+      await create({
+        projectId,
+        label: label.trim(),
+        description: description.trim(),
+        color,
+      });
       setLabel("");
       setDescription("");
       setColor("slate");
@@ -255,14 +260,20 @@ function AddCategoryForm() {
 }
 
 /**
- * The enforced primary-category taxonomy, managed from Settings: see every
- * category, add a new one, and see what Analyze has actually classified into
- * each one so far. Every category shown here is exactly what
- * DocTypePills draws from — the dark half of every pill in the app.
+ * This project's enforced primary-category taxonomy: see every category, add a
+ * new one, and see what Analyze has actually classified into each one so far.
+ * Every category shown here is exactly what DocTypePills draws from — the dark
+ * half of every pill in the project.
  */
-export function DocumentCategoriesSettings() {
-  const categories = useQuery(api.documentCategories.list);
-  const breakdown = useQuery(api.documentCategories.bySecondaryType);
+export function DocumentCategoriesSettings({
+  projectId,
+}: {
+  projectId: Id<"projects">;
+}) {
+  const categories = useQuery(api.documentCategories.list, { projectId });
+  const breakdown = useQuery(api.documentCategories.bySecondaryType, {
+    projectId,
+  });
   const breakdownByKey = new Map(
     (breakdown ?? []).map((b) => [b.categoryKey, b as CategoryBreakdown])
   );
@@ -283,7 +294,7 @@ export function DocumentCategoriesSettings() {
           />
         ))
       )}
-      <AddCategoryForm />
+      <AddCategoryForm projectId={projectId} />
       <p className="px-4 py-3 text-xs text-muted-foreground">
         Documents that don't confidently match any category above are filed as
         "Other" and shown without a pill.

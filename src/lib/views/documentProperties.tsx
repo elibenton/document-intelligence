@@ -163,7 +163,11 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     // Renders the whole two-tone pill — category and kind together — so the
     // Library shows the exact same DocTypePills object as the document page.
     render: (doc) => (
-      <DocTypePills primaryCategory={doc.primaryCategory} primaryKind={doc.primaryKind} />
+      <DocTypePills
+        projectId={doc.projectId}
+        primaryCategory={doc.primaryCategory}
+        primaryKind={doc.primaryKind}
+      />
     ),
   },
   {

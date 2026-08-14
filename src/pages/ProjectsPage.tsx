@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
-import { Link, useNavigate } from "react-router";
-import { FolderOpen, MoreVertical, Plus, Trash2, X } from "lucide-react";
+import { Link } from "react-router";
+import { FolderOpen, MoreVertical, Trash2 } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,8 +9,8 @@ import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { SearchField } from "@/components/ui/search-field";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { NewProjectDialog } from "@/components/projects/NewProjectDialog";
 import { counted, plural } from "@/lib/plural";
 
 type ProjectListItem = Doc<"projects"> & { documentCount: number };
@@ -186,7 +186,6 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
 }
 
 export default function ProjectsPage() {
-  const navigate = useNavigate();
 
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -202,27 +201,20 @@ export default function ProjectsPage() {
   );
   const projects = debounced.trim() ? searchResults : allProjects;
 
-  const createProject = useMutation(api.projects.create);
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [creating, setCreating] = useState(false);
-
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newName.trim() || creating) return;
-    setCreating(true);
-    try {
-      const { slug } = await createProject({ name: newName.trim() });
-      navigate(`/p/${slug}`);
-    } finally {
-      setCreating(false);
-    }
-  }
-
   return (
     <PageShell
       width="prose"
-      title="Document Intelligence"
+      title={
+        <span className="flex items-center gap-2">
+          {/* Black line art, so it needs inverting to stay visible in dark. */}
+          <img
+            src="/haystack.png"
+            alt=""
+            className="size-6 shrink-0 object-contain dark:invert"
+          />
+          Haystack
+        </span>
+      }
       subtitle="Pick a project — each one is its own corpus with its own entities and connections."
     >
       <SearchField
@@ -233,42 +225,7 @@ export default function ProjectsPage() {
         aria-label="Search projects"
       />
 
-      <SectionHeading
-        actions={
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowCreateForm(!showCreateForm)}
-          >
-            {showCreateForm ? (
-              <>
-                <X className="size-3.5" /> Cancel
-              </>
-            ) : (
-              <>
-                <Plus className="size-3.5" /> New Project
-              </>
-            )}
-          </Button>
-        }
-      >
-        Projects
-      </SectionHeading>
-
-      {showCreateForm && (
-        <form onSubmit={handleCreate} className="mb-4 flex gap-2">
-          <Input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Project name…"
-            aria-label="New project name"
-            autoFocus
-          />
-          <Button type="submit" size="sm" disabled={creating} className="shrink-0">
-            {creating ? "Creating…" : "Create"}
-          </Button>
-        </form>
-      )}
+      <SectionHeading actions={<NewProjectDialog />}>Projects</SectionHeading>
 
       {projects === undefined ? (
         <div className="grid grid-cols-2 gap-4">

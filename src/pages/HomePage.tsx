@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { Link, useParams } from "react-router";
-import { ArrowLeft, Plus, RotateCw, Star, Tag, Trash2, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Plus,
+  RotateCw,
+  Settings,
+  Star,
+  Tag,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
@@ -58,7 +67,7 @@ function SelectionToolbar({
   const remove = useMutation(api.documents.remove);
   const reanalyze = useAction(api.processing.runAnalyze);
   const { trackAnalyze } = useUploads();
-  const allKinds = useQuery(api.kinds.list);
+  const allKinds = useQuery(api.kinds.list, { projectId });
 
   const [tagOpen, setTagOpen] = useState(false);
   const [newTag, setNewTag] = useState("");
@@ -558,6 +567,14 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
         >
           {project?.name ?? ""}
         </span>
+        <Link
+          to={`/p/${project.slug}/settings`}
+          title="Project settings"
+          aria-label="Project settings"
+          className="ml-auto grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+        >
+          <Settings className="size-4" />
+        </Link>
       </div>
 
       <div className="flex-1">

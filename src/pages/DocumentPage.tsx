@@ -481,6 +481,7 @@ export default function DocumentPage() {
             )}
           </div>
           <DocTypePills
+            projectId={document.projectId}
             primaryCategory={document.primaryCategory}
             primaryKind={document.primaryKind}
             className="shrink-0"
@@ -952,6 +953,7 @@ export default function DocumentPage() {
                       <DocumentActions
                         documentId={document._id}
                         documentName={document.name}
+                        projectId={document.projectId}
                         onDeleted={() =>
                           navigate(projectSlug ? `/p/${projectSlug}` : "/")
                         }

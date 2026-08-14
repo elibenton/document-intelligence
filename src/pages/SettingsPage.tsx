@@ -5,7 +5,6 @@ import { CircleAlert, CircleCheck, Languages } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import ProviderAlert from "@/components/settings/ProviderAlert";
 import { ProcessingQueueControls } from "@/components/settings/ProcessingQueueControls";
-import { DocumentCategoriesSettings } from "@/components/settings/DocumentCategoriesSettings";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
@@ -124,19 +123,12 @@ export default function SettingsPage() {
   return (
     <PageShell
       title="Settings & Usage"
-      subtitle="API activity, token usage, and estimated cost."
+      subtitle="API activity, token usage, and estimated cost. Categories and entity types are per project — see that project's settings."
       back={{ to: "/", label: "Back to projects" }}
     >
       <>
           {/* Provider health — loud when a provider is down or out of credits */}
           <ProviderAlert />
-
-          <SectionHeading>Document categories</SectionHeading>
-          <p className="text-sm text-muted-foreground mb-3">
-            The enforced primary categories Analyze sorts every document into.
-            Add your own, or adjust how the built-in ones are described.
-          </p>
-          <DocumentCategoriesSettings />
 
           <SectionHeading>Processing</SectionHeading>
           <ProcessingQueueControls />

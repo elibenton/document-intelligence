@@ -1,5 +1,6 @@
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 import { styleForColor } from "./docTypeCategories";
 
@@ -23,18 +24,28 @@ function sentenceCase(value: string): string {
  *
  * The category list is fetched here (not passed in) so every caller —
  * document rows, the document page header — renders from the same live
- * Settings-managed taxonomy without threading it through props.
+ * taxonomy without threading it through props. Only the project has to be
+ * passed, because the taxonomy belongs to one: the same key means different
+ * things, and carries a different color, in two different projects.
+ *
+ * A document outside any project has no taxonomy to resolve against and shows
+ * its kind alone.
  */
 export function DocTypePills({
+  projectId,
   primaryCategory,
   primaryKind,
   className,
 }: {
+  projectId?: Id<"projects">;
   primaryCategory?: string;
   primaryKind?: string;
   className?: string;
 }) {
-  const categories = useQuery(api.documentCategories.list);
+  const categories = useQuery(
+    api.documentCategories.list,
+    projectId ? { projectId } : "skip"
+  );
   const category = primaryCategory
     ? categories?.find((c) => c.key === primaryCategory)
     : undefined;
