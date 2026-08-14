@@ -89,10 +89,15 @@ export const ingestGraph = internalMutation({
       await ctx.db.delete(mention._id);
     }
 
+    // Bounded, for the same reason blocks.byDocument is: a dense born-digital
+    // PDF carries tens of thousands of text items, and collecting them all put
+    // this mutation over the read limit — 32,000 documents / 15.8MB, measured.
+    // The transaction then rolled back, so the document silently ended up with
+    // no graph at all. A truncated mention set beats no graph.
     const blocks = await ctx.db
       .query("blocks")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .collect();
+      .take(6_000);
     const pages = await ctx.db
       .query("pages")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
