@@ -276,7 +276,7 @@ export async function chatCompletion(
         ? options.responseSchema.name +
           JSON.stringify(options.responseSchema.schema)
         : "",
-    ].join(" ")
+    ].join("\0")
   );
   const reportUsage = async (report: {
     status: "ok" | "error";
