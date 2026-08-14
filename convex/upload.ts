@@ -6,10 +6,8 @@ import { RENDERER_VERSION } from "./rendererConfig";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
 import { renderEnqueueOptions, renderPool } from "./renderPool";
 import { authedMutation, authedQuery } from "./authz";
-
-// Interfaze accepts URLs in prompt text up to 80 MB. Keep headroom for its
-// fetch/redirect accounting and mirror the browser preflight's safe ceiling.
-const AUDIO_URL_SAFE_BYTES = 70_000_000;
+import { PROVIDER_URL_SAFE_BYTES } from "./interfazeLimits";
+import { requireProject } from "./ownership";
 
 export const generateUploadUrl = authedMutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
@@ -92,6 +90,7 @@ export const findDuplicate = authedQuery({
     name: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const exact = await findByContentHash(ctx, args.projectId, args.contentHash);
     if (exact) {
       return {
@@ -122,6 +121,7 @@ export const createDocument = authedMutation({
     contentHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const storedFile = await ctx.db.system.get("_storage", args.storageId);
     if (!storedFile) throw new Error("Uploaded file not found in storage");
 
@@ -151,6 +151,7 @@ export const createDocument = authedMutation({
       storageId: args.storageId,
       contentHash: args.contentHash,
       mimeType: verifiedMimeType,
+      sizeBytes: storedFile.size,
       mediaType,
       status: "uploaded",
       uploadedAt: Date.now(),
@@ -171,7 +172,7 @@ export const createDocument = authedMutation({
     // Keep oversized recordings out of a provider request that cannot
     // succeed. The original remains in storage so a future normalization job
     // can create a compressed derivative without requiring another upload.
-    if (mediaType === "audio" && storedFile.size > AUDIO_URL_SAFE_BYTES) {
+    if (mediaType === "audio" && storedFile.size > PROVIDER_URL_SAFE_BYTES) {
       await ctx.db.patch(documentId, {
         status: "failed",
         errorMessage: `${Math.round(storedFile.size / 1_000_000)} MB audio needs optimization before Interfaze can transcribe it. Automatic audio optimization is not connected yet.`,

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { PROCESSING_MAX_PARALLELISM } from "./processingPool";
 import { authedQuery } from "./authz";
+import { requireDocument } from "./ownership";
 
 const jobValidator = v.object({
   _id: v.id("processingJobs"),
@@ -48,6 +49,7 @@ export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: v.array(jobValidator),
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     return await ctx.db
       .query("processingJobs")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -64,6 +66,7 @@ export const estimateByDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: estimateValidator,
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const documentJobs = await ctx.db
       .query("processingJobs")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))

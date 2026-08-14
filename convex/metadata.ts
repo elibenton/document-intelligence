@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { OTHER_CATEGORY } from "./analyzePrompt";
 import { applyDisplayName, normalizeTitle } from "./rename";
 import { authedMutation } from "./authz";
+import { requireDocument } from "./ownership";
 
 // ---------------------------------------------------------------------------
 // Metadata pass — default-runtime half.
@@ -365,8 +366,10 @@ export function sanitizeCitation(
   };
 
   // Everything but `type` — see the doc comment on why type alone is not data.
-  const { type: _type, ...facts } = citation;
-  if (Object.values(facts).every((value) => value === undefined)) return undefined;
+  const hasFacts = Object.entries(citation).some(
+    ([field, value]) => field !== "type" && value !== undefined
+  );
+  if (!hasFacts) return undefined;
 
   return Object.fromEntries(
     Object.entries(citation).filter(([, value]) => value !== undefined)
@@ -433,8 +436,7 @@ export const updateDocumentMeta = authedMutation({
     metadata: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const document = await ctx.db.get(args.documentId);
-    if (!document) return;
+    await requireDocument(ctx, args.documentId);
     // The Info tab still edits a single kind; write the array alongside it so
     // the two never drift (documents.updateIdentity writes both as well).
     const kind = args.primaryKind?.trim().toLowerCase();

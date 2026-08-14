@@ -1,6 +1,7 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { authedQuery } from "./authz";
+import { requireDocument } from "./ownership";
 
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
@@ -27,6 +28,7 @@ export const byDocument = authedQuery({
     })
   ),
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     return await ctx.db
       .query("transcriptSegments")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))

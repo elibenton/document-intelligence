@@ -1,10 +1,12 @@
 import { v } from "convex/values";
 import { authedMutation, authedQuery } from "./authz";
+import { requireDocument, requireEntity, requireEntityRole } from "./ownership";
 
 /** Roles an entity plays, grouped with the asserting document's name. */
 export const forEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
+    await requireEntity(ctx, args.entityId);
     const rows = await ctx.db
       .query("entityRoles")
       .withIndex("by_entity", (q) => q.eq("entityId", args.entityId))
@@ -28,6 +30,7 @@ export const forEntity = authedQuery({
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const rows = await ctx.db
       .query("entityRoles")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -56,6 +59,8 @@ export const addRole = authedMutation({
     role: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireEntity(ctx, args.entityId);
+    await requireDocument(ctx, args.documentId);
     const existing = await ctx.db
       .query("entityRoles")
       .withIndex("by_entity_and_document", (q) =>
@@ -76,6 +81,7 @@ export const addRole = authedMutation({
 export const removeRole = authedMutation({
   args: { id: v.id("entityRoles") },
   handler: async (ctx, args) => {
+    await requireEntityRole(ctx, args.id);
     await ctx.db.delete(args.id);
   },
 });

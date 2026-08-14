@@ -1,6 +1,7 @@
 import { internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { authedQuery } from "./authz";
+import { requireDocument } from "./ownership";
 
 /**
  * Page list for a document, stripped to what the viewer needs (numbers +
@@ -10,6 +11,7 @@ import { authedQuery } from "./authz";
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const pages = await ctx.db
       .query("pages")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -74,6 +76,7 @@ export const openingTextByDocument = internalQuery({
 export const dimensionsByPage = authedQuery({
   args: { documentId: v.id("documents"), pageNumber: v.number() },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const page = await ctx.db
       .query("pages")
       .withIndex("by_document", (q) =>

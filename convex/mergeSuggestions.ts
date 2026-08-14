@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { recountEntity } from "./entityResolution";
 import { authedMutation, authedQuery } from "./authz";
+import { requireMergeSuggestion, requireProject } from "./ownership";
 
 /**
  * Pending merge suggestions for one project, with both entities hydrated for
@@ -12,6 +13,7 @@ import { authedMutation, authedQuery } from "./authz";
 export const listPending = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const pending = await ctx.db
       .query("mergeSuggestions")
       .withIndex("by_status", (q) => q.eq("status", "pending"))
@@ -51,6 +53,7 @@ export const listPending = authedQuery({
 export const accept = authedMutation({
   args: { id: v.id("mergeSuggestions") },
   handler: async (ctx, args) => {
+    await requireMergeSuggestion(ctx, args.id);
     const suggestion = await ctx.db.get(args.id);
     if (!suggestion || suggestion.status !== "pending") return;
     const source = await ctx.db.get(suggestion.sourceEntityId);
@@ -153,6 +156,7 @@ export const accept = authedMutation({
 export const reject = authedMutation({
   args: { id: v.id("mergeSuggestions") },
   handler: async (ctx, args) => {
+    await requireMergeSuggestion(ctx, args.id);
     const suggestion = await ctx.db.get(args.id);
     if (!suggestion || suggestion.status !== "pending") return;
     await ctx.db.patch(args.id, { status: "rejected" });

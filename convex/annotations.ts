@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { authedMutation, authedQuery } from "./authz";
+import { requireAnnotation, requireDocument } from "./ownership";
 
 /**
  * Highlights and comments the user drew on a document's pages.
@@ -38,6 +39,7 @@ function normalizeComment(comment: string | undefined): string | undefined {
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const rows = await ctx.db
       .query("annotations")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -62,8 +64,7 @@ export const create = authedMutation({
     blockIds: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    const document = await ctx.db.get(args.documentId);
-    if (!document) throw new Error("Document not found");
+    const document = await requireDocument(ctx, args.documentId);
     if (args.rects.length === 0) {
       throw new Error("An annotation needs at least one rect to anchor to");
     }
@@ -97,9 +98,7 @@ export const update = authedMutation({
     comment: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db.get(args.id);
-    if (!existing) throw new Error("Annotation not found");
-
+    await requireAnnotation(ctx, args.id);
     await ctx.db.patch(args.id, {
       ...(args.color ? { color: args.color } : {}),
       ...(args.comment === undefined
@@ -113,6 +112,7 @@ export const update = authedMutation({
 export const remove = authedMutation({
   args: { id: v.id("annotations") },
   handler: async (ctx, args) => {
+    await requireAnnotation(ctx, args.id);
     await ctx.db.delete(args.id);
   },
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  sanitizeCitation,
   sanitizeDocumentDate,
   sanitizeDocumentPlace,
   sanitizeTableOfContents,
@@ -172,5 +173,102 @@ describe("sanitizeDocumentPlace", () => {
           "The document does not state where it was written, though it discusses properties in several counties across the state and refers to a filing office.",
       })
     ).toBeNull();
+  });
+});
+
+describe("sanitizeCitation", () => {
+  it("keeps the bibliographic facts a document stated", () => {
+    expect(
+      sanitizeCitation({
+        type: "article-journal",
+        contributors: [
+          { role: "author", family: "Berman", given: "Sheri", literal: "" },
+        ],
+        container_title: "Journal of Democracy",
+        volume: "24",
+        issue: "1",
+        pages: "64-74",
+      })
+    ).toEqual({
+      type: "article-journal",
+      contributors: [{ role: "author", family: "Berman", given: "Sheri" }],
+      containerTitle: "Journal of Democracy",
+      volume: "24",
+      issue: "1",
+      pages: "64-74",
+    });
+  });
+
+  it("keeps an organization credited by its whole name", () => {
+    const result = sanitizeCitation({
+      type: "report",
+      contributors: [
+        { role: "author", family: "", given: "", literal: "Department of Cannabis Control" },
+      ],
+    });
+    expect(result?.contributors).toEqual([
+      { role: "author", literal: "Department of Cannabis Control" },
+    ]);
+  });
+
+  it("drops a citation that is nothing but a type", () => {
+    // The model answering a required field, not a fact about the document —
+    // storing it would make every analyzed document look cited.
+    expect(sanitizeCitation({ type: "document", contributors: [] })).toBeUndefined();
+    expect(sanitizeCitation({ type: "document" })).toBeUndefined();
+    expect(sanitizeCitation(undefined)).toBeUndefined();
+  });
+
+  it("drops refusal words wearing a value's clothes", () => {
+    expect(
+      sanitizeCitation({
+        type: "report",
+        publisher: "Unknown",
+        container_title: "N/A",
+        authority: "not stated",
+        volume: "-",
+      })
+    ).toBeUndefined();
+  });
+
+  it("drops an off-enum type but keeps the facts beside it", () => {
+    const result = sanitizeCitation({
+      type: "court-filing",
+      publisher: "Superior Court of California",
+    });
+    expect(result?.type).toBeUndefined();
+    expect(result?.publisher).toBe("Superior Court of California");
+  });
+
+  it("drops contributors with no name at all", () => {
+    expect(
+      sanitizeCitation({
+        type: "book",
+        contributors: [
+          { role: "author", family: "", given: "", literal: "" },
+          { role: "editor", family: "Rao", given: "N.", literal: "" },
+        ],
+        publisher: "Verso",
+      })?.contributors
+    ).toEqual([{ role: "editor", family: "Rao", given: "N." }]);
+  });
+
+  it("normalizes an unrecognized contributor role to author", () => {
+    expect(
+      sanitizeCitation({
+        type: "book",
+        contributors: [{ role: "compiler", family: "Ito", given: "K." }],
+      })?.contributors
+    ).toEqual([{ role: "author", family: "Ito", given: "K." }]);
+  });
+
+  it("drops prose where a bibliographic label belongs", () => {
+    expect(
+      sanitizeCitation({
+        type: "report",
+        publisher:
+          "The document does not identify a publisher, though it appears to have been produced internally by an agency and circulated to a limited audience of stakeholders and their counsel before release.",
+      })
+    ).toBeUndefined();
   });
 });

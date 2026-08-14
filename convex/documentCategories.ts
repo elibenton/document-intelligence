@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import type { TemplateCategory } from "./projectTemplates";
 import { authedMutation, authedQuery } from "./authz";
+import { requireDocumentCategory, requireProject } from "./ownership";
 
 /**
  * The enforced primary-category taxonomy: user-managed rows that back both
@@ -42,7 +43,10 @@ async function readCategories(ctx: QueryCtx, projectId: Id<"projects">) {
 
 export const list = authedQuery({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => readCategories(ctx, args.projectId),
+  handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
+    return await readCategories(ctx, args.projectId);
+  },
 });
 
 /** The same list, for the Analyze prompt. See documents.getInternal. */
@@ -59,6 +63,7 @@ export const create = authedMutation({
     color: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const label = args.label.trim().slice(0, MAX_LABEL);
     if (!label) throw new Error("Category name is required");
     const key = slugify(label);
@@ -141,9 +146,7 @@ export const update = authedMutation({
     color: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db.get(args.id);
-    if (!existing) return;
-
+    await requireDocumentCategory(ctx, args.id);
     const patch: { label?: string; description?: string; color?: string } = {};
     if (args.label !== undefined) {
       const label = args.label.trim().slice(0, MAX_LABEL);
@@ -163,8 +166,7 @@ export const update = authedMutation({
 export const remove = authedMutation({
   args: { id: v.id("documentCategories") },
   handler: async (ctx, args) => {
-    const category = await ctx.db.get(args.id);
-    if (!category) return;
+    const category = await requireDocumentCategory(ctx, args.id);
 
     // Indexed exact lookup, not a scan — accurate regardless of corpus size.
     // Scoped to the category's own project: another project's documents filed
@@ -197,6 +199,7 @@ const BREAKDOWN_LIMIT = 5000;
 export const bySecondaryType = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const categories = await ctx.db
       .query("documentCategories")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))

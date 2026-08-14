@@ -40,6 +40,7 @@ import type {
 } from "interfaze";
 
 import { InterfazeFailure } from "./interfazeErrors";
+import { PROVIDER_FILE_OBJECT_SAFE_BYTES } from "./interfazeLimits";
 import { interfazeCostUsd } from "./interfazeCost";
 import type { UsageLogger } from "./interfazeCost";
 import { ocrPrecontextToPages } from "./interfazeOcr";
@@ -179,12 +180,24 @@ function classifyError(e: unknown): InterfazeFailure {
  * Pass documents/images through the `file` part (not as a bare URL in text): a
  * URL in text gets the OCR text into context but loses visual grounding —
  * A/B tested, the visual-evidence pass confabulated logos/seals with text URLs
- * and was clean with file objects.
+ * and was clean with file objects. It also measured 11x the cost for identical
+ * OCR results, so the file part stays the default for everything that fits.
+ *
+ * A file part is capped at 20 MB and prompt text at 80 MB, so above the smaller
+ * ceiling there is no choice: send the URL as text and accept both costs. That
+ * is strictly better than the alternative it replaced, which was refusing the
+ * document at upload. `sizeBytes` is optional because rows predating
+ * `documents.sizeBytes` have none — and every one of those passed the old
+ * 18 MB gate, so defaulting them to the file part is correct.
  */
 export function fileUrlContent(
   url: string,
-  filename = "document.pdf"
+  filename = "document.pdf",
+  sizeBytes?: number
 ): ChatCompletionContentPart {
+  if (sizeBytes !== undefined && sizeBytes > PROVIDER_FILE_OBJECT_SAFE_BYTES) {
+    return { type: "text", text: `The document to work on is at this URL: ${url}` };
+  }
   return inputs.file(url, { filename });
 }
 
@@ -461,13 +474,13 @@ export async function ocrDocument(
   fileUrl: string,
   filename: string,
   apiKey: string,
-  options?: { log?: UsageLogger; bypassCache?: boolean }
+  options?: { log?: UsageLogger; bypassCache?: boolean; sizeBytes?: number }
 ): Promise<{ pages: OcrPageResult[]; precontext: Precontext[]; vcache: boolean }> {
   const result = await chatCompletion(apiKey, {
     task: "ocr",
     content: [
       { type: "text", text: "Extract all text and data." },
-      fileUrlContent(fileUrl, filename),
+      fileUrlContent(fileUrl, filename, options?.sizeBytes),
     ],
     bypassCache: options?.bypassCache,
     usage: options?.log ? { log: options.log, operation: "ocr" } : undefined,

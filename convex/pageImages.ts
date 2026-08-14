@@ -7,6 +7,7 @@ import { vOnCompleteArgs } from "@convex-dev/workpool";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { authedMutation } from "./authz";
+import { requireDocument } from "./ownership";
 
 const bboxValidator = v.object({
   x: v.number(),
@@ -371,8 +372,7 @@ async function scheduleRender(
 export const ensureRendered = authedMutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
-    const doc = await ctx.db.get(args.documentId);
-    if (!doc) return null;
+    const doc = await requireDocument(ctx, args.documentId);
     const isPaged =
       doc.mimeType === "application/pdf" ||
       doc.mediaType === "pdf" ||
@@ -403,8 +403,7 @@ export const ensureRendered = authedMutation({
 export const retryRender = authedMutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
-    const doc = await ctx.db.get(args.documentId);
-    if (!doc) return null;
+    const doc = await requireDocument(ctx, args.documentId);
     const isPaged =
       doc.mimeType === "application/pdf" ||
       doc.mediaType === "pdf" ||

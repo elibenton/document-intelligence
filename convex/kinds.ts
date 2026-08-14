@@ -3,6 +3,7 @@ import type { QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { authedQuery } from "./authz";
+import { requireProject } from "./ownership";
 
 /**
  * Semantic document kinds.
@@ -29,7 +30,10 @@ function readKinds(ctx: QueryCtx, projectId: Id<"projects">) {
 /** This project's document kinds. */
 export const list = authedQuery({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => readKinds(ctx, args.projectId),
+  handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
+    return await readKinds(ctx, args.projectId);
+  },
 });
 
 /** The same list, for the Analyze prompt. See documents.getInternal. */

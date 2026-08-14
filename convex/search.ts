@@ -26,6 +26,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { authedMutation, authedQuery } from "./authz";
+import { requireProject, requireSearch } from "./ownership";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -87,6 +88,7 @@ function titleOf(doc: { name: string; displayName?: string }): string {
 export const suggest = authedQuery({
   args: { q: v.string(), projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const q = args.q.trim();
     if (q.length < 2) {
       return { entities: [], documents: [], pages: [] };
@@ -219,6 +221,7 @@ export const start = authedMutation({
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const q = args.query.trim();
     if (!q) throw new Error("Empty search query");
 
@@ -266,6 +269,7 @@ export const start = authedMutation({
 export const get = authedQuery({
   args: { id: v.id("searches") },
   handler: async (ctx, args) => {
+    await requireSearch(ctx, args.id);
     return await ctx.db.get(args.id);
   },
 });
@@ -282,6 +286,7 @@ export const recent = authedQuery({
     })
   ),
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const rows = await ctx.db
       .query("searches")
       .withIndex("by_project", (s) => s.eq("projectId", args.projectId))

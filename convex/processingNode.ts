@@ -194,6 +194,7 @@ export const runDocumentUnderstanding = internalAction({
           await ocrDocument(fileUrl, document.name, apiKey, {
             log,
             bypassCache: args.bypassCache,
+            sizeBytes: document.sizeBytes,
           })
         ).pages;
 

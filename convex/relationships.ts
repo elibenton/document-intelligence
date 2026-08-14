@@ -12,6 +12,7 @@ import {
   relationSortIndex,
 } from "./relationTypes";
 import { authedQuery } from "./authz";
+import { requireDocument, requireEntity } from "./ownership";
 
 // ---------------------------------------------------------------------------
 // Mutation: resolve names to entities and store relationship rows
@@ -256,6 +257,7 @@ function isShownType(entity: Doc<"entities">): boolean {
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const rows = await ctx.db
       .query("relationships")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -314,6 +316,7 @@ export const byDocument = authedQuery({
 export const forEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
+    await requireEntity(ctx, args.entityId);
     const asSource = await ctx.db
       .query("relationships")
       .withIndex("by_source", (q) => q.eq("sourceEntityId", args.entityId))

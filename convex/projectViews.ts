@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { authedMutation, authedQuery } from "./authz";
+import { requireProject } from "./ownership";
 
 /**
  * Per-project list configuration: the Library and Entities views, and the
@@ -37,6 +38,7 @@ const viewConfigValidator = v.object({
 export const get = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     return await ctx.db
       .query("projectViews")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -58,6 +60,7 @@ export const save = authedMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const { projectId, ...patch } = args;
     // A ratio outside this range leaves one pane too narrow to use. The client
     // clamps while dragging; this is the backstop against a bad write.

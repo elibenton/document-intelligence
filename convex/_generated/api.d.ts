@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as admin from "../admin.js";
 import type * as analyzePrompt from "../analyzePrompt.js";
 import type * as annotations from "../annotations.js";
 import type * as apiLogs from "../apiLogs.js";
@@ -30,12 +31,14 @@ import type * as ingest from "../ingest.js";
 import type * as interfaze from "../interfaze.js";
 import type * as interfazeCost from "../interfazeCost.js";
 import type * as interfazeErrors from "../interfazeErrors.js";
+import type * as interfazeLimits from "../interfazeLimits.js";
 import type * as interfazeOcr from "../interfazeOcr.js";
 import type * as kinds from "../kinds.js";
 import type * as mergeSuggestions from "../mergeSuggestions.js";
 import type * as metadata from "../metadata.js";
 import type * as migrations from "../migrations.js";
 import type * as ocrChecks from "../ocrChecks.js";
+import type * as ownership from "../ownership.js";
 import type * as pageImages from "../pageImages.js";
 import type * as pages from "../pages.js";
 import type * as processing from "../processing.js";
@@ -73,6 +76,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  admin: typeof admin;
   analyzePrompt: typeof analyzePrompt;
   annotations: typeof annotations;
   apiLogs: typeof apiLogs;
@@ -95,12 +99,14 @@ declare const fullApi: ApiFromModules<{
   interfaze: typeof interfaze;
   interfazeCost: typeof interfazeCost;
   interfazeErrors: typeof interfazeErrors;
+  interfazeLimits: typeof interfazeLimits;
   interfazeOcr: typeof interfazeOcr;
   kinds: typeof kinds;
   mergeSuggestions: typeof mergeSuggestions;
   metadata: typeof metadata;
   migrations: typeof migrations;
   ocrChecks: typeof ocrChecks;
+  ownership: typeof ownership;
   pageImages: typeof pageImages;
   pages: typeof pages;
   processing: typeof processing;

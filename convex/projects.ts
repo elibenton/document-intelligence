@@ -15,6 +15,7 @@ import {
 } from "./projectTemplates";
 import { slugify } from "./slug";
 import { authedMutation, authedQuery } from "./authz";
+import { ownedProjects, requireProject } from "./ownership";
 
 // ---------------------------------------------------------------------------
 // List all projects (newest first) with document counts for the picker cards
@@ -23,11 +24,12 @@ import { authedMutation, authedQuery } from "./authz";
 export const list = authedQuery({
   args: {},
   handler: async (ctx) => {
-    const projects = await ctx.db
-      .query("projects")
-      .withIndex("by_createdAt")
-      .order("desc")
-      .take(100);
+    // `by_owner` rather than `by_createdAt`: this is the endpoint that decides
+    // what a user believes exists, so the filter has to be the index, not a
+    // predicate applied to a global list that could be paged past.
+    const projects = (await ownedProjects(ctx))
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 100);
 
     return await Promise.all(
       projects.map(async (project) => {
@@ -51,10 +53,17 @@ export const search = authedQuery({
   handler: async (ctx, args) => {
     const q = args.q.trim();
     if (!q) return [];
-    const hits = await ctx.db
-      .query("projects")
-      .withSearchIndex("search_name", (s) => s.search("name", q))
-      .take(20);
+    // Over-fetch and filter: a search index cannot be owner-scoped without
+    // adding ownerId to its filterFields, and 100 project rows is cheaper than
+    // the schema change plus backfill that would buy.
+    const hits = (
+      await ctx.db
+        .query("projects")
+        .withSearchIndex("search_name", (s) => s.search("name", q))
+        .take(100)
+    )
+      .filter((p) => p.ownerId === ctx.user._id)
+      .slice(0, 20);
     return await Promise.all(
       hits.map(async (project) => {
         const docs = await ctx.db
@@ -74,7 +83,7 @@ export const search = authedQuery({
 export const get = authedQuery({
   args: { id: v.id("projects") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    return await requireProject(ctx, args.id);
   },
 });
 
@@ -87,10 +96,17 @@ export const get = authedQuery({
 export const getBySlug = authedQuery({
   args: { slug: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    // `.collect()` and pick the caller's, rather than `.first()` and check it:
+    // `allocateSlug` de-duplicates slugs deployment-wide, so the first row for
+    // a slug can belong to someone else, and testing only that one would hide
+    // the caller's own project behind a stranger's.
+    const matches = await ctx.db
       .query("projects")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
-      .first();
+      .collect();
+    // Null, not a throw: the caller is a page load resolving a URL, and "no
+    // such project of yours" is already the path it renders.
+    return matches.find((p) => p.ownerId === ctx.user._id) ?? null;
   },
 });
 
@@ -181,6 +197,7 @@ export const create = authedMutation({
       slug,
       description: args.description,
       citationStyle,
+      ownerId: ctx.user._id,
       createdAt: Date.now(),
     });
 
@@ -203,6 +220,7 @@ export const update = authedMutation({
     citationStyle: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.id);
     const patch: Record<string, string> = {};
     if (args.citationStyle !== undefined) {
       // Validated the same way `create` validates it, and for the same reason:
@@ -262,8 +280,7 @@ export const remove = authedMutation({
   args: { id: v.id("projects") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const project = await ctx.db.get(args.id);
-    if (!project) return null;
+    await requireProject(ctx, args.id);
     await ctx.db.delete(args.id);
     await ctx.scheduler.runAfter(0, internal.projects.drainProjectDeletion, {
       projectId: args.id,

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { authedQuery } from "./authz";
+import { requireDocument } from "./ownership";
 
 /**
  * The Analyze instruction, in one place.
@@ -215,8 +216,7 @@ export const forDocument = authedQuery({
   args: { documentId: v.id("documents") },
   returns: v.union(v.string(), v.null()),
   handler: async (ctx, args) => {
-    const document = await ctx.db.get(args.documentId);
-    if (!document) return null;
+    const document = await requireDocument(ctx, args.documentId);
     // A document outside any project has no taxonomy to be shown: it gets the
     // same prompt a project with nothing configured would get, which is the
     // honest answer rather than another project's vocabulary.

@@ -39,6 +39,45 @@ export const backfillEntitySlugs = internalMutation({
 
 
 /**
+ * Give every pre-auth project an owner.
+ *
+ * Projects created before authentication existed carry no `ownerId`, and an
+ * unowned project is invisible to everyone (convex/ownership.ts fails closed),
+ * so this has to run before the app is usable again:
+ *
+ *   npx convex run migrations:backfillProjectOwners '{"ownerId":"<user id>"}'
+ *
+ * The id is a Better Auth user `_id` from the component's `user` table, not an
+ * `Id<"users">` — there is no such table here. Take it from the component
+ * rather than typing an email: this field is compared against `ctx.user._id`,
+ * and an email would never match.
+ *
+ * No pagination and no self-rescheduling, unlike its neighbours above: this
+ * table holds one row per project, it is the tenancy root rather than a leaf,
+ * and a single transaction covers it with room to spare. Re-running is safe —
+ * projects that already have an owner are left alone, so this never
+ * reassigns a project away from whoever owns it now.
+ */
+export const backfillProjectOwners = internalMutation({
+  args: { ownerId: v.string() },
+  returns: v.object({ claimed: v.number(), alreadyOwned: v.number() }),
+  handler: async (ctx, args) => {
+    const projects = await ctx.db.query("projects").collect();
+    let claimed = 0;
+    let alreadyOwned = 0;
+    for (const project of projects) {
+      if (project.ownerId !== undefined) {
+        alreadyOwned++;
+        continue;
+      }
+      await ctx.db.patch(project._id, { ownerId: args.ownerId });
+      claimed++;
+    }
+    return { claimed, alreadyOwned };
+  },
+});
+
+/**
  * Copy each page's project down from its document, for rows written before
  * `pages.projectId` / `pageTranslations.projectId` existed.
  *

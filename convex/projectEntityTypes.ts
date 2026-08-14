@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import type { TemplateEntityType } from "./projectTemplates";
 import { authedMutation, authedQuery } from "./authz";
+import { requireProject, requireProjectEntityType } from "./ownership";
 
 /**
  * Entity types a project looks for beyond people and organizations.
@@ -35,6 +36,7 @@ const RESERVED = new Set(["person", "organization", "people", "organizations"]);
 export const list = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     return await ctx.db
       .query("projectEntityTypes")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -93,6 +95,7 @@ export const create = authedMutation({
   },
   returns: v.union(v.id("projectEntityTypes"), v.null()),
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const label = args.label.trim();
     const description = args.description.trim();
     if (!label || !description) return null;
@@ -129,6 +132,7 @@ export const remove = authedMutation({
   args: { id: v.id("projectEntityTypes") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireProjectEntityType(ctx, args.id);
     await ctx.db.delete(args.id);
     return null;
   },

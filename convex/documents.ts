@@ -2,13 +2,20 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { processingPool } from "./processingPool";
 import { authedMutation, authedQuery } from "./authz";
+import {
+  filterOwnedDocuments,
+  keepOwned,
+  requireDocument,
+  requireProject,
+} from "./ownership";
 
 export const list = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     const active = await ctx.db
       .query("documents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -48,10 +55,16 @@ export const list = authedQuery({
 export const processingBlocker = authedQuery({
   args: {},
   handler: async (ctx) => {
-    const failed = await ctx.db
-      .query("documents")
-      .withIndex("by_status", (q) => q.eq("status", "failed"))
-      .collect();
+    // `by_status` spans the deployment, so the result is narrowed to the
+    // caller's projects before it is counted — otherwise the banner reports a
+    // stranger's credit outage, and `affectedCount` counts their documents.
+    const failed = await keepOwned(
+      ctx,
+      await ctx.db
+        .query("documents")
+        .withIndex("by_status", (q) => q.eq("status", "failed"))
+        .collect()
+    );
 
     const blocked = failed.filter(
       (d) =>
@@ -75,9 +88,16 @@ export const processingBlocker = authedQuery({
  * The document row plus its signed file URL.
  *
  * The URL rides along because the viewer needs both and used to fetch them in
- * series — `getUrl` could not run until `get` had returned a storageId, so the
- * whole time-to-first-pixel was gated on two sequential round trips.
+ * series — a separate `getUrl` could not run until `get` had returned a
+ * storageId, so the whole time-to-first-pixel was gated on two sequential round
+ * trips. That endpoint is gone: it took a bare `v.id("_storage")`, which is not
+ * a row anyone owns and so cannot be ownership-checked, and nothing had called
+ * it since this merge.
  */
+async function withUrl(ctx: QueryCtx, document: Doc<"documents">) {
+  return { ...document, url: await ctx.storage.getUrl(document.storageId) };
+}
+
 /**
  * Shared by the public `get` and the pipeline's `getInternal` below, so the two
  * cannot drift.
@@ -85,12 +105,14 @@ export const processingBlocker = authedQuery({
 async function readDocument(ctx: QueryCtx, id: Id<"documents">) {
   const document = await ctx.db.get(id);
   if (!document) return null;
-  return { ...document, url: await ctx.storage.getUrl(document.storageId) };
+  return await withUrl(ctx, document);
 }
 
 export const get = authedQuery({
+  // requireDocument returns the row, so this is the same single read `get`
+  // always made — the ownership walk costs the project row, nothing more.
   args: { id: v.id("documents") },
-  handler: async (ctx, args) => readDocument(ctx, args.id),
+  handler: async (ctx, args) => withUrl(ctx, await requireDocument(ctx, args.id)),
 });
 
 /**
@@ -120,12 +142,48 @@ export const getInternal = internalQuery({
  * A deleted document reports "missing" so the overlay releases the card
  * instead of holding it forever.
  */
+/**
+ * Just enough of a document to cite it: what Analyze read off the page, plus
+ * the three facts the app already knows and therefore never asked the model
+ * for — the library title, the document's own date, and where a web clip came
+ * from. Merged into CSL-JSON by src/lib/citation/cslItem.ts.
+ *
+ * Batched over the answer's cited documents rather than one subscription per
+ * evidence card, and deliberately narrow: the full rows carry page text and
+ * table-of-contents data a bibliography has no use for.
+ */
+export const citationSources = authedQuery({
+  args: { ids: v.array(v.id("documents")) },
+  handler: async (ctx, args) => {
+    const rows = await filterOwnedDocuments(ctx, args.ids);
+    return rows.map((doc) => ({
+      _id: doc._id,
+      name: doc.name,
+      displayName: doc.displayName,
+      // Doubles as CSL `genre` for a document with no bibliographic type of
+      // its own — see cslItem.ts.
+      primaryKind: doc.primaryKind,
+      documentDate: doc.documentDate,
+      documentDatePrecision: doc.documentDatePrecision,
+      sourceUrl: doc.sourceUrl,
+      uploadedAt: doc.uploadedAt,
+      citation: doc.citation,
+    }));
+  },
+});
+
 export const ingestStates = authedQuery({
   args: { ids: v.array(v.id("documents")) },
   handler: async (ctx, args) => {
+    // A document the caller does not own reads as "missing", which is the same
+    // answer a deleted one gives — so the overlay releases its card either way,
+    // and the endpoint never confirms that someone else's id exists.
+    const owned = new Map(
+      (await filterOwnedDocuments(ctx, args.ids)).map((doc) => [doc._id, doc])
+    );
     return await Promise.all(
       args.ids.map(async (id) => {
-        const doc = await ctx.db.get(id);
+        const doc = owned.get(id);
         const job = doc
           ? await ctx.db
               .query("processingJobs")
@@ -153,8 +211,7 @@ export const rotateDocument = authedMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const document = await ctx.db.get(args.id);
-    if (!document) return null;
+    const document = await requireDocument(ctx, args.id);
     const next = ((document.viewerRotation ?? 0) + args.degrees + 360) % 360;
     await ctx.db.patch(args.id, {
       viewerRotation: next as 0 | 90 | 180 | 270,
@@ -182,8 +239,7 @@ export const updateIdentity = authedMutation({
     kinds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const doc = await ctx.db.get(args.id);
-    if (!doc) return;
+    const doc = await requireDocument(ctx, args.id);
 
     const patch: {
       displayName?: string;
@@ -241,8 +297,7 @@ export const updateIdentity = authedMutation({
 export const addKinds = authedMutation({
   args: { id: v.id("documents"), kinds: v.array(v.string()) },
   handler: async (ctx, args) => {
-    const doc = await ctx.db.get(args.id);
-    if (!doc) return;
+    const doc = await requireDocument(ctx, args.id);
 
     const existing = doc.kinds ?? (doc.primaryKind ? [doc.primaryKind] : []);
     const added = args.kinds
@@ -265,13 +320,6 @@ export const addKinds = authedMutation({
         });
       }
     }
-  },
-});
-
-export const getUrl = authedQuery({
-  args: { storageId: v.id("_storage") },
-  handler: async (ctx, args) => {
-    return await ctx.storage.getUrl(args.storageId);
   },
 });
 
@@ -402,6 +450,7 @@ export const remove = authedMutation({
   args: { id: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.id);
     await beginDocumentTeardown(ctx, args.id);
     return null;
   },

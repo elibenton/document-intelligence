@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { authedMutation, authedQuery } from "./authz";
+import { requireBlock, requireDocument } from "./ownership";
 
 /**
  * All blocks for a document, WITHOUT the heavy fields (`words`, `html`).
@@ -11,6 +12,7 @@ import { authedMutation, authedQuery } from "./authz";
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     // This is a lightweight navigation/search summary, not the overlay data
     // source. Dense born-digital PDFs can contain tens of thousands of PDF.js
     // text items; keep this subscription bounded while each visible page
@@ -45,6 +47,7 @@ export const byDocument = authedQuery({
 export const byDocumentPage = authedQuery({
   args: { documentId: v.id("documents"), pageNumber: v.number() },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const page = await ctx.db
       .query("pages")
       .withIndex("by_document", (q) =>
@@ -68,6 +71,7 @@ export const byDocumentPage = authedQuery({
 export const updateType = authedMutation({
   args: { id: v.id("blocks"), blockType: v.string() },
   handler: async (ctx, args) => {
+    await requireBlock(ctx, args.id);
     await ctx.db.patch(args.id, { blockType: args.blockType });
   },
 });
@@ -83,6 +87,7 @@ const norm = (s: string) =>
 export const locateText = authedQuery({
   args: { documentId: v.id("documents"), text: v.string() },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const target = norm(args.text);
     if (!target) return null;
     const targetTokens = new Set(target.split(" "));

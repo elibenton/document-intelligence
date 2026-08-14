@@ -6,6 +6,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { CASCADE_BATCH, sweepOrphanEntities } from "./documents";
 import { slugify } from "./slug";
 import { authedMutation } from "./authz";
+import { requireDocument, requireProject } from "./ownership";
 
 /**
  * Move a document to another project, after the fact.
@@ -65,6 +66,8 @@ export const moveToProject = authedMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
+    await requireProject(ctx, args.targetProjectId);
     const document = await ctx.db.get(args.documentId);
     if (!document) throw new Error("Document not found");
     if (document.projectId === args.targetProjectId) return null;

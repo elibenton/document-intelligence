@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
 import { authedMutation, authedQuery } from "./authz";
+import { requireDocument } from "./ownership";
 
 const GLOBAL_SETTINGS_KEY = "global";
 const MAX_TRANSLATED_PAGES_PER_DOCUMENT = 2_000;
@@ -500,6 +501,7 @@ export const pagesByDocument = authedQuery({
     })
   ),
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const settings = await ctx.db
       .query("appSettings")
       .withIndex("by_key", (q) => q.eq("key", GLOBAL_SETTINGS_KEY))
@@ -525,6 +527,7 @@ export const retry = authedMutation({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const settings = await ctx.db
       .query("appSettings")
       .withIndex("by_key", (q) => q.eq("key", GLOBAL_SETTINGS_KEY))

@@ -49,10 +49,23 @@ export default defineSchema({
     // Style is applied when an answer is *rendered*, never when it is written,
     // so changing this re-formats existing answers rather than stranding them.
     citationStyle: v.optional(v.string()),
+    // The Better Auth user id of the owner. A `v.string()` and not a
+    // `v.id("users")`: the user record lives in the component's tables, so
+    // there is no `users` table in this schema to point at (docs/auth-plan.md
+    // §7.1). Optional only until migrations:backfillProjectOwners has run —
+    // an unowned project is readable by nobody, so the window is fail-closed
+    // rather than fail-open.
+    //
+    // This is the only ownership field in the schema. Every other table
+    // answers "who owns this?" by walking up to its project, at most two
+    // ctx.db.get calls (convex/ownership.ts). Denormalising ownerId onto the
+    // other 23 tables would be faster and would drift.
+    ownerId: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_slug", ["slug"])
     .index("by_createdAt", ["createdAt"])
+    .index("by_owner", ["ownerId"])
     .searchIndex("search_name", { searchField: "name" }),
 
   // How this project's two lists are currently configured, plus the width the
@@ -91,6 +104,12 @@ export default defineSchema({
     // means "unique" — see `by_project_hash` in convex/upload.ts.
     contentHash: v.optional(v.string()),
     mimeType: v.string(),
+    // Size of the stored file, copied from _storage at upload. The pipeline
+    // needs it to pick an Interfaze transport (convex/interfazeLimits.ts), and
+    // an action cannot read the _storage system table itself. Absent on web
+    // clips and on rows predating the field; a missing size reads as "small",
+    // which is true of every row written under the old 18 MB upload gate.
+    sizeBytes: v.optional(v.number()),
     // Objective media type, detected at upload: "pdf" | "csv" | "image" | "audio" | "video" | "webScrape"
     mediaType: v.optional(v.string()),
     // Semantic kinds ("legal brief", "tax form", ...) — a document can be

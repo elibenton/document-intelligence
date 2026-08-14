@@ -1,6 +1,12 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
+import {
+  requireDocument,
+  requireEntity,
+  requireProject,
+  ownedProjects,
+} from "./ownership";
 
 // ---------------------------------------------------------------------------
 // Get a single entity
@@ -17,6 +23,7 @@ import { authedMutation, authedQuery } from "./authz";
 export const listAll = authedQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     // Ordered by mentionCount, not creation time: the client sorts by mentions,
     // so a creation-ordered cap silently hid the entities it most wanted.
     return await ctx.db
@@ -37,6 +44,7 @@ export const setStarred = authedMutation({
   args: { id: v.id("entities"), starred: v.boolean() },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireEntity(ctx, args.id);
     await ctx.db.patch(args.id, { starred: args.starred });
     return null;
   },
@@ -64,6 +72,7 @@ function displayType(entity: Doc<"entities">): string {
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
     const mentions = await ctx.db
       .query("mentions")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -132,14 +141,28 @@ export const byDocument = authedQuery({
 export const getBySlug = authedQuery({
   args: { slug: v.string(), projectId: v.optional(v.id("projects")) },
   handler: async (ctx, args) => {
-    return await ctx.db
+    if (args.projectId) {
+      await requireProject(ctx, args.projectId);
+      return await ctx.db
+        .query("entities")
+        .withIndex("by_slug_and_project", (q) =>
+          q.eq("slug", args.slug).eq("projectId", args.projectId)
+        )
+        .first();
+    }
+    // The un-scoped fallback for links minted before entities were per-project
+    // (see EntityPage). It cannot stay a bare `.first()`: that would hand back
+    // whichever project happened to sort first, including someone else's. The
+    // same slug appears at most once per project, so collecting them is bounded
+    // by the number of projects holding that name.
+    const mine = new Set((await ownedProjects(ctx)).map((p) => p._id));
+    const matches = await ctx.db
       .query("entities")
-      .withIndex("by_slug_and_project", (q) =>
-        args.projectId
-          ? q.eq("slug", args.slug).eq("projectId", args.projectId)
-          : q.eq("slug", args.slug)
-      )
-      .first();
+      .withIndex("by_slug_and_project", (q) => q.eq("slug", args.slug))
+      .collect();
+    return (
+      matches.find((e) => e.projectId && mine.has(e.projectId)) ?? null
+    );
   },
 });
 
@@ -150,6 +173,7 @@ export const getBySlug = authedQuery({
 export const documentsForEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
+    await requireEntity(ctx, args.entityId);
     const mentions = await ctx.db
       .query("mentions")
       .withIndex("by_entity", (q) => q.eq("entityId", args.entityId))
@@ -186,6 +210,7 @@ export const documentsForEntity = authedQuery({
 export const mentionsForEntity = authedQuery({
   args: { entityId: v.id("entities") },
   handler: async (ctx, args) => {
+    await requireEntity(ctx, args.entityId);
     const mentions = await ctx.db
       .query("mentions")
       .withIndex("by_entity", (q) => q.eq("entityId", args.entityId))
