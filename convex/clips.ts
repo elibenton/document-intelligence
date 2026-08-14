@@ -93,6 +93,7 @@ export const createFromClip = internalMutation({
     for (let pageNum = 0; pageNum < pageTexts.length; pageNum++) {
       const pageId = await ctx.db.insert("pages", {
         documentId,
+        projectId: defaultProject?._id,
         pageNumber: pageNum,
         text: pageTexts[pageNum].trim(),
       });

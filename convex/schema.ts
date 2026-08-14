@@ -41,6 +41,14 @@ export default defineSchema({
     name: v.string(),
     slug: v.string(),
     description: v.optional(v.string()),
+    // How search answers cite their sources: "numeric" | "chicago" | "mla" |
+    // "apa" (convex/projectTemplates.ts). Absent means "numeric", which is what
+    // every answer has always rendered — so there is nothing to backfill, and a
+    // project created before this existed behaves exactly as it did.
+    //
+    // Style is applied when an answer is *rendered*, never when it is written,
+    // so changing this re-formats existing answers rather than stranding them.
+    citationStyle: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_slug", ["slug"])
@@ -203,9 +211,12 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_uploadedAt", ["uploadedAt"])
     .index("by_project", ["projectId", "uploadedAt"])
-    // Exact, bounded lookups for "is this category in use" and the Settings
+    // Exact, bounded lookups for "is this category in use" and the settings
     // per-category breakdown — an unindexed field would force a full scan.
-    .index("by_primaryCategory", ["primaryCategory"])
+    // Both questions are per-project now that the taxonomy is, so the global
+    // index is gone: it would be a write cost on every insert for a question
+    // nothing asks.
+    .index("by_project_and_category", ["projectId", "primaryCategory"])
     // Duplicate detection, both pre-upload from the browser and as the
     // backstop inside createDocument. Exact-equality lookups, so they have to
     // be indexes: filtering `by_project` would read the whole project on
@@ -226,10 +237,14 @@ export default defineSchema({
     }),
 
   // The enforced primary-category taxonomy ("legal" | "government" | ...),
-  // user-managed from Settings. `documents.primaryCategory` stores `key`.
-  // "other" is a reserved sentinel for an off-taxonomy AI answer — it is
-  // never a row here, and never gets a pill. See convex/analyzePrompt.ts.
+  // user-managed from project settings and seeded from the project's template.
+  // `documents.primaryCategory` stores `key`. "other" is a reserved sentinel
+  // for an off-taxonomy AI answer — it is never a row here, and never gets a
+  // pill. See convex/analyzePrompt.ts.
   documentCategories: defineTable({
+    // A category is a statement about what this project sorts documents into —
+    // a legal project and a biology project have no reason to share one.
+    projectId: v.id("projects"),
     key: v.string(),
     label: v.string(),
     // The classification-rule clause for this bucket, folded into the
@@ -242,7 +257,11 @@ export default defineSchema({
     // category's description plausibly fits the same document.
     order: v.number(),
     createdAt: v.number(),
-  }).index("by_key", ["key"]),
+  })
+    // No global key index: with two projects both holding "legal", a lookup by
+    // key alone asks a question that no longer has an answer.
+    .index("by_project", ["projectId"])
+    .index("by_project_and_key", ["projectId", "key"]),
 
   // Semantic document kinds. Grows organically: the AI proposes new kinds,
   // humans own them, and Analyze is shown the existing list so it reuses a
@@ -251,9 +270,13 @@ export default defineSchema({
   // graph pass, which is strictly better — two reports can involve entirely
   // different people.
   documentKinds: defineTable({
+    // Scoping this is what stops a biology project being shown "writ of
+    // mandate" as a kind worth reusing — the reuse clause exists to prevent
+    // synonym invention, and a vocabulary from someone else's corpus feeds it.
+    projectId: v.id("projects"),
     name: v.string(),
     source: v.string(), // "ai" | "human"
-  }).index("by_name", ["name"]),
+  }).index("by_project_and_name", ["projectId", "name"]),
 
   // Contextual roles an entity plays in a specific document
   // (Eli Cohen: "witness" in doc A, "author" in doc B)
@@ -306,6 +329,13 @@ export default defineSchema({
   // One row per page — the page's plain text from Interfaze OCR.
   pages: defineTable({
     documentId: v.id("documents"),
+    // Denormalized from the document, like annotations.projectId. Search and
+    // vector indexes filter on equality only, so scoping a search to a project
+    // is impossible without the project on the row itself: the alternative is
+    // to over-fetch a global top-K and drop the out-of-project rows after,
+    // which silently starves a project whose hits lose the global ranking.
+    // Optional only until the backfill lands — see pages.backfillProjectId.
+    projectId: v.optional(v.id("projects")),
     pageNumber: v.number(),
     text: v.string(),
     width: v.optional(v.number()),
@@ -349,6 +379,9 @@ export default defineSchema({
   // written incrementally so a very large page can resume across actions.
   pageTranslations: defineTable({
     documentId: v.id("documents"),
+    // Denormalized alongside pages.projectId — the translated-text search leg
+    // needs the same project filter as the original-text one.
+    projectId: v.optional(v.id("projects")),
     pageId: v.id("pages"),
     pageNumber: v.number(),
     sourceLanguageCode: v.string(),

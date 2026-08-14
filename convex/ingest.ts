@@ -163,6 +163,10 @@ async function reconcilePagesAndBlocks(
     pageOffset: number;
   }
 ) {
+  // Denormalized onto every page row this pass writes, so the search and
+  // vector indexes can filter by project (see schema.ts pages.projectId).
+  const projectId = (await ctx.db.get(args.documentId))?.projectId;
+
   // Build a page dimensions lookup (local page numbers)
   const dimsByPage = new Map<number, { width: number; height: number }>();
   for (const dim of args.pageDimensions ?? []) {
@@ -207,6 +211,7 @@ async function reconcilePagesAndBlocks(
 
     const pageValue = {
       documentId: args.documentId,
+      projectId,
       pageNumber: globalPage,
       text: text.trim(),
       textSource: "ocr" as const,

@@ -123,6 +123,8 @@ export const commitPage = internalMutation({
     nativeGeometryScore: v.number(),
   },
   handler: async (ctx, args) => {
+    // Denormalized onto any page row created here (see schema.ts pages.projectId).
+    const projectId = (await ctx.db.get(args.documentId))?.projectId;
     const existingPages = await ctx.db
       .query("pages")
       .withIndex("by_document", (q) =>
@@ -163,6 +165,7 @@ export const commitPage = internalMutation({
         ? canonicalPage._id
         : await ctx.db.insert("pages", {
             documentId: args.documentId,
+            projectId,
             pageNumber: args.pageNumber,
             text: nativeText,
             width: args.width,
@@ -201,6 +204,7 @@ export const commitPage = internalMutation({
       if (!pageId) {
         pageId = await ctx.db.insert("pages", {
           documentId: args.documentId,
+          projectId,
           pageNumber: args.pageNumber,
           text: args.nativeBlocks.map((block) => block.text).join(" "),
           width: args.width,

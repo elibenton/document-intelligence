@@ -340,6 +340,7 @@ export const savePageChunk = internalMutation({
         : args.translatedText;
     const value = {
       documentId: args.documentId,
+      projectId: document.projectId,
       pageId: args.pageId,
       pageNumber: args.pageNumber,
       sourceLanguageCode: args.sourceLanguageCode,
