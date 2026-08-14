@@ -125,10 +125,11 @@ export function ProcessingEstimate({
 /**
  * Live pipeline for a document, as a vertical list: Scan → Analyze → Extract.
  *
- * Those three are the product's vocabulary, so the UI names them even though
- * the backend still produces Scan and Analyze from a single Interfaze
- * completion — they will simply separate in time once the calls are split, with
- * no change here.
+ * Those three are the product's vocabulary. Scan and Analyze are now separate
+ * pooled stages (convex/processingNode.ts), so Analyze can sit queued behind
+ * other documents rather than following Scan immediately. A queued Analyze
+ * renders as running: "waiting" is reserved for waiting on the *user*, which
+ * is what Extract does before a template is confirmed.
  *
  * Upload is not a step. By the time this renders the upload has succeeded, so a
  * permanently-checked box only added width. Translation is not a step either:

@@ -39,6 +39,7 @@ import type {
   TaskName,
 } from "interfaze";
 
+import { fnv1a } from "./hash";
 import { InterfazeFailure } from "./interfazeErrors";
 import { PROVIDER_FILE_OBJECT_SAFE_BYTES } from "./interfazeLimits";
 import { interfazeCostUsd } from "./interfazeCost";
@@ -59,20 +60,6 @@ const INTERFAZE_MODEL = "interfaze-beta";
 // the action's own error handling can mark the job failed. (Interfaze itself
 // caps a request at 5 minutes; this is the outer Convex-facing guard.)
 const INTERFAZE_TIMEOUT_MS = 9 * 60 * 1000;
-
-/**
- * FNV-1a, 8 hex chars. Not a security hash — it is a cheap grouping key for
- * the API log, where the only questions are "same prompt shape?" and "same
- * bytes back?". Collisions cost a mis-grouped row, nothing more.
- */
-function fnv1a(input: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
-}
 
 // ---------------------------------------------------------------------------
 // Types

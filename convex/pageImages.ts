@@ -7,6 +7,7 @@ import { vOnCompleteArgs } from "@convex-dev/workpool";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { authedMutation } from "./authz";
+import { documentIssueContext, recordIssue } from "./issues";
 import { requireDocument } from "./ownership";
 
 const bboxValidator = v.object({
@@ -296,6 +297,18 @@ async function markRenderFailed(
     renderStatus: "failed",
     renderLastError: error.slice(0, 1000),
     renderScheduledAt: undefined,
+  });
+
+  // Its own surface rather than "pipeline": a render failure leaves a document
+  // that parsed, searched and extracted perfectly and simply cannot be looked
+  // at. Grouped with parse failures it would read as the same problem, and it
+  // is the one most likely to be reported as "the app is broken".
+  await recordIssue(ctx, {
+    surface: "render",
+    stage: "render",
+    message: error,
+    documentId,
+    ...(await documentIssueContext(ctx, documentId)),
   });
 }
 

@@ -4,10 +4,12 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
+import { enrichmentEnqueueOptions, enrichmentPool } from "./enrichmentPool";
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { authedAction, authedMutation } from "./authz";
 import { keepOwned, requireDocumentFromAction } from "./ownership";
 import { requireBudget, requireBudgetFromAction } from "./budget";
+import { documentIssueContext, recordIssue } from "./issues";
 
 // Watchdog: actions that hit Convex's 10-minute kill never run their catch
 // blocks, stranding documents in "parsing"/"extracting" with a "running" job
@@ -282,7 +284,9 @@ export const retryBlocked = authedMutation({
  *
  * Scheduled after Extract rather than awaited inside it: relationship mapping
  * is an enrichment pass, and a document whose extraction succeeded must not be
- * failed by it.
+ * failed by it. That same "nobody is waiting on this" property is why it runs
+ * on the enrichment pool rather than the processing one — see
+ * convex/enrichmentPool.ts.
  *
  * Public because that same isolation leaves it without a retry path. A stage
  * that fails without failing its document is invisible to `retryBlocked`,
@@ -300,11 +304,11 @@ async function enqueueRelationships(
   );
   if (!shouldEnqueue) return null;
   const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-  const workId = await processingPool.enqueueAction(
+  const workId = await enrichmentPool.enqueueAction(
     ctx,
     internal.relationshipsNode.extract,
     { documentId },
-    processingEnqueueOptions(paused, { documentId, stage: "relationships" })
+    enrichmentEnqueueOptions(paused, { documentId, stage: "relationships" })
   );
   await ctx.runMutation(internal.processing.attachWorkId, {
     documentId,
@@ -528,6 +532,23 @@ export const jobComplete = internalMutation({
       });
     }
 
+    // Cancellation is a user pressing Stop, not a defect, so it is not counted
+    // — a ledger that fills up with "someone changed their mind" buries the
+    // rows worth reading. What is counted is the other branch, and it is the
+    // most valuable report in the system: an action killed at Convex's
+    // 10-minute limit never runs its own catch, so this is the *only* place a
+    // too-large document is ever heard from.
+    if (!canceled) {
+      await recordIssue(ctx, {
+        surface: "pipeline",
+        stage,
+        message: errorMessage,
+        errorCode: "action_terminated",
+        documentId,
+        ...(await documentIssueContext(ctx, documentId)),
+      });
+    }
+
     const doc = await ctx.db.get(documentId);
     if (!doc) return null;
     // A canceled extract leaves a document that is still fully parsed; only an
@@ -567,12 +588,25 @@ async function failDocument(
   ctx: MutationCtx,
   documentId: Id<"documents">,
   errorMessage: string,
-  errorCode?: string
+  errorCode?: string,
+  stage?: string
 ) {
   await ctx.db.patch(documentId, {
     status: "failed",
     errorMessage,
     errorCode,
+  });
+
+  // The document now says what went wrong; the ledger says how often, to how
+  // many people, and since which build. Reported before the queue pause below,
+  // so an account-level block is counted even on the run that stops the queue.
+  await recordIssue(ctx, {
+    surface: "pipeline",
+    stage: stage ?? "pipeline",
+    message: errorMessage,
+    errorCode,
+    documentId,
+    ...(await documentIssueContext(ctx, documentId)),
   });
 
   // A provider that is refusing everything will refuse the rest of the queue
@@ -644,6 +678,17 @@ export const markStageFailed = internalMutation({
         errorMessage: args.errorMessage,
       });
     }
+    // Counted even though the document survives. A stage that fails without
+    // failing the document is the easiest kind of problem to never notice:
+    // nothing turns red, the user keeps their text, and Analyze quietly stops
+    // running for a whole class of file.
+    await recordIssue(ctx, {
+      surface: "pipeline",
+      stage: args.stage,
+      message: args.errorMessage,
+      documentId: args.documentId,
+      ...(await documentIssueContext(ctx, args.documentId)),
+    });
     return null;
   },
 });
@@ -654,6 +699,10 @@ export const markFailed = internalMutation({
     documentId: v.id("documents"),
     errorMessage: v.string(),
     errorCode: v.optional(v.string()),
+    // Which stage is speaking. Optional only because the failure it describes
+    // is the document's, not the stage's — but the ledger groups by stage, and
+    // "parse timed out" and "transcribe timed out" are not one problem.
+    stage: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -661,7 +710,8 @@ export const markFailed = internalMutation({
       ctx,
       args.documentId,
       args.errorMessage,
-      args.errorCode
+      args.errorCode,
+      args.stage
     );
     return null;
   },

@@ -83,6 +83,12 @@ export default function AdminPage() {
       back={{ to: "/settings", label: "Back to settings" }}
       actions={
         <div className="flex items-center gap-1">
+          <Link
+            to="/admin/issues"
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            Failures
+          </Link>
           {WINDOWS.map((w) => (
             <Button
               key={w}

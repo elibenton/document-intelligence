@@ -14,6 +14,7 @@ import type { Id } from "./_generated/dataModel";
 import type { ApiUsage, UsageLogger } from "./interfazeCost";
 import { authedQuery } from "./authz";
 import { chargeUsage } from "./budget";
+import { recordIssue } from "./issues";
 
 /** Shard count for the denormalized usage totals (see schema.apiUsageTotals). */
 export const TOTALS_SHARDS = 8;
@@ -85,6 +86,29 @@ export const record = internalMutation({
       error: args.error?.slice(0, 500),
       ownerId,
     });
+
+    // The provider's own verdict, counted separately from the document's.
+    //
+    // Most of these do go on to fail a document, and are reported again from
+    // convex/processing.ts — deliberately, because they are two different
+    // facts. "Interfaze returned a 529" and "this document failed" have
+    // different rates whenever a stage retries or degrades, and it is precisely
+    // the gap between them that says a failure is being absorbed rather than
+    // fixed. The embeddings caller is the clearest case: a quota error there
+    // silently drops the semantic leg of search and fails nothing at all.
+    if (args.status === "error" && args.error) {
+      await recordIssue(ctx, {
+        surface: "provider",
+        // Qualified by provider, since "embed" means one thing to OpenAI and
+        // the operation names are not unique across them.
+        stage: `${args.provider}:${args.operation}`,
+        message: args.error,
+        errorCode: args.errorCode,
+        documentId: args.documentId,
+        ownerId,
+        buildSha: args.buildSha,
+      });
+    }
 
     // The spend ledger the cap is read from. Here rather than at the call
     // sites for the same reason ownerId is resolved here: this mutation is the

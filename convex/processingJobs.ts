@@ -1,5 +1,9 @@
 import { v } from "convex/values";
 import { PROCESSING_MAX_PARALLELISM } from "./processingPool";
+import {
+  ENRICHMENT_MAX_PARALLELISM,
+  ENRICHMENT_STAGES,
+} from "./enrichmentPool";
 import { authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
 
@@ -115,18 +119,34 @@ export const estimateByDocument = authedQuery({
       };
     }
 
+    // Both terms are per-pool. Enrichment has its own workpool and its own
+    // ceiling (convex/enrichmentPool.ts), so a relationships job neither waits
+    // behind nor occupies a processing slot, and counting them together would
+    // put a Scan in a queue it is not actually in.
+    const enriching = ENRICHMENT_STAGES.has(active.stage);
+    const parallelism = enriching
+      ? ENRICHMENT_MAX_PARALLELISM
+      : PROCESSING_MAX_PARALLELISM;
+    const samePool = (job: { stage: string; workId?: string }) =>
+      job.workId !== undefined && ENRICHMENT_STAGES.has(job.stage) === enriching;
+
     const [pending, running] = await Promise.all([
       ctx.db
         .query("processingJobs")
         .withIndex("by_status", (q) => q.eq("status", "pending"))
         .take(250),
+      // Deliberately not `.take(parallelism)`. The rows are filtered after the
+      // read, and stages that keep a job row without holding a pool slot
+      // (translate runs off the scheduler and carries no workId) would fill
+      // that window and leave real workers uncounted — which reads as idle
+      // capacity that does not exist, and understates every wait.
       ctx.db
         .query("processingJobs")
         .withIndex("by_status", (q) => q.eq("status", "running"))
-        .take(PROCESSING_MAX_PARALLELISM),
+        .take(250),
     ]);
     const pooledPending = pending
-      .filter((job) => job.workId)
+      .filter(samePool)
       .sort(
         (a, b) =>
           (a.queuedAt ?? a._creationTime) - (b.queuedAt ?? b._creationTime)
@@ -135,14 +155,12 @@ export const estimateByDocument = authedQuery({
     const queuePosition = index >= 0 ? index + 1 : pooledPending.length + 1;
     const availableWorkers = Math.max(
       0,
-      PROCESSING_MAX_PARALLELISM - running.filter((job) => job.workId).length
+      parallelism - running.filter(samePool).length
     );
     const wavesBeforeStart =
       queuePosition <= availableWorkers
         ? 0
-        : Math.ceil(
-            (queuePosition - availableWorkers) / PROCESSING_MAX_PARALLELISM
-          );
+        : Math.ceil((queuePosition - availableWorkers) / parallelism);
 
     return {
       stage: active.stage,

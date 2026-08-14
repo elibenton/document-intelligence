@@ -9,6 +9,7 @@ import { buttonVariants } from "@/components/ui/button-variants";
 import { Spinner } from "@/components/ui/spinner";
 import { isPdfUpload, preflightPdf } from "@/lib/pdfPreflight";
 import { formatBytes } from "@/lib/formatBytes";
+import { BUILD_SHA } from "@/lib/reportIssue";
 import {
   clearDemoToken,
   storeDemoToken,
@@ -194,11 +195,12 @@ function DemoPanelInner() {
       // scan — no text layer, no embedded fonts, five camera JPEGs — reads back
       // 7,769 characters. Turning those away was the demo refusing to do the
       // thing it exists to demonstrate.
+      // Hoisted out of the try so the catch can report against the session that
+      // was minted before the failure. Undefined means startSession itself
+      // threw, and there is no gated endpoint to report through.
+      let sessionToken: string | undefined;
       try {
-        const { sessionToken } = await convex.mutation(
-          api.demo.startSession,
-          {}
-        );
+        ({ sessionToken } = await convex.mutation(api.demo.startSession, {}));
         const uploadUrl = await convex.mutation(api.demo.generateUploadUrl, {
           sessionToken,
         });
@@ -219,7 +221,26 @@ function DemoPanelInner() {
         storeDemoToken(sessionToken);
         setPhase({ kind: "live", sessionToken });
       } catch (error) {
-        setPhase({ kind: "failed", message: messageFor(error) });
+        const message = messageFor(error);
+        setPhase({ kind: "failed", message });
+        // Best-effort, and only reachable once `sessionToken` exists — see the
+        // note on convex/demo.ts `reportIssue` for the four earlier rejections
+        // that deliberately cannot report.
+        if (!sessionToken) return;
+        void convex
+          .mutation(api.demo.reportIssue, {
+            sessionToken,
+            surface: "client",
+            stage: "upload",
+            message,
+            errorCode: error instanceof Error ? error.name : undefined,
+            fileKind: "pdf",
+            sizeBytes: file.size,
+            pageCount: preflight.pageCount,
+            mimeType: file.type || undefined,
+            buildSha: BUILD_SHA,
+          })
+          .catch(() => {});
       }
     },
     [convex]

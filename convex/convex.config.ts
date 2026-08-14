@@ -8,6 +8,9 @@ const app = defineApp();
 app.use(betterAuth);
 
 app.use(workpool, { name: "processingWorkpool" });
+// Background enrichment gets its own pool so that work nobody is waiting on
+// can never delay work someone is watching. See convex/enrichmentPool.ts.
+app.use(workpool, { name: "enrichmentWorkpool" });
 // Rendering is deliberately independent of AI processing, so it gets its own
 // pool: page derivatives must never wait behind an Interfaze queue, and unlike
 // Interfaze calls a rasterization retry is free and idempotent.

@@ -11,6 +11,7 @@ import { RENDERER_VERSION } from "./rendererConfig";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
 import { renderEnqueueOptions, renderPool } from "./renderPool";
 import { requireBudget } from "./budget";
+import { clientReportArgs, recordIssue } from "./issues";
 import { requireDocument, requireProject } from "./ownership";
 import { seedCategories } from "./documentCategories";
 import { seedEntityTypes } from "./projectEntityTypes";
@@ -298,6 +299,34 @@ export const generateUploadUrl = demoMutation({
  * them, which is how a demo limit gets bypassed by a caller who sets the flag.
  * The duplication is the enqueue block, and it is small enough to see.
  */
+/**
+ * The demo's failure reporter, gated by the session token the same way every
+ * other demo endpoint is.
+ *
+ * Covers only what happens *after* a session exists — the upload, the finalize,
+ * and the pipeline behind them. The demo's four earlier rejections (not a PDF,
+ * over the byte cap, preflight failed, over the page cap) all run before
+ * `startSession` on purpose, so that a file the demo was never going to accept
+ * does not consume one of the day's DEMO_SESSIONS_PER_DAY. Reporting them would
+ * mean minting a session to describe a file we just refused, which spends the
+ * scarce thing to record the cheap one. They remain the known blind spot; the
+ * fix is an anonymous rate-limited endpoint, not a session burned per rejection.
+ */
+export const reportIssue = demoMutation({
+  args: clientReportArgs,
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await recordIssue(ctx, {
+      ...args,
+      // Demo visitors are anonymous, but each has a distinct synthetic owner —
+      // so "how many people hit this" stays a real count here too.
+      ownerId: ctx.user._id,
+      documentId: ctx.session.documentId,
+    });
+    return null;
+  },
+});
+
 export const createDocument = demoMutation({
   args: {
     name: v.string(),

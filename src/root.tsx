@@ -1,4 +1,6 @@
+import { useEffect, useRef } from "react";
 import {
+  Link,
   Links,
   Meta,
   Outlet,
@@ -8,6 +10,7 @@ import {
   type MetaFunction,
 } from "react-router";
 import { ConvexReactClient } from "convex/react";
+import type { Route } from "./+types/root";
 import {
   ConvexBetterAuthProvider,
   type AuthClient,
@@ -19,6 +22,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { ToastProvider } from "@/components/ui/toast";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PageShell } from "@/components/ui/page-shell";
+import { buttonVariants } from "@/components/ui/button-variants";
+import { registerIssueReporter, reportIssue } from "@/lib/reportIssue";
 
 const SITE_URL = "https://glorious-warbler-976.convex.site/";
 
@@ -156,6 +162,56 @@ const convex = new ConvexReactClient(
   import.meta.env.VITE_CONVEX_URL as string,
   { expectAuth: true },
 );
+
+// Registered rather than imported by the reporter, which would be a cycle. This
+// is also what lets the `window` handlers in entry.client.tsx — which sit
+// outside React and so have no provider to read — report through the same
+// client the app uses.
+registerIssueReporter(convex);
+
+/**
+ * The last stop for a render that threw.
+ *
+ * Two jobs, and the second is the reason this exists at all. It shows the user
+ * something other than React Router's default error screen — and it is the only
+ * place in the app that hears about a crashed render, so it is what puts one in
+ * the ledger. Without it a component that throws for a particular document is
+ * invisible: nobody files a bug, they just stop using the page.
+ *
+ * A route with its own ErrorBoundary (AdminPage) still handles its own errors;
+ * this catches everything else, including a throw in Layout.
+ */
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  const message = error instanceof Error ? error.message : String(error);
+  const reported = useRef<string | null>(null);
+
+  // An effect and not the render body: reporting is a genuine side effect, and
+  // firing it during render would send it twice under StrictMode. The ref keys
+  // on the message so a re-render of the same crash does not re-report, while a
+  // different crash still does.
+  useEffect(() => {
+    if (reported.current === message) return;
+    reported.current = message;
+    reportIssue({
+      surface: "crash",
+      stage: "boundary",
+      message,
+      errorCode: error instanceof Error ? error.name : "unknown",
+    });
+  }, [error, message]);
+
+  return (
+    <PageShell
+      title="Something went wrong"
+      subtitle={message}
+      width="prose"
+    >
+      <Link to="/" className={buttonVariants()}>
+        Back to projects
+      </Link>
+    </PageShell>
+  );
+}
 
 // StrictMode wraps HydratedRouter in entry.client.tsx, so it covers Layout too.
 export default function Root() {

@@ -24,6 +24,7 @@ export default [
       // Gated on the server by adminQuery, not by this route. A non-admin who
       // types the URL gets a thrown error, which is the correct outcome.
       route("admin", "pages/AdminPage.tsx"),
+      route("admin/issues", "pages/AdminIssuesPage.tsx"),
       route("*", "pages/NotFoundPage.tsx"),
     ]),
     route("documents/:id", "pages/DocumentRoute.tsx"),

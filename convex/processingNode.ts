@@ -12,6 +12,7 @@ import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { processingEnqueueOptions, processingPool } from "./processingPool";
 import {
   ocrDocument,
   analyzeDocumentText,
@@ -137,6 +138,53 @@ async function scheduleTranslation(
 
 
 /**
+ * Hand Analyze to the pool instead of running it inline.
+ *
+ * Analyze is roughly eleven times Scan (`analyze` p50 22.6s against `ocr` p50
+ * 2.0s), and awaiting it here held one of the pool's slots for that whole time
+ * — *after* this stage's own job row had already been marked completed. Two
+ * things followed from that:
+ *
+ *  - A bulk upload queued every other document's two-second Scan behind a full
+ *    Scan+Analyze cycle. The `parse` stage measured p50 17.2s / p90 148.2s of
+ *    slot occupancy to do 2s of the work that makes a document searchable.
+ *  - Every ETA was optimistic. processingJobs.estimateByDocument measures a
+ *    slot's occupancy from its job row and counts busy workers the same way,
+ *    so an action outliving its own row understated both terms.
+ *
+ * Splitting the stages makes the job row's lifetime equal the slot's lifetime
+ * again, which is what the estimate already assumed.
+ */
+async function enqueueAnalyze(
+  ctx: ActionCtx,
+  documentId: Id<"documents">,
+  bypassCache?: boolean
+): Promise<void> {
+  const shouldEnqueue: boolean = await ctx.runMutation(
+    internal.processing.createJob,
+    { documentId, stage: "analyze" }
+  );
+  // Already queued or running — that run owns the stage, including the
+  // translation it schedules on the way out.
+  if (!shouldEnqueue) return;
+  const { paused } = await ctx.runQuery(
+    internal.processingControl.getInternal,
+    {}
+  );
+  const workId = await processingPool.enqueueAction(
+    ctx,
+    internal.processingNode.runAnalyze,
+    { documentId, ...(bypassCache === undefined ? {} : { bypassCache }) },
+    processingEnqueueOptions(paused, { documentId, stage: "analyze" })
+  );
+  await ctx.runMutation(internal.processing.attachWorkId, {
+    documentId,
+    stage: "analyze",
+    workId,
+  });
+}
+
+/**
  * Stage-prefix a failure message — except for classified provider failures,
  * whose message already names the cause and the fix in the user's terms.
  * "Parse failed: Interfaze API credits exhausted — add credits…" buries the
@@ -168,12 +216,9 @@ export const runDocumentUnderstanding = internalAction({
     const apiKey = process.env.INTERFAZE_API_KEY;
     if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
     const fileUrl = await requireFileUrl(ctx, document);
-    const csv = isCsvDocument(document);
-    const csvPages = csv ? await csvSearchPages(ctx, document) : null;
-    const { kindNames, categories } = await projectTaxonomy(
-      ctx,
-      document.projectId
-    );
+    const csvPages = isCsvDocument(document)
+      ? await csvSearchPages(ctx, document)
+      : null;
     const log = usageLogger(ctx, { documentId: args.documentId });
 
     await ctx.runMutation(internal.processing.updateStatus, {
@@ -285,39 +330,22 @@ export const runDocumentUnderstanding = internalAction({
           `${parsedPages.reduce((n, p) => n + p.blocks.length, 0)} blocks`
       );
 
-      try {
-        await analyzeAndStore(ctx, {
-          documentId: args.documentId,
-          pageTexts: parsedPages.map((page) => page.text),
-          apiKey,
-          csv,
-          kindNames,
-          categories,
-          log,
-          bypassCache: args.bypassCache,
-          fileName: document.name,
-        });
-      } finally {
-        // Translation is queued *after* Analyze, not before it.
-        //
-        // The skip gate in translationNode.ts can only recognize an
-        // already-in-the-target-language document from `sourceLanguageCode` +
-        // `sourceLanguageIsMixed`, and Analyze is what writes them. Queued
-        // first, the gate saw `undefined`, declined to skip, and translated
-        // English documents into English one page at a time: 101 of the first
-        // 106 stored page translations were en→en.
-        //
-        // It stays in a `finally` because a document whose Analyze failed must
-        // still get translated — it just gets translated without the hint, the
-        // way every document used to.
-        await scheduleTranslation(ctx, args.documentId);
-      }
+      // Enqueued rather than awaited — see enqueueAnalyze. Translation is
+      // queued by that stage on its way out, not here: the skip gate in
+      // translationNode.ts recognizes an already-in-the-target-language
+      // document from `sourceLanguageCode` + `sourceLanguageIsMixed`, and
+      // Analyze is what writes them. Queued before Analyze the gate saw
+      // `undefined`, declined to skip, and translated English documents into
+      // English one page at a time: 101 of the first 106 stored page
+      // translations were en→en.
+      await enqueueAnalyze(ctx, args.documentId, args.bypassCache);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await ctx.runMutation(internal.processing.markFailed, {
         documentId: args.documentId,
         errorMessage: stageMessage("Document understanding", error, message),
         errorCode: failureCodeOf(error),
+        stage: "parse",
       });
     }
     return null;
@@ -481,6 +509,17 @@ export const runAnalyze = internalAction({
         stage: "analyze",
         errorMessage: stageMessage("Analyze", e, msg),
       });
+    } finally {
+      // Queued here rather than by the Scan that enqueued this stage, because
+      // the skip gate needs `sourceLanguageCode` + `sourceLanguageIsMixed` and
+      // Analyze is what writes them.
+      //
+      // In a `finally` because a document whose Analyze failed must still get
+      // translated — it just gets translated without the hint, the way every
+      // document used to. Re-running Analyze re-queues it harmlessly:
+      // translations.beginTranslation returns false for a lifecycle that has
+      // already started, so a repeat is one query and an early return.
+      await scheduleTranslation(ctx, args.documentId);
     }
     return null;
   },
@@ -588,6 +627,7 @@ export const runTranscribe = internalAction({
         documentId: args.documentId,
         errorMessage: stageMessage("Transcription", e, msg),
         errorCode: failureCodeOf(e),
+        stage: "transcribe",
       });
     }
     return null;

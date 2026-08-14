@@ -847,6 +847,82 @@ export default defineSchema({
     .index("by_target", ["targetEntityId"])
     .index("by_document", ["documentId"]),
 
+  // One row per *distinct kind* of failure, not per failure.
+  //
+  // The sibling of apiLogs: that table exists so production traffic doubles as
+  // the cost benchmark, this one so production traffic doubles as the pain-point
+  // corpus. Both are written at a chokepoint every caller already passes
+  // through, which is the only way a new call site cannot forget to report.
+  //
+  // Rows are aggregates, so unlike apiLogs there is nothing to prune — a row is
+  // bounded (three samples, fifty owner ids) no matter how often it fires.
+  // Nothing here is document text; see convex/issueFingerprint.ts for what is
+  // stripped and why the stripping is what makes the grouping work.
+  issues: defineTable({
+    // fnv1a over surface|stage|errorCode|fileKind|title — see issueFingerprint.
+    fingerprint: v.string(),
+    // Which layer noticed: "client" (browser, before the bytes land),
+    // "pipeline" (a processing stage), "render" (page derivatives),
+    // "provider" (an Interfaze/embeddings call that errored), "crash"
+    // (an unhandled throw or a React render error).
+    surface: v.string(),
+    // "preflight" | "upload" | "parse" | "analyze" | "extract" | "transcribe"
+    // | "relationships" | "render" | "boundary" | "unhandled" | ...
+    stage: v.string(),
+    // From a closed vocabulary: a PdfPreflightResult code, an interfaze
+    // FailureCode, or a JS error name. Absent = uncategorized.
+    errorCode: v.optional(v.string()),
+    // The normalized message. Doubles as the group key's message component, so
+    // what is counted and what is read cannot disagree.
+    title: v.string(),
+    fileKind: v.optional(v.string()), // "pdf" | "audio" | "docx" | "csv" | ...
+    count: v.number(),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    firstBuildSha: v.optional(v.string()),
+    lastBuildSha: v.optional(v.string()),
+    // Distinct accounts hit, as a capped set rather than a counter: one user
+    // failing fifty times and fifty users failing once are the same number and
+    // completely different problems, and only the set can tell them apart.
+    // Exact up to the cap, honest past it via ownersTruncated ("50+").
+    ownerSample: v.array(v.string()),
+    ownersTruncated: v.boolean(),
+    // The most recent occurrences, kept for the report to quote and — via
+    // documentId — to re-run. Bounded, newest first.
+    samples: v.array(
+      v.object({
+        at: v.number(),
+        raw: v.string(), // scrubbed prose, SAMPLE_CHARS
+        documentId: v.optional(v.id("documents")),
+        sizeBytes: v.optional(v.number()),
+        pageCount: v.optional(v.number()),
+        mimeType: v.optional(v.string()),
+      })
+    ),
+    state: v.union(
+      v.literal("open"),
+      v.literal("triaged"),
+      v.literal("resolved"),
+      v.literal("ignored")
+    ),
+    // Set when a resolved or triaged row starts firing again — the signal that
+    // turns this from a one-time cleanup into something that keeps watch.
+    regressedAt: v.optional(v.number()),
+    // Written back by the triage agent, never by the pipeline.
+    triage: v.optional(
+      v.object({
+        markdown: v.string(),
+        // The count at the moment of triage. Regrowth past it is what marks a
+        // triaged issue worth looking at again.
+        atCount: v.number(),
+        at: v.number(),
+        buildSha: v.optional(v.string()),
+      })
+    ),
+  })
+    .index("by_fingerprint", ["fingerprint"])
+    .index("by_state_and_lastSeen", ["state", "lastSeenAt"]),
+
   // One row per external AI API call (Interfaze, OpenAI embeddings), with
   // token usage and estimated cost — powers the settings/usage page.
   apiLogs: defineTable({

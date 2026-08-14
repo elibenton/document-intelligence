@@ -14,6 +14,7 @@ import { isSupportedUpload, UNSUPPORTED_REASON } from "@/lib/uploadTypes";
 import { isAudioUpload, preflightAudio } from "@/lib/audioPreflight";
 import { isPdfUpload, preflightPdf } from "@/lib/pdfPreflight";
 import { sha256Hex } from "@/lib/contentHash";
+import { fileKindOf, reportIssue } from "@/lib/reportIssue";
 
 let nextUploadId = 0;
 
@@ -82,6 +83,46 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     setUploads((prev) => prev.filter((u) => u.id !== id));
   }, []);
 
+  /**
+   * Fail one upload card: show it, retire it, and count it.
+   *
+   * The four rejection paths below were four copies of patch-then-arm-a-timer,
+   * differing only in the linger duration — which is exactly the shape that
+   * grows a fifth copy the day someone adds a rejection and forgets the timer.
+   * Collapsing them is worth doing on its own; that it leaves a single place
+   * for `reportIssue` is the reason a client failure is now visible at all
+   * (convex/issues.ts). None of these can carry a documentId: every one of them
+   * happens before a document row exists.
+   */
+  const failUpload = useCallback(
+    (
+      id: string,
+      file: File,
+      stage: string,
+      error: string,
+      options?: { errorCode?: string; lingerMs?: number; pageCount?: number }
+    ) => {
+      patchUpload(id, { status: "error", error });
+      timersRef.current.push(
+        window.setTimeout(
+          () => removeUpload(id),
+          options?.lingerMs ?? ERROR_LINGER_MS
+        )
+      );
+      reportIssue({
+        surface: "client",
+        stage,
+        message: error,
+        errorCode: options?.errorCode,
+        fileKind: fileKindOf(file),
+        sizeBytes: file.size,
+        pageCount: options?.pageCount,
+        mimeType: file.type || undefined,
+      });
+    },
+    [patchUpload, removeUpload]
+  );
+
   const upload = useCallback(
     async (file: File, projectId: Id<"projects">) => {
       const id = `upload-${nextUploadId++}`;
@@ -102,10 +143,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       // anything at all, and the backend then defaulted unknown types to
       // "pdf" and sent e.g. a spreadsheet down the PDF parse path.
       if (!isSupportedUpload(file)) {
-        patchUpload(id, { status: "error", error: UNSUPPORTED_REASON });
-        timersRef.current.push(
-          window.setTimeout(() => removeUpload(id), ERROR_LINGER_MS)
-        );
+        failUpload(id, file, "preflight", UNSUPPORTED_REASON, {
+          errorCode: "unsupported_type",
+        });
         return undefined;
       }
 
@@ -143,10 +183,15 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           patchUpload(id, { detail: "Inspecting PDF structure…" });
           const preflight = await preflightPdf(file);
           if (!preflight.ok) {
-            patchUpload(id, { status: "error", error: preflight.message });
-            timersRef.current.push(
-              window.setTimeout(() => removeUpload(id), 12_000)
-            );
+            // preflight.code is the six-value vocabulary in pdfPreflight.ts —
+            // password_protected, invalid_pdf, provider_size_limit and friends.
+            // It was classified and then discarded here; the ledger is the first
+            // thing to keep it.
+            failUpload(id, file, "preflight", preflight.message, {
+              errorCode: preflight.code,
+              lingerMs: 12_000,
+              pageCount: preflight.pageCount ?? undefined,
+            });
             return undefined;
           }
           patchUpload(id, {
@@ -159,10 +204,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         } else if (isAudioUpload(file)) {
           const preflight = await preflightAudio(file);
           if (!preflight.ok) {
-            patchUpload(id, { status: "error", error: preflight.message });
-            timersRef.current.push(
-              window.setTimeout(() => removeUpload(id), 12_000)
-            );
+            failUpload(id, file, "preflight", preflight.message, {
+              errorCode: preflight.code,
+              lingerMs: 12_000,
+            });
             return undefined;
           }
           patchUpload(id, { detail: preflight.message });
@@ -224,17 +269,29 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         });
         return documentId;
       } catch (e) {
-        patchUpload(id, {
-          status: "error",
-          error: e instanceof Error ? e.message : String(e),
-        });
-        timersRef.current.push(
-          window.setTimeout(() => removeUpload(id), ERROR_LINGER_MS)
+        // Everything from the hash to `createDocument`: the storage PUT's
+        // network errors and HTTP statuses, the audio converter, and the
+        // finalize mutation. Reported under one stage because from here the
+        // message is the only thing that distinguishes them, and the
+        // fingerprint groups on the message.
+        failUpload(
+          id,
+          file,
+          "upload",
+          e instanceof Error ? e.message : String(e),
+          { errorCode: e instanceof Error ? e.name : undefined }
         );
         return undefined;
       }
     },
-    [convex, generateUploadUrl, createDocument, patchUpload, removeUpload]
+    [
+      convex,
+      generateUploadUrl,
+      createDocument,
+      patchUpload,
+      removeUpload,
+      failUpload,
+    ]
   );
 
   /**

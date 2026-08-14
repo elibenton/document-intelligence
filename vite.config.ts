@@ -4,6 +4,30 @@ import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "path";
 import { createRequire } from "node:module";
+import { execSync } from "node:child_process";
+
+/**
+ * The commit this bundle was built from, so a crash or upload failure reported
+ * by the browser names the build that produced it — the same identifier
+ * `apiLogs` already stamps on the server side (convex/interfaze.ts). It is what
+ * lets the issue ledger tell "this regressed" from "this was always broken".
+ *
+ * Falls back to empty rather than failing the build: a deploy from a tarball or
+ * a shallow checkout has no git, and a missing build label is not worth a
+ * broken build.
+ */
+function buildSha(): string {
+  if (process.env.BUILD_SHA) return process.env.BUILD_SHA.slice(0, 7);
+  try {
+    return execSync("git rev-parse --short=7 HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Serve pdf.js's sibling asset directories at a stable `/pdfjs/` URL.
@@ -71,6 +95,9 @@ function pdfjsAssets(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __BUILD_SHA__: JSON.stringify(buildSha()),
+  },
   server: {
     port: process.env.PORT ? Number(process.env.PORT) : 5173,
   },

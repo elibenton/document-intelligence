@@ -346,6 +346,7 @@ export const extract = internalAction({
         documentId: args.documentId,
         errorMessage: code ? msg : `Entity mapping failed: ${msg}`,
         errorCode: code,
+        stage: "relationships",
       });
     }
   },
