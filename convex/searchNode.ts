@@ -12,7 +12,7 @@ import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { VECTOR_LEG_HITS, type PageHit } from "./search";
+import { SYNTHESIS_PAGES, VECTOR_LEG_HITS, type PageHit } from "./search";
 import { chatCompletion } from "./interfaze";
 import { usageLogger } from "./apiLogs";
 import { healthReporter } from "./providerHealth";
@@ -226,7 +226,7 @@ export const execute = internalAction({
         { source: "text", hits: textHits },
         { source: "semantic", hits: vectorHits },
         { source: "entity", hits: entityResult.hits },
-      ]).slice(0, 12);
+      ]).slice(0, SYNTHESIS_PAGES);
 
       const hydrated: Array<{
         documentId: Id<"documents">;

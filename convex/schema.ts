@@ -664,7 +664,7 @@ export default defineSchema({
     status: v.string(),
     // Interfaze query plan (JSON string) — kept for transparency/debugging
     plan: v.optional(v.string()),
-    // Fused, ranked retrieval hits (bounded, top ~12)
+    // Fused, ranked retrieval hits (bounded — search.SYNTHESIS_PAGES)
     results: v.optional(
       v.array(
         v.object({

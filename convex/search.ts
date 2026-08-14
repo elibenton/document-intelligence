@@ -406,6 +406,24 @@ export const plannerContext = internalQuery({
 const TEXT_LEG_HITS = 16;
 export const VECTOR_LEG_HITS = 16;
 
+/**
+ * How much of the corpus one synthesis call may quote.
+ *
+ * Pages used to be cut to 2500 chars each — about half a dense page — so the
+ * model could cite a page whose second half it never saw. They now go whole,
+ * under a total budget instead of a per-page one, because a page is not a
+ * bounded unit: a web clip page runs to PAGE_CHAR_LIMIT (100k chars), and 24
+ * of those would be ~600k tokens at $1.5/M.
+ *
+ * 120k chars is ~30k tokens, ~$0.045 of input at list price, and more than 24
+ * ordinary document pages ever reach — so in practice the budget binds only on
+ * clip-sized pages, which is exactly when it should.
+ */
+export const SYNTHESIS_PAGES = 24;
+const SYNTHESIS_CHAR_BUDGET = 120_000;
+/** Below this, a page's remaining slice is too small to be worth a citation. */
+const MIN_USEFUL_PAGE_CHARS = 500;
+
 
 export const textLeg = internalQuery({
   args: {
@@ -638,7 +656,9 @@ export const hydrateForSynthesis = internalQuery({
       text: string;
     }> = [];
     const docNames = new Map<Id<"documents">, string>();
-    for (const key of args.keys.slice(0, 16)) {
+    let remaining = SYNTHESIS_CHAR_BUDGET;
+    for (const key of args.keys.slice(0, SYNTHESIS_PAGES)) {
+      if (remaining < MIN_USEFUL_PAGE_CHARS) break;
       let name = docNames.get(key.documentId);
       if (name === undefined) {
         name = (await ctx.db.get(key.documentId))?.name ?? "Unknown document";
@@ -658,13 +678,18 @@ export const hydrateForSynthesis = internalQuery({
             )
             .unique()
         : null;
+      const full =
+        translated?.status === "complete" ? translated.text : page?.text ?? "";
+      // Pages are sent whole. The budget is spent in rank order, so the best
+      // hits get their full text and a long page costs later ones their slot
+      // rather than everyone a fixed slice of theirs.
+      const text = full.length <= remaining ? full : full.slice(0, remaining);
+      remaining -= text.length;
       out.push({
         documentId: key.documentId,
         documentName: name,
         pageNumber: key.pageNumber,
-        text: (
-          translated?.status === "complete" ? translated.text : page?.text ?? ""
-        ).slice(0, 2500),
+        text,
       });
     }
     return out;

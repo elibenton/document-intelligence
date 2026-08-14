@@ -16,6 +16,7 @@ import type * as clips from "../clips.js";
 import type * as crons from "../crons.js";
 import type * as detections from "../detections.js";
 import type * as documentCategories from "../documentCategories.js";
+import type * as documentMove from "../documentMove.js";
 import type * as documents from "../documents.js";
 import type * as docx from "../docx.js";
 import type * as docxRender from "../docxRender.js";
@@ -78,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   detections: typeof detections;
   documentCategories: typeof documentCategories;
+  documentMove: typeof documentMove;
   documents: typeof documents;
   docx: typeof docx;
   docxRender: typeof docxRender;
