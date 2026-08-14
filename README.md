@@ -1,4 +1,4 @@
-# Document Intelligence
+# Haystack
 
 Upload documents — PDFs, DOCX, images, CSVs, audio/video, web clips — and the app
 reads them: OCR + layout, a structured understanding pass, entity extraction,

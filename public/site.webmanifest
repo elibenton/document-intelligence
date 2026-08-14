@@ -1,13 +1,13 @@
 {
   "id": "/",
-  "name": "Document Intelligence",
-  "short_name": "DocIntel",
-  "description": "Upload PDFs, CSVs, images, and recordings; store and parse every source, extract entities and relationships, and uncover the connections inside your evidence.",
+  "name": "Haystack",
+  "short_name": "Haystack",
+  "description": "Anything in. Answers out. Upload PDFs, CSVs, images, and recordings — every source parsed, entities and relationships extracted, answers cited back to the page.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#863bff",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "/icon-192.png",

@@ -3,8 +3,8 @@
 // the shell and nothing else. Document content lives in Convex and is useless
 // offline anyway, so there is no offline data story here to get wrong.
 
-const CACHE = "di-shell-v1";
-const SHELL = ["/", "/favicon.svg", "/icon-192.png", "/icon-512.png"];
+const CACHE = "haystack-shell-v1";
+const SHELL = ["/", "/haystack.png", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

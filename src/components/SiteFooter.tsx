@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { FileText, Settings as SettingsIcon } from "lucide-react";
+import { Settings as SettingsIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 /**
@@ -12,11 +12,16 @@ export function SiteFooter() {
     <footer className="border-t px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm">
       {/* Branding */}
       <div className="flex items-center gap-2">
-        <FileText className="size-4 text-muted-foreground shrink-0" />
+        {/* Black line art, so it needs inverting to stay visible in dark. */}
+        <img
+          src="/haystack.png"
+          alt=""
+          className="size-5 shrink-0 object-contain dark:invert"
+        />
         <div className="leading-tight">
-          <p className="font-semibold">Document Intelligence</p>
+          <p className="font-semibold">Haystack</p>
           <p className="text-xs text-muted-foreground">
-            Turn documents into entities, connections, and answers.
+            Anything in. Answers out.
           </p>
         </div>
       </div>
