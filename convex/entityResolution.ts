@@ -1,5 +1,6 @@
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { slugify } from "./slug";
 
 /**
  * Shared entity resolver — the single path every extraction stage uses to turn
@@ -150,6 +151,7 @@ export async function resolveEntity(
   const entityId = await ctx.db.insert("entities", {
     projectId,
     name: clean,
+    slug: slugify(clean),
     type: STABLE_TO_LEGACY[args.stableType] ?? "other",
     types: [args.stableType],
     mentionCount: 0,

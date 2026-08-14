@@ -519,10 +519,19 @@ export default defineSchema({
     isCustom: v.boolean(),
     // User-curated entities stay visible beneath a closed type group.
     starred: v.optional(v.boolean()),
+    // `slugify(name)`, stored so `/entity/:slug` is an index lookup rather
+    // than a scan over search hits. Optional only because rows written before
+    // this field existed carry no slug until the backfill runs; an entity's
+    // name never changes after creation (a merge deletes the loser rather than
+    // renaming the winner), so the value is stable once written.
+    slug: v.optional(v.string()),
   })
     .index("by_type", ["type", "mentionCount"])
     .index("by_name", ["name"])
     .index("by_project", ["projectId"])
+    // projectId second: the same real-world name is a separate row per project,
+    // so the slug alone is ambiguous and every in-app link scopes it.
+    .index("by_slug_and_project", ["slug", "projectId"])
     // The library sorts entities by mentionCount, so the 200-row cap has to
     // cut the tail rather than an arbitrary creation-order slice — otherwise
     // the most-mentioned entities can never reach the client.

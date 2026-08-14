@@ -1,14 +1,8 @@
 /**
- * The slug in `/entity/:slug`.
+ * The slug in `/entity/:slug`, re-exported from the Convex module that owns it.
  *
- * Lives here because three call sites had grown their own copy — the entity
- * page, the document sidebar, and the connections panel — and a slug that
- * disagrees between the link and the lookup is a dead route, not a cosmetic
- * difference. `convex/entities.ts` getBySlug matches against this shape.
+ * The definition lives in `convex/slug.ts` because the server stores and indexes
+ * these values; a client copy that drifts from it produces a dead route. This
+ * file stays only so the existing `@/lib/entitySlug` imports keep resolving.
  */
-export function entitySlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+export { slugify as entitySlug } from "../../convex/slug";

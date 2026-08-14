@@ -3,12 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+import { slugify } from "./slug";
 
 // ---------------------------------------------------------------------------
 // List all projects (newest first) with document counts for the picker cards
@@ -72,6 +67,22 @@ export const get = query({
   },
 });
 
+/**
+ * Resolve `/p/:slug`. `.first()` rather than `.unique()` for the same reason
+ * `allocateSlug` uses it: an older build could write unchecked slugs, so a
+ * deployment may already hold duplicates, and throwing here would take the
+ * project page down rather than landing on one of them.
+ */
+export const getBySlug = query({
+  args: { slug: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("projects")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Create a project (slug de-duplicated with a numeric suffix)
 // ---------------------------------------------------------------------------
@@ -90,7 +101,7 @@ async function allocateSlug(
   name: string,
   exclude?: Id<"projects">
 ): Promise<string> {
-  const base = toSlug(name) || "project";
+  const base = slugify(name) || "project";
   for (let i = 1; ; i++) {
     const slug = i === 1 ? base : `${base}-${i}`;
     const existing = await ctx.db

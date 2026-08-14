@@ -132,25 +132,14 @@ export const byDocument = query({
 export const getBySlug = query({
   args: { slug: v.string(), projectId: v.optional(v.id("projects")) },
   handler: async (ctx, args) => {
-    // Reconstruct name from slug for search
-    const searchTerm = args.slug.replace(/-/g, " ");
-    const results = await ctx.db
+    return await ctx.db
       .query("entities")
-      .withSearchIndex("search_name", (q) =>
+      .withIndex("by_slug_and_project", (q) =>
         args.projectId
-          ? q.search("name", searchTerm).eq("projectId", args.projectId)
-          : q.search("name", searchTerm)
+          ? q.eq("slug", args.slug).eq("projectId", args.projectId)
+          : q.eq("slug", args.slug)
       )
-      .take(50);
-
-    // Match by slug: normalize entity name the same way
-    const toSlug = (name: string) =>
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "");
-
-    return results.find((e) => toSlug(e.name) === args.slug) ?? null;
+      .first();
   },
 });
 
