@@ -249,20 +249,16 @@ export const commitPage = internalMutation({
       await ctx.db.delete(duplicatePage._id);
     }
 
-    // Progress is the number of pages whose geometry is at the current
-    // version. It used to count pageImages rows, which no longer exist for
-    // documents processed after the rasterizer was removed.
-    const geometryRows = await ctx.db
-      .query("pages")
-      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .collect();
-    const renderedPageCount = geometryRows.filter(
-      (row) => row.geometryVersion === args.rendererVersion
-    ).length;
-    await ctx.db.patch(args.documentId, {
-      renderedPageCount,
-      renderScheduledAt: Date.now(),
-    });
+    // Heartbeat only. `renderedPageCount` is deliberately not maintained here:
+    // its sole reader is ensureRendered's guard, which consults it only when
+    // renderStatus is already "complete" — the state completeRender writes it
+    // in. Every value a per-page recount produced was overwritten there, so
+    // scanning every page row of the document on every page cost a
+    // whole-document read set (page rows carry a 1536-float embedding) to
+    // maintain a number nobody read. That read set is what collided with
+    // ingest.ingestParseResults, which replaces the same page range while
+    // rendering is still running.
+    await ctx.db.patch(args.documentId, { renderScheduledAt: Date.now() });
     return null;
   },
 });
