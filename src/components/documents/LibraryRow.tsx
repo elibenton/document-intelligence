@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { CircleAlert } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { DocTypeIcon } from "./DocTypeIcon";

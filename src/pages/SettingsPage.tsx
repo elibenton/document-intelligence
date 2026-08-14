@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { ArrowLeft, CircleAlert, CircleCheck, Languages } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import ProviderAlert from "@/components/settings/ProviderAlert";

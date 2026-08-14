@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
@@ -30,8 +30,7 @@ const STAGES = [
 ] as const;
 
 export default function SearchPage() {
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   // /search?id=… loads a stored search from history (no re-run);
   // /search?q=… starts (or reuses) one, then swaps the URL to ?id=.
   const idParam = searchParams.get("id") as Id<"searches"> | null;
@@ -56,9 +55,9 @@ export default function SearchPage() {
     startedFor.current = q;
     void start({ query: q, projectId: projectParam }).then((id) => {
       setStarted({ q, id });
-      navigate(`/search?id=${id}`, { replace: true });
+      setSearchParams({ id }, { replace: true });
     });
-  }, [idParam, q, projectParam, start, navigate]);
+  }, [idParam, q, projectParam, start, setSearchParams]);
 
   const startedId = started && started.q === q ? started.id : null;
   const searchId = idParam ?? startedId;
@@ -72,7 +71,7 @@ export default function SearchPage() {
     startedFor.current = queryText;
     const id = await start({ query: queryText, projectId, force: true });
     setStarted({ q: queryText, id });
-    navigate(`/search?id=${id}`, { replace: true });
+    setSearchParams({ id }, { replace: true });
   }
 
   const stageIndex = search

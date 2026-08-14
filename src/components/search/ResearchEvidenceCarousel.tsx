@@ -5,7 +5,7 @@ import {
   useState,
   type ComponentPropsWithoutRef,
 } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useQuery } from "convex/react";
 import ReactMarkdown from "react-markdown";
 import { ArrowUpRight, ChevronLeft, ChevronRight, FileText } from "lucide-react";

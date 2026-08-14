@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { FileText, Settings as SettingsIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 

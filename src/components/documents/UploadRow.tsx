@@ -1,5 +1,5 @@
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { UploadItem } from "@/hooks/uploadContext";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";

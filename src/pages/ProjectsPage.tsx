@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { FolderOpen, MoreVertical, Plus, Search, X } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
@@ -15,7 +15,6 @@ type ProjectListItem = Doc<"projects"> & { documentCount: number };
  * place — no menu, no AI, just the two text fields the card already shows.
  */
 function ProjectCard({ project }: { project: ProjectListItem }) {
-  const navigate = useNavigate();
   const updateProject = useMutation(api.projects.update);
 
   const [editing, setEditing] = useState(false);
@@ -108,8 +107,8 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
 
   return (
     // The whole card navigates, but the icon inside it is its own button —
-    // so the title carries a stretched hit area (::after) and the icon sits
-    // above it on z-10, rather than nesting a button inside a button.
+    // so the title link carries a stretched hit area (::after) and the icon
+    // sits above it on z-10, rather than nesting a button inside the link.
     <div className="relative rounded-lg border bg-card p-4 hover:bg-accent/50 transition-colors">
       <div className="flex items-center gap-2">
         <button
@@ -122,13 +121,12 @@ function ProjectCard({ project }: { project: ProjectListItem }) {
           <FolderOpen className="col-start-1 row-start-1 h-4 w-4 text-muted-foreground transition-opacity group-hover/identity:opacity-0 group-focus-visible/identity:opacity-0" />
           <MoreVertical className="col-start-1 row-start-1 h-3.5 w-3.5 opacity-0 transition-opacity group-hover/identity:opacity-100 group-focus-visible/identity:opacity-100" />
         </button>
-        <button
-          type="button"
-          onClick={() => navigate(`/p/${project._id}`)}
+        <Link
+          to={`/p/${project._id}`}
           className="min-w-0 truncate text-left text-sm font-medium after:absolute after:inset-0 after:content-['']"
         >
           {project.name}
-        </button>
+        </Link>
       </div>
       {project.description && (
         <p className="text-xs text-muted-foreground mt-1.5 line-clamp-2">

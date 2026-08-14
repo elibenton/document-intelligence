@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
-import { useParams, useSearchParams, Link, useNavigate } from "react-router-dom";
+import { useParams, useSearchParams, Link, useNavigate } from "react-router";
 import { Folder } from "lucide-react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";

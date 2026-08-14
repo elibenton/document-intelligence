@@ -1,24 +1,13 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { AlertCircle, UploadCloud, X } from "lucide-react";
-import { useLocation } from "react-router-dom";
+import { useMatch, useSearchParams } from "react-router";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { useUploads, useProjectUploads } from "@/hooks/uploadContext";
 import { uploadWithConcurrency } from "@/lib/uploadQueue";
 import { UploadRow } from "@/components/documents/UploadRow";
 import { isSupportedUpload } from "@/lib/uploadTypes";
-
-function routeSegment(pathname: string, prefix: string): string | null {
-  if (!pathname.startsWith(prefix)) return null;
-  const segment = pathname.slice(prefix.length).split("/")[0];
-  if (!segment) return null;
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-}
 
 function hasFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
@@ -85,25 +74,26 @@ async function filesFromDrop(dataTransfer: DataTransfer): Promise<File[]> {
  * at the top of the page, so this overlay is the only drop surface there too.
  */
 export function GlobalDropOverlay() {
-  const location = useLocation();
-  const params = new URLSearchParams(location.search);
-  const documentId = routeSegment(location.pathname, "/documents/");
-  const entitySlug = routeSegment(location.pathname, "/entity/");
-  const searchId =
-    location.pathname === "/search" ? params.get("id") : null;
-  const projectParam = params.get("project") as Id<"projects"> | null;
-  const projectRoute = routeSegment(
-    location.pathname,
-    "/p/"
-  ) as Id<"projects"> | null;
+  const [searchParams] = useSearchParams();
+  const documentId = useMatch("/documents/:id")?.params.id as
+    | Id<"documents">
+    | undefined;
+  const entitySlug = useMatch("/entity/:slug")?.params.slug;
+  const projectRoute = useMatch("/p/:projectId")?.params.projectId as
+    | Id<"projects">
+    | undefined;
+  const searchId = useMatch("/search")
+    ? (searchParams.get("id") as Id<"searches"> | null)
+    : null;
+  const projectParam = searchParams.get("project") as Id<"projects"> | null;
 
   const document = useQuery(
     api.documents.get,
-    documentId ? { id: documentId as Id<"documents"> } : "skip"
+    documentId ? { id: documentId } : "skip"
   );
   const search = useQuery(
     api.search.get,
-    searchId ? { id: searchId as Id<"searches"> } : "skip"
+    searchId ? { id: searchId } : "skip"
   );
   const entity = useQuery(
     api.entities.getBySlug,
