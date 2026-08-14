@@ -1,4 +1,5 @@
 import DocumentPage from "@/pages/DocumentPage";
+import type { Route } from "./+types/DocumentRoute";
 
 /**
  * The document viewer is a fixed-height workspace of its own, so it sits
@@ -8,10 +9,10 @@ import DocumentPage from "@/pages/DocumentPage";
  * three places, so wrapping it there would mean the same element pasted three
  * times.
  */
-export default function DocumentRoute() {
+export default function DocumentRoute({ params }: Route.ComponentProps) {
   return (
     <main id="main" className="flex-1 min-h-0">
-      <DocumentPage />
+      <DocumentPage id={params.id} />
     </main>
   );
 }

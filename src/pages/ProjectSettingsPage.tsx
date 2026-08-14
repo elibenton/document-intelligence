@@ -1,5 +1,6 @@
 import { useQuery } from "convex/react";
-import { Link, useParams } from "react-router";
+import { Link } from "react-router";
+import type { Route } from "./+types/ProjectSettingsPage";
 import { api } from "../../convex/_generated/api";
 import { CitationStyleSettings } from "@/components/settings/CitationStyleSettings";
 import { DocumentCategoriesSettings } from "@/components/settings/DocumentCategoriesSettings";
@@ -16,9 +17,8 @@ import { Skeleton } from "@/components/ui/skeleton";
  * keeps what is genuinely deployment-wide — usage, provider health, the
  * processing queue, the default language.
  */
-export default function ProjectSettingsPage() {
-  const { slug } = useParams();
-  const project = useQuery(api.projects.getBySlug, slug ? { slug } : "skip");
+export default function ProjectSettingsPage({ params }: Route.ComponentProps) {
+  const project = useQuery(api.projects.getBySlug, { slug: params.slug });
 
   if (project === undefined) {
     return (

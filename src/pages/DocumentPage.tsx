@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
-import { useParams, useSearchParams, Link, useNavigate } from "react-router";
+import { useSearchParams, Link, useNavigate } from "react-router";
 import { Folder } from "lucide-react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
@@ -46,8 +46,12 @@ import { isCsvDocument } from "@/lib/uploadTypes";
 import type { Id } from "../../convex/_generated/dataModel";
 import { isTypingTarget } from "@/lib/isTypingTarget";
 
-export default function DocumentPage() {
-  const { id } = useParams<{ id: string }>();
+/**
+ * `id` arrives as a prop rather than from `useParams` because the route module
+ * is DocumentRoute, which owns the typed params — so a rename of `:id` in
+ * routes.ts is a type error here rather than an undefined at runtime.
+ */
+export default function DocumentPage({ id }: { id: string }) {
   const documentId = id as Id<"documents">;
   const navigate = useNavigate();
   const document = useQuery(api.documents.get, { id: documentId });

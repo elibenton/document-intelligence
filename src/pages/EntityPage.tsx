@@ -1,4 +1,5 @@
-import { useParams, useSearchParams, Link } from "react-router";
+import { useSearchParams, Link } from "react-router";
+import type { Route } from "./+types/EntityPage";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -16,8 +17,8 @@ import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { counted } from "@/lib/plural";
 import { useProjectSlug } from "@/hooks/useProjectSlug";
 
-export default function EntityPage() {
-  const { slug } = useParams<{ slug: string }>();
+export default function EntityPage({ params }: Route.ComponentProps) {
+  const { slug } = params;
   // Entities are per-project, so the slug alone is ambiguous — ?project=
   // disambiguates it. Links minted before scoping existed omit it and fall
   // back to a global lookup.

@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "convex/react";
+import { Link } from "react-router";
 import { api } from "../../convex/_generated/api";
+import { buttonVariants } from "@/components/ui/button-variants";
+import type { Route } from "./+types/AdminPage";
 import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { StatCard } from "@/components/settings/StatCard";
 import { AccountLimitCell } from "@/components/settings/AccountLimitCell";
@@ -17,6 +20,39 @@ import { Button } from "@/components/ui/button";
  * breaks the whole page for everyone. Softening the refusal to keep a page from
  * breaking is how a boundary rots. Here it can throw.
  */
+
+/**
+ * Where that throw lands.
+ *
+ * Without this the refusal takes the whole app down to React Router's default
+ * error screen, which is why a shared page would have been tempted to soften
+ * `admin.usage` into returning null. Scoped to this route, the refusal stays a
+ * refusal and costs nothing but this page.
+ *
+ * "Not authorized" is the ConvexError `adminOnly` throws (convex/authz.ts:115);
+ * anything else is a real failure and is shown as itself rather than being
+ * relabelled as a permissions problem.
+ */
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  const message = error instanceof Error ? error.message : String(error);
+  const refused = message.includes("Not authorized");
+
+  return (
+    <PageShell
+      title={refused ? "Not your dashboard" : "Something went wrong"}
+      subtitle={
+        refused
+          ? "Deployment spend is visible to the account that owns the deployment."
+          : message
+      }
+      width="prose"
+    >
+      <Link to="/" className={buttonVariants()}>
+        Back to projects
+      </Link>
+    </PageShell>
+  );
+}
 
 const WINDOWS = [7, 30] as const;
 

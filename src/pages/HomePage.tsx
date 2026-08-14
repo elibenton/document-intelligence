@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { Link, useParams } from "react-router";
+import { Link } from "react-router";
+import type { Route } from "./+types/HomePage";
 import {
   ArrowLeft,
   Plus,
@@ -354,9 +355,8 @@ function ProjectNotFound() {
  * is keyed by the project's id, so the row has to be resolved before any of it
  * can run — hence the split: this half resolves, the other half renders.
  */
-export default function HomePage() {
-  const { slug } = useParams<{ slug: string }>();
-  const project = useQuery(api.projects.getBySlug, slug ? { slug } : "skip");
+export default function HomePage({ params }: Route.ComponentProps) {
+  const project = useQuery(api.projects.getBySlug, { slug: params.slug });
 
   if (project === undefined) return <ProjectHomeSkeleton />;
   if (project === null) return <ProjectNotFound />;
