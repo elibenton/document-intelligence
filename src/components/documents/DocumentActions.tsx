@@ -4,20 +4,27 @@ import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { MoveDocumentDialog } from "./MoveDocumentDialog";
 
 /**
- * Delete control for a document: removes the file and every derived row
- * (pages, blocks, mentions, extractions…) behind a confirm prompt.
+ * What you can do to a whole document: move it to another project, or delete it
+ * and every derived row (pages, blocks, mentions, extractions…) behind a
+ * confirm prompt.
  */
 export function DocumentActions({
   documentId,
   documentName,
+  projectId,
   onDeleted,
+  onMoved,
   className,
 }: {
   documentId: Id<"documents">;
   documentName: string;
+  /** The project it is in now, so the move dialog can leave it off the list. */
+  projectId?: Id<"projects">;
   onDeleted?: () => void;
+  onMoved?: () => void;
   className?: string;
 }) {
   const removeDocument = useMutation(api.documents.remove);
@@ -25,6 +32,12 @@ export function DocumentActions({
 
   return (
     <span className={className}>
+      <MoveDocumentDialog
+        documentId={documentId}
+        documentName={documentName}
+        currentProjectId={projectId}
+        onMoved={onMoved}
+      />
       <Button
         variant="ghost"
         size="icon-xs"
