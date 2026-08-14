@@ -6,7 +6,26 @@ When working on Convex code, **always read `convex/_generated/ai/guidelines.md` 
 Convex agent skills for common tasks can be installed by running `npx convex ai-files install`.
 <!-- convex-ai-end -->
 
-## First principles
+## First principles — these outrank everything below
+
+**The least code that satisfies the request. When in doubt, don't write it.**
+Doubt is a signal to stop and ask, not to write something plausible and annotate
+the risk afterwards. Uncertain whether a case can happen, whether a field is
+read, whether the platform already does this — say so and wait. An unwritten
+line is free to write later; a written one is maintained forever.
+
+**Take the request, not the wording.** A literal reading that leads away from
+what the platform does natively is the single most common way this rule gets
+broken, because the literal version looks like progress. "Plaintext title
+search" describes a symptom: the literal answer was a substring scan over every
+document in the project, the right one was a second `searchIndex` on the field —
+twenty lines against three, and a per-keystroke table read against none. Propose
+the idiomatic version *before* building, ship it, and name the trade-off it
+makes. Don't hand over the literal version and list its costs at the end.
+
+This is not only about search. Anything the platform already solves — indexes,
+components, `onComplete`, scheduled functions — makes a hand-rolled equivalent a
+finding to report, not a deliverable to write.
 
 **YAGNI.** Build for what is needed now. Speculative generality — an operator
 nobody constructs, a vocabulary nothing renders, a table nothing writes — costs
@@ -16,9 +35,10 @@ maintenance forever and buys nothing. Delete on sight.
 helpers drift silently: a second copy of the Analyze schema quietly stopped web
 clips from ever extracting, because only one copy gained a field.
 
-Both cut both ways. Before deleting something as unused, check that it really is
-unused — grep the call sites, read the live data. Several confident "nothing uses
-this" claims in this repo's history turned out to be wrong.
+All of these cut both ways. Before deleting something as unused, check that it
+really is unused — grep the call sites, read the live data. Several confident
+"nothing uses this" claims in this repo's history turned out to be wrong. The
+rule is *less code*, not *fewer lines in this file*.
 
 ## Interfaze
 
