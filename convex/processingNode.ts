@@ -581,11 +581,6 @@ export const runTranscribe = internalAction({
         documentId: args.documentId,
         segments,
       });
-      await ctx.runMutation(internal.translations.setSourceLanguage, {
-        documentId: args.documentId,
-        sourceLanguageCode: transcript.sourceLanguageCode,
-        sourceLanguageIsMixed: transcript.sourceLanguageIsMixed,
-      });
 
       // Mirror the transcript into pages so text search and entity
       // extraction treat recordings like any other document.

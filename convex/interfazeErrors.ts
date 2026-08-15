@@ -23,7 +23,11 @@ export type FailureCode =
   | "rate_limited"
   | "timeout"
   /** Provider billed for OCR output and returned an empty string. */
-  | "empty_ocr_response";
+  | "empty_ocr_response"
+  /** Speech-to-text response was not the `{ result }` envelope it must be. */
+  | "malformed_transcript"
+  /** Provider billed for transcription and returned no speech at all. */
+  | "empty_transcript";
 
 /** Codes that no retry can clear — a human has to act before work resumes. */
 const TERMINAL_CODES: ReadonlySet<FailureCode> = new Set<FailureCode>([

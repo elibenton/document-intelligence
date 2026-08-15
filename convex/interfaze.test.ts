@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ocrPrecontextToPages } from "./interfazeOcr";
+import { chunksToSegments } from "./interfazeStt";
 import type { Precontext } from "interfaze";
 
 /**
@@ -280,5 +281,102 @@ describe("ocrPrecontextToPages", () => {
     expect(
       ocrPrecontextToPages([{ name: "object_detection", result: { objects: [] } }])
     ).toEqual([]);
+  });
+});
+
+/**
+ * Chunks as the `speech_to_text` task actually returns them: one per word,
+ * each carrying its own speaker and a `[start, end]` pair.
+ */
+function chunk(text: string, start: number, end: number, speaker?: string) {
+  return { text, timestamp: [start, end], speaker };
+}
+
+describe("chunksToSegments", () => {
+  it("groups consecutive words by speaker into turns", () => {
+    const segments = chunksToSegments([
+      chunk("Hello", 0, 0.2, "SPEAKER_00"),
+      chunk("there", 0.2, 0.5, "SPEAKER_00"),
+      chunk("Hi", 0.6, 0.8, "SPEAKER_01"),
+      chunk("back", 0.8, 1.0, "SPEAKER_01"),
+    ]);
+
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toMatchObject({
+      speaker: "Speaker 1",
+      start: 0,
+      end: 0.5,
+      text: "Hello there",
+    });
+    expect(segments[1]).toMatchObject({
+      speaker: "Speaker 2",
+      start: 0.6,
+      end: 1.0,
+      text: "Hi back",
+    });
+    expect(segments[0].words).toHaveLength(2);
+  });
+
+  it("starts a new turn every time the speaker changes back", () => {
+    const segments = chunksToSegments([
+      chunk("a", 0, 1, "SPEAKER_00"),
+      chunk("b", 1, 2, "SPEAKER_01"),
+      chunk("c", 2, 3, "SPEAKER_00"),
+    ]);
+
+    expect(segments.map((s) => s.speaker)).toEqual([
+      "Speaker 1",
+      "Speaker 2",
+      "Speaker 1",
+    ]);
+  });
+
+  // The off-by-one normalizeSpeaker exists to prevent: shifting only index 0
+  // would collapse speaker_0 and speaker_1 onto one person.
+  it("shifts every 0-based label uniformly", () => {
+    const segments = chunksToSegments([
+      chunk("a", 0, 1, "speaker_0"),
+      chunk("b", 1, 2, "speaker_1"),
+    ]);
+
+    expect(segments.map((s) => s.speaker)).toEqual(["Speaker 1", "Speaker 2"]);
+  });
+
+  it("keeps an unlabeled stream as one speaker, not one per word", () => {
+    const segments = chunksToSegments([
+      { text: "a", timestamp: [0, 1] },
+      { text: "b", timestamp: [1, 2] },
+    ]);
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0].speaker).toBe("Speaker 1");
+    expect(segments[0].text).toBe("a b");
+  });
+
+  it("keeps timings monotonic when a chunk has none", () => {
+    const segments = chunksToSegments([
+      chunk("a", 0, 1.5, "SPEAKER_00"),
+      { text: "b", timestamp: [null, null], speaker: "SPEAKER_00" },
+      chunk("c", 2, 2.5, "SPEAKER_00"),
+    ]);
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0].words.map((w) => w.start)).toEqual([0, 1.5, 2]);
+    expect(segments[0].end).toBe(2.5);
+  });
+
+  it("drops empty and whitespace-only chunks", () => {
+    const segments = chunksToSegments([
+      chunk("real", 0, 1, "SPEAKER_00"),
+      chunk("   ", 1, 2, "SPEAKER_00"),
+      { timestamp: [2, 3], speaker: "SPEAKER_00" },
+    ]);
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0].text).toBe("real");
+  });
+
+  it("returns nothing for an empty payload", () => {
+    expect(chunksToSegments([])).toEqual([]);
   });
 });

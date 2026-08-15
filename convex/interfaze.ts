@@ -45,6 +45,8 @@ import { PROVIDER_FILE_OBJECT_SAFE_BYTES } from "./interfazeLimits";
 import { interfazeCostUsd } from "./interfazeCost";
 import type { UsageLogger } from "./interfazeCost";
 import { ocrPrecontextToPages } from "./interfazeOcr";
+import { chunksToSegments } from "./interfazeStt";
+import type { SttTaskResult, TranscriptResult } from "./interfazeStt";
 import type { OcrPageResult } from "./interfazeOcr";
 
 // Re-exported so every existing `from "./interfaze"` import keeps working —
@@ -52,6 +54,7 @@ import type { OcrPageResult } from "./interfazeOcr";
 export * from "./interfazeCost";
 export * from "./interfazeErrors";
 export * from "./interfazeOcr";
+export * from "./interfazeStt";
 
 const INTERFAZE_MODEL = "interfaze-beta";
 
@@ -569,205 +572,97 @@ export async function analyzeDocumentText(
 
 
 // ---------------------------------------------------------------------------
-// Transcribe — audio/video → diarized segments with word-level timestamps.
+// Transcribe — audio/video → diarized segments with word-level timestamps,
+// via the dedicated `speech_to_text` task.
 //
-// Interfaze's speech-to-text precontext gives speaker + segment timestamps but
-// no per-word timing; the transcript UI needs word-level timing for
-// click-to-seek, so this asks for it via a structured-output schema and
-// prefers the STT precontext only when it carries word timings.
+// This was a full-model completion driving a structured-output schema that
+// required `{word, start, end}` for every word. Measured against the task on
+// the same file, that was the wrong shape twice over:
+//
+//   task            returns `{text, chunks}` where every chunk is one word with
+//                   `timestamp: [start, end]` *and* a `speaker` — strictly more
+//                   than the schema asked for, as ground truth rather than as
+//                   something the model re-derives.
+//   full model      re-emits all of it as JSON at roughly 22 output tokens per
+//                   spoken word. The SDK caps output at 32,000 tokens
+//                   (`LIMITS.maxOutputTokens`), so a recording longer than
+//                   about ten minutes of speech did not transcribe slowly — it
+//                   was cut at `finish_reason: "length"` and died in JSON.parse
+//                   as "Unexpected end of JSON input".
+//
+// So the ceiling that mattered was never the file size, and no amount of
+// chunking or parallelism would have addressed it: the fix is to stop paying to
+// re-emit data the provider already returned. This is the same move `ocr` made
+// (see ocrDocument) for the same reason.
+//
+// Language detection left with the schema. Analyze already carries
+// `source_language_code` and `is_multilingual` (analyzePrompt.ts) and now runs
+// on recordings, so it is the one writer of those fields for every medium.
 // ---------------------------------------------------------------------------
-
-export interface TranscriptWord {
-  word: string;
-  start: number;
-  end: number;
-}
-
-export interface TranscriptSegment {
-  speaker: string;
-  start: number;
-  end: number;
-  text: string;
-  words: TranscriptWord[];
-}
-
-export interface TranscriptResult {
-  sourceLanguageCode: string;
-  sourceLanguageIsMixed: boolean;
-  segments: TranscriptSegment[];
-}
-
-const TRANSCRIPT_SCHEMA = {
-  type: "object",
-  properties: {
-    source_language_code: {
-      type: "string",
-      description: "Primary spoken language as a lowercase ISO 639 code",
-    },
-    is_multilingual: {
-      type: "boolean",
-      description: "True when meaningful speech uses more than one language",
-    },
-    segments: {
-      type: "array",
-      description:
-        "The full transcript split into speaker turns, in chronological order. Start a new segment whenever the speaker changes.",
-      items: {
-        type: "object",
-        properties: {
-          speaker: {
-            type: "string",
-            description:
-              'Diarized speaker label, consistent across the transcript. Use the person\'s name if identifiable from the audio, otherwise "Speaker 1", "Speaker 2", ...',
-          },
-          start: {
-            type: "number",
-            description: "Segment start time in seconds from the beginning",
-          },
-          end: { type: "number", description: "Segment end time in seconds" },
-          text: {
-            type: "string",
-            description: "Verbatim text of this speaker turn",
-          },
-          words: {
-            type: "array",
-            description:
-              "Every word of the segment with its start/end time in seconds. Word timings must be monotonically increasing and fall within the segment.",
-            items: {
-              type: "object",
-              properties: {
-                word: { type: "string" },
-                start: { type: "number" },
-                end: { type: "number" },
-              },
-              required: ["word", "start", "end"],
-            },
-          },
-        },
-        required: ["speaker", "start", "end", "text", "words"],
-      },
-    },
-  },
-  required: ["source_language_code", "is_multilingual", "segments"],
-};
-
-/** STT precontext shapes (best-effort — mirrors common word-timing formats) */
-interface SttWord {
-  word?: string;
-  text?: string;
-  start?: number;
-  end?: number;
-  speaker?: string | number;
-}
-interface SttSegment {
-  speaker?: string | number;
-  start?: number;
-  end?: number;
-  text?: string;
-  words?: SttWord[];
-}
-interface SttResult {
-  segments?: SttSegment[];
-  words?: SttWord[];
-}
-
-/**
- * Normalize an STT speaker label to "Speaker N".
- *
- * STT backends emit 0-based labels ("speaker_0", "SPEAKER_00"), so every numeric
- * label is shifted by one — uniformly. Shifting only index 0 would collapse
- * speaker_0 and speaker_1 onto "Speaker 1", silently merging two people.
- */
-function normalizeSpeaker(s: string | number | undefined, i: number): string {
-  if (typeof s === "number") return `Speaker ${s + 1}`;
-  if (typeof s === "string" && s.trim()) {
-    const m = s.match(/^speaker[_\s-]?(\d+)$/i);
-    return m ? `Speaker ${Number(m[1]) + 1}` : s;
-  }
-  return `Speaker ${i + 1}`;
-}
-
-/**
- * Prefer word timings from an STT precontext entry when one carries per-word
- * timing (ground truth); otherwise fall back to the model's structured output.
- */
-function sttToSegments(precontext: Precontext[]): TranscriptSegment[] {
-  const stt = precontext.find(
-    (p) =>
-      typeof p.name === "string" &&
-      /stt|asr|transcri|speech|audio/i.test(p.name) &&
-      typeof p.result === "object" &&
-      p.result !== null
-  )?.result as SttResult | undefined;
-  if (!stt?.segments?.length) return [];
-
-  const segments = stt.segments
-    .map((seg, i) => {
-      const words = (seg.words ?? [])
-        .map((w) => ({
-          word: (w.word ?? w.text ?? "").trim(),
-          start: w.start ?? 0,
-          end: w.end ?? w.start ?? 0,
-        }))
-        .filter((w) => w.word);
-      const text = seg.text?.trim() || words.map((w) => w.word).join(" ");
-      if (!text) return null;
-      return {
-        speaker: normalizeSpeaker(seg.speaker, i),
-        start: seg.start ?? words[0]?.start ?? 0,
-        end: seg.end ?? words[words.length - 1]?.end ?? 0,
-        text,
-        words,
-      };
-    })
-    .filter((s): s is TranscriptSegment => s !== null);
-
-  // Only use the precontext path when it actually carries word-level timing —
-  // otherwise defer to the structured-output segments, which do.
-  return segments.some((s) => s.words.length > 0) ? segments : [];
-}
 
 export async function transcribe(
   fileUrl: string,
   apiKey: string,
   log?: UsageLogger
 ): Promise<TranscriptResult> {
-  const { content, precontext } = await chatCompletion(apiKey, {
+  const { content, completionTokens } = await chatCompletion(apiKey, {
+    task: "speech_to_text",
     usage: log ? { log, operation: "transcribe" } : undefined,
     content: [
       {
         type: "text",
         // A URL in prompt text has Interfaze's 80 MB limit. A URL wrapped in a
-        // file object has the much smaller 20 MB limit even though no bytes
-        // are inlined by this app.
-        text: `Transcribe the recording at this URL verbatim with speaker diarization and word-level timestamps according to the response schema: ${fileUrl}`,
+        // file object has the much smaller 20 MB limit even though no bytes are
+        // inlined by this app — and upload.ts gates audio against the larger
+        // number precisely because this call sends text. Switching this to
+        // `fileUrlContent` would silently drop the accepted ceiling to 20 MB.
+        text: `Transcribe the recording at this URL verbatim with speaker diarization and word-level timestamps: ${fileUrl}`,
       },
     ],
-    responseSchema: { name: "transcript", schema: TRANSCRIPT_SCHEMA },
   });
 
-  const parsed = JSON.parse(content) as {
-    source_language_code?: string;
-    is_multilingual?: boolean;
-    segments?: TranscriptSegment[];
-  };
-  const fromStt = sttToSegments(precontext);
-  const segments = (fromStt.length > 0 ? fromStt : parsed.segments ?? [])
-    .map((seg) => ({
-      speaker: seg.speaker?.trim() || "Speaker 1",
-      start: seg.start ?? 0,
-      end: seg.end ?? 0,
-      text: seg.text ?? "",
-      words: (seg.words ?? []).filter((w) => w.word?.trim()),
-    }))
-    .filter((s) => s.text.trim());
-  return {
-    sourceLanguageCode:
-      parsed.source_language_code?.trim().toLowerCase().replaceAll("_", "-") ||
-      "und",
-    sourceLanguageIsMixed: parsed.is_multilingual === true,
-    segments,
-  };
+  // A task returns its payload on message.content as `{ name, result }`. Parsed
+  // defensively: the previous implementation let a bare SyntaxError out of
+  // JSON.parse, which reached the user as "Transcription failed: Unexpected end
+  // of JSON input" and named neither the cause nor anything actionable.
+  let payload: SttTaskResult;
+  try {
+    const parsed = JSON.parse(content) as { result?: SttTaskResult };
+    payload = parsed?.result ?? {};
+  } catch {
+    throw new InterfazeFailure(
+      `Interfaze returned a speech-to-text response this app could not read ` +
+        `(${completionTokens} tokens billed, ${content.length} characters). ` +
+        `The recording was not transcribed.`,
+      { code: "malformed_transcript" }
+    );
+  }
+
+  const segments = chunksToSegments(payload.chunks ?? []);
+  if (segments.length > 0) return { segments };
+
+  // Every known failure returns no chunks, so the fallbacks are ordered by how
+  // much they can still offer: whole-transcript text with no timings is worth
+  // keeping (it still searches, embeds, analyzes and extracts — only
+  // click-to-seek is lost), and nothing at all is an error rather than an
+  // empty transcript, the way ocrDocument treats a billed empty response.
+  const whole = (payload.text ?? "").trim();
+  if (whole) {
+    return {
+      segments: [
+        { speaker: "Speaker 1", start: 0, end: 0, text: whole, words: [] },
+      ],
+    };
+  }
+  if (completionTokens > 0) {
+    throw new InterfazeFailure(
+      `Interfaze billed ${completionTokens} tokens of transcription for this ` +
+        `recording and returned no speech. This is a provider-side failure, ` +
+        `not a silent recording.`,
+      { code: "empty_transcript" }
+    );
+  }
+  return { segments: [] };
 }
 
 // ---------------------------------------------------------------------------

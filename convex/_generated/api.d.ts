@@ -38,6 +38,7 @@ import type * as interfazeCost from "../interfazeCost.js";
 import type * as interfazeErrors from "../interfazeErrors.js";
 import type * as interfazeLimits from "../interfazeLimits.js";
 import type * as interfazeOcr from "../interfazeOcr.js";
+import type * as interfazeStt from "../interfazeStt.js";
 import type * as issueFingerprint from "../issueFingerprint.js";
 import type * as issueState from "../issueState.js";
 import type * as issues from "../issues.js";
@@ -113,6 +114,7 @@ declare const fullApi: ApiFromModules<{
   interfazeErrors: typeof interfazeErrors;
   interfazeLimits: typeof interfazeLimits;
   interfazeOcr: typeof interfazeOcr;
+  interfazeStt: typeof interfazeStt;
   issueFingerprint: typeof issueFingerprint;
   issueState: typeof issueState;
   issues: typeof issues;
