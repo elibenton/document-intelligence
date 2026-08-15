@@ -102,8 +102,18 @@ export async function optimizeAudioForUpload(
       );
     }
 
+    // Mediabunny reports progress per packet, so this fires thousands of times
+    // for a long recording — and the only consumer turns each call into a
+    // setState over the upload list. Those re-renders run on the thread doing
+    // the encoding, so an unfiltered callback spends the conversion competing
+    // with itself. The value is a whole percent, so anything that does not move
+    // it is a re-render that could not have changed a pixel.
+    let reported = -1;
     conversion.onProgress = (progress) => {
-      options.onProgress?.(Math.min(99, Math.round(progress * 100)));
+      const percent = Math.min(99, Math.round(progress * 100));
+      if (percent === reported) return;
+      reported = percent;
+      options.onProgress?.(percent);
     };
     await conversion.execute();
     throwIfAborted(options.signal);
