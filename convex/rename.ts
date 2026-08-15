@@ -1,15 +1,11 @@
 /**
  * Rename pass — default-runtime half.
  *
- * `display_title` now comes back from the Analyze call itself
- * (see TITLE_RULE in convex/analyzePrompt.ts), so the title arrives on the same
- * response as the kind it is built from. Recordings still take the standalone
- * Interfaze path in renameNode.ts: they skip the metadata pass entirely, so
- * there is no Analyze response to carry a title for them.
- *
- * `normalizeTitle` lives here rather than in renameNode.ts because both callers
- * need it and metadata.ts runs on the default runtime — importing a *value*
- * from a "use node" module would break at deploy.
+ * `display_title` comes back from the Analyze call itself (see TITLE_RULE in
+ * convex/analyzePrompt.ts), so the title arrives on the same response as the
+ * kind it is built from. That now holds for recordings too: they run Analyze
+ * over the mirrored transcript, which retired the standalone Interfaze rename
+ * call they used to depend on.
  *
  * The result lands in `documents.displayName`. The uploaded `name` is never
  * touched: it's provenance, it's what the user recognizes in their own

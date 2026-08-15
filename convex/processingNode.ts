@@ -589,13 +589,26 @@ export const runTranscribe = internalAction({
 
       // Mirror the transcript into pages so text search and entity
       // extraction treat recordings like any other document.
+      //
+      // One block per speaker turn, not zero. relationships.ingestGraph derives
+      // every mention by substring-matching an entity's name against block
+      // text, so `blocks: []` meant a recording could resolve entities and
+      // relationships and still show an empty entity sidebar — mentions is what
+      // entities.byDocument reads, and what recountEntity counts. Page numbers
+      // here are 0-based: ingest groups incoming blocks by the same index it
+      // walks pages with, and a single-page document is page 0.
       const transcriptText = segments
         .map((s) => `${s.speaker} [${Math.round(s.start)}s]: ${s.text}`)
         .join("\n\n");
       await ctx.runMutation(internal.ingest.ingestParseResults, {
         documentId: args.documentId,
         pageText: [transcriptText],
-        blocks: [],
+        blocks: segments.map((s, i) => ({
+          blockId: `transcript_seg${i}`,
+          blockType: "Text",
+          text: s.text,
+          pageNumber: 0,
+        })),
         pageDimensions: [],
         pageCount: 1,
       });
@@ -611,16 +624,24 @@ export const runTranscribe = internalAction({
         documentId: args.documentId,
       });
 
-      // Recordings skip the metadata pass, so the transcript is the context
-      // the rename pass gets to work from (convex/rename.ts).
-      await ctx.scheduler.runAfter(0, internal.renameNode.runRenamePass, {
-        documentId: args.documentId,
-      });
       await ctx.runMutation(internal.processing.updateStatus, {
         documentId: args.documentId,
         status: "parsed",
       });
-      await scheduleTranslation(ctx, args.documentId);
+
+      // A recording joins the document pipeline here rather than ending at a
+      // standalone rename. Analyze reads page text, not the file, so the
+      // transcript mirrored above is all it needs — and it supersedes the
+      // rename pass outright: `display_title` is written by the same response
+      // that just derived the document's kind, which is why the title got
+      // better when it moved onto Analyze.
+      //
+      // This is also what schedules everything downstream. Analyze's
+      // saveMetadataResult enqueues the entity/relationship pass, and Analyze's
+      // own `finally` owns the translation this stage used to queue directly —
+      // the skip gate there needs the language fields Analyze writes, so
+      // queueing translation from here raced it with no hint.
+      await enqueueAnalyze(ctx, args.documentId);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await ctx.runMutation(internal.processing.markFailed, {

@@ -102,8 +102,8 @@ const PLACE_RULE =
 /**
  * The library title rule.
  *
- * This was its own Interfaze call (convex/renameNode.ts) working from derived
- * facts plus a 4,000-character excerpt. Analyze already holds the full document
+ * This was its own Interfaze call working from derived facts plus a
+ * 4,000-character excerpt. Analyze already holds the full document
  * text and has just committed to `primary_kind` from quoted evidence, so the
  * excerpt was strictly redundant and the kind arrived as an opaque fact rather
  * than something the model had reasoned to.

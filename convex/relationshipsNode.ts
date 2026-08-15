@@ -167,6 +167,13 @@ const TYPE_MAP: Record<string, string> = {
   organization: "organization",
 };
 
+/**
+ * Diarization labels, in both the normalized form this app mints
+ * ("Speaker 1" — normalizeSpeaker in convex/interfaze.ts) and the raw STT forms
+ * it maps from ("SPEAKER_00", "speaker_0"), in case one arrives unmapped.
+ */
+const SPEAKER_PLACEHOLDER = /^speaker[\s_-]?\d+$/i;
+
 // ---------------------------------------------------------------------------
 // Action: extract relationships from a parsed document
 // ---------------------------------------------------------------------------
@@ -271,6 +278,18 @@ export const extract = internalAction({
         const name = (entity.name ?? "").trim();
         const type = TYPE_MAP[entity.type ?? ""] ?? entity.type?.trim();
         if (!name || !type) continue;
+        // A diarization placeholder is not a person. Recordings mirror their
+        // transcript into page text as "Speaker 1 [12s]: …", so the label is
+        // right there in the model's input, and entityResolution.resolveEntity
+        // matches by exact name within a project — one unfiltered "Speaker 1"
+        // would collapse every recording in the project onto a single shared
+        // entity, and aliases and merge suggestions would then learn the
+        // collision. Dropping it here also drops any relationship naming it,
+        // through the byName check below, which counts it as unlisted.
+        //
+        // The vocabulary is minted by normalizeSpeaker in convex/interfaze.ts;
+        // raw STT forms are matched too in case one reaches this far unmapped.
+        if (SPEAKER_PLACEHOLDER.test(name)) continue;
         const key = name.toLowerCase();
         const role = (entity.role ?? "").trim().toLowerCase();
         const existing = byName.get(key);

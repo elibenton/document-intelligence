@@ -123,11 +123,31 @@ without the suffix. That pairing is a deliberate, repeated pattern — not
 accidental duplication.
 
 **Interfaze is the document AI provider.** One call returns both a model answer
-*and* a `precontext` array with raw OCR (sections → lines → words, with bounding
-boxes and confidence). That geometry is what powers the selectable text layer,
-entity highlighting, and citation deep-links. `convex/interfaze.ts` is the only
-place that talks to it; it also owns cost logging (`apiLogs`, `apiUsageTotals`)
-and maps provider errors onto UI-facing `FailureCode`s.
+*and* raw OCR (sections → lines → words, with bounding boxes and confidence).
+That geometry is what powers the selectable text layer, entity highlighting, and
+citation deep-links. `convex/interfaze.ts` is the only place that talks to it; it
+also owns cost logging (`apiLogs`, `apiUsageTotals`) and maps provider errors
+onto UI-facing `FailureCode`s.
+
+Learn the response shape before you write anything against it — it is the
+OpenAI chat-completion envelope plus three Interfaze additions:
+
+```jsonc
+{
+  "choices": [{ "finish_reason": "stop", "message": { "content": "…" } }],
+  "usage": { "prompt_tokens": 1286, "completion_tokens": 47 },
+  "vcache": false,      // true = served from the semantic cache, free
+  "precontext": [],     // specialist output (OCR / STT / search) on full-model calls
+  "reasoning": "…"      // only with reasoning_effort: "high" and no schema
+}
+```
+
+`message.content` is always a **string**. A `task:` call puts its payload there
+as `{"result": …}` (not on `precontext`); a `response_format` call puts your
+schema there, JSON-stringified. [CLAUDE.md](CLAUDE.md#interfaze) has the fully
+annotated sample — a real OCR capture, including why `height` is the stacked
+height of every page rather than one page's. Start from that sample rather than
+guessing at the shape or re-deriving pagination at a call site.
 
 Because it is the only door, it is also where measurement lives: every call
 stamps `finishReason`, `promptHash`, `outputHash`, `errorCode` and `buildSha`
@@ -170,7 +190,7 @@ From there the pipeline is a chain of **stages**, each one a job row in
 
 | Stage | Where | What it does |
 |---|---|---|
-| `parse` | `processingNode.runDocumentUnderstanding` | One whole-file Interfaze completion: OCR + object detection + structured analysis. Its precontext becomes `pages`, `blocks`, `detections`. |
+| `parse` | `processingNode.runDocumentUnderstanding` | One whole-file `task: "ocr"` call — deterministic and ~100x cheaper than the full-model completion it replaced. Its result becomes `pages` and `blocks`. |
 | `analyze` | `processingNode.runAnalyze` | Title, kind, category, date, table of contents, suggested extractions. Web clips take this path too. Prompt is user-editable — see `analyzePrompt.ts`. |
 | `rename` | *(recordings only)* `renameNode.runRenamePass` | Writes `displayName` from the transcript. Documents don't need it — Analyze returns `display_title` directly. |
 | `extract` | `processingNode.runExtract` | Pulls entities/answers per the suggested template → `extractions`, `entities`, `mentions`, `relationships`. Auto-runs once Analyze lands; there is no review gate. Re-run with edited roles from the extract dialog in `PipelineProgress`. |

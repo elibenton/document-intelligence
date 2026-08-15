@@ -42,6 +42,94 @@ rule is *less code*, not *fewer lines in this file*.
 
 ## Interfaze
 
+### What a response actually looks like — start here
+
+Every call goes through `chatCompletion` in `convex/interfaze.ts` and comes back
+as an `InterfazeChatCompletion`: the OpenAI chat-completion shape plus `vcache`,
+`precontext` and `reasoning`. Real capture, 3-page PDF, `task: "ocr"`:
+
+```jsonc
+{
+  "id": "…",
+  "object": "chat.completion",
+  "model": "interfaze-beta",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",        // "length" = truncated; you paid, JSON won't parse
+      "message": { "role": "assistant", "content": "…see below…" }
+    }
+  ],
+  "usage": { "prompt_tokens": 1286, "completion_tokens": 47, "total_tokens": 1333 },
+  "vcache": false,                    // true = served from the semantic cache, free
+  "precontext": []                    // specialist output on *full-model* calls only
+}
+```
+
+`message.content` is **always a string**, and which of three shapes it holds is
+decided by how the call was made:
+
+| Call | `content` | Where the payload is |
+|---|---|---|
+| `task: "ocr"` (and other tasks) | `{"result": {…}}` | on `content` — `precontext` is empty |
+| `response_format` (Analyze, Extract, Transcribe) | your schema, JSON-stringified | on `content` |
+| plain completion | prose | specialist output on `precontext` |
+
+That first row is the one that keeps getting reinvented: a task's payload rides
+on `content`, so `ocrDocument` parses it and re-wraps it as
+`[{ name: "ocr", result }]` — the precontext shape everything downstream already
+understands. Note the token counts: 47 completion tokens against 7.6k characters
+of returned OCR — a task's payload is plainly not billed as emitted tokens,
+which is where the ~100x saving over the full model shows up. The same document
+through the full model measured 3,488 completion tokens and $0.20.
+
+The OCR `result` — abridged, but every field and every number below is from a
+real 3-page 1224×1584 capture:
+
+```jsonc
+{
+  "extracted_text": "Synthetic Test Document - Page 1\n01 declaration record…",
+  "width": 1224,
+  "height": 4752,            // 3 × 1584 — the STACK, not a page. This is the trap.
+  "total_pages": 3,          // undocumented; assert, never infer
+  "sections": [              // one per page here — but that is not guaranteed
+    {
+      "text": "Synthetic Test Document - Page 1\n01 declaration record…",
+      "lines": [
+        {
+          "text": "Synthetic Test Document - Page 1",
+          "average_confidence": 0.99,          // lines: average_confidence
+          "bounds": {                          // 4 corners + w/h, not x/y/w/h
+            "top_left":     { "x": 138, "y": 123 },
+            "top_right":    { "x": 481, "y": 123 },
+            "bottom_right": { "x": 481, "y": 149 },
+            "bottom_left":  { "x": 138, "y": 149 },
+            "width": 343, "height": 26
+          },
+          "words": [
+            {
+              "text": "Synthetic",
+              "confidence": 0.99,              // words: confidence
+              "bounds": { "top_left": { "x": 144, "y": 124 }, "…": "…" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Whole-document OCR reports the *stacked* height and section bounds that may be
+tiled down the stack or page-local depending on the document — `ocrPrecontextToPages` in
+`convex/interfazeOcr.ts` owns that guessing, and `interfaze.test.ts` pins both
+shapes. Don't re-derive pagination at a call site.
+
+Two failure shapes worth recognizing on sight: `content: ""` with a non-zero
+`completion_tokens` is the provider dropping output it generated and billed (not
+an empty document — `ocrDocument` throws `empty_ocr_response` on it), and
+`finish_reason: "length"` means a structured response was cut mid-JSON.
+
 **An extra API call is the last resort.** Every call re-sends the document and
 bills for it. In order of preference:
 

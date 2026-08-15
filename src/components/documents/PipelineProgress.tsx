@@ -218,12 +218,7 @@ export function PipelineProgress({
   const csv = isCsvDocument(document);
   const pageTotal = document.pageCount ?? pages?.length;
 
-  // Recordings never run the metadata pass (convex/processingNode.ts hands the
-  // transcript to the rename pass instead), so their analysis lands with the
-  // transcript rather than after it.
-  const analyzeDone = recording
-    ? parseDone
-    : Boolean(document.metadata || document.primaryKind);
+  const analyzeDone = Boolean(document.metadata || document.primaryKind);
 
   const scanStatus: StepStatus =
     parseJob?.status === "canceled" || (failed && parseStatus === "running")
