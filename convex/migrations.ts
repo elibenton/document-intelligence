@@ -193,3 +193,147 @@ export const backfillPageProjectIds = internalMutation({
     return null;
   },
 });
+
+
+/**
+ * Delete the phantom `parse` job rows that recordings were given.
+ *
+ * `runFullPipeline` and `retryBlocked` created a `transcribe` job row for a
+ * recording and then handed the workpool `{ stage: "parse" }` as its
+ * `onComplete` context, so the pool resolved a `parse` row for a stage that
+ * never runs on audio or video. `PipelineProgress` reads
+ * `get("parse") ?? get("transcribe")`, so every recording processed before that
+ * was fixed shows a Scan step stuck at pending, for ever.
+ *
+ * Run once, after the fix is deployed:
+ *   npx convex run migrations:dropRecordingParseJobs
+ *
+ * A `parse` row on a recording is meaningless by construction, which is what
+ * makes this safe to delete rather than repair. Paginated and self-rescheduling
+ * like its neighbours, and idempotent — a second run finds nothing.
+ */
+export const dropRecordingParseJobs = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("processingJobs")
+      .paginate({ cursor: args.cursor ?? null, numItems: 200 });
+
+    let dropped = 0;
+    for (const job of page.page) {
+      if (job.stage !== "parse") continue;
+      const doc = await ctx.db.get(job.documentId);
+      // A job whose document is gone is not this migration's problem.
+      if (!doc) continue;
+      const isRecording =
+        doc.mediaType === "audio" ||
+        doc.mediaType === "video" ||
+        doc.mimeType.startsWith("audio/") ||
+        doc.mimeType.startsWith("video/");
+      if (!isRecording) continue;
+      await ctx.db.delete(job._id);
+      dropped++;
+    }
+    if (dropped > 0) {
+      console.log(`dropRecordingParseJobs: removed ${dropped} phantom row(s)`);
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.migrations.dropRecordingParseJobs,
+        { cursor: page.continueCursor }
+      );
+    }
+    return null;
+  },
+});
+
+/**
+ * Delete orphaned "Speaker N" entities.
+ *
+ * Recordings mirror their transcript into page text as "Speaker 1 [12s]: …",
+ * so the entity pass could read a diarization label as a person and
+ * `resolveEntity` — which matches by exact name within a project — would then
+ * collapse every recording in that project onto one shared entity.
+ * `relationshipsNode` now drops these before ingest; this clears the ones
+ * written before it did.
+ *
+ * Run once:
+ *   npx convex run migrations:dropSpeakerPlaceholderEntities
+ *
+ * Deliberately conservative: an entity is removed only when nothing references
+ * it — no mentions, no roles, no relationships, no merge suggestions. Anything
+ * still referenced is left alone and counted, because a real merge may have
+ * folded genuine evidence onto that row and deleting it would take the evidence
+ * with it. `searches.matchedEntities` is not consulted: it is a denormalized
+ * cache of past results carrying its own name and type, so a stale chip still
+ * renders.
+ */
+export const dropSpeakerPlaceholderEntities = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("entities")
+      .paginate({ cursor: args.cursor ?? null, numItems: 100 });
+
+    let dropped = 0;
+    let kept = 0;
+    for (const entity of page.page) {
+      if (!/^speaker[\s_-]?\d+$/i.test(entity.name)) continue;
+
+      const [mention, role, asSource, asTarget, mergeFrom, mergeTo] =
+        await Promise.all([
+          ctx.db
+            .query("mentions")
+            .withIndex("by_entity", (q) => q.eq("entityId", entity._id))
+            .first(),
+          ctx.db
+            .query("entityRoles")
+            .withIndex("by_entity", (q) => q.eq("entityId", entity._id))
+            .first(),
+          ctx.db
+            .query("relationships")
+            .withIndex("by_source", (q) => q.eq("sourceEntityId", entity._id))
+            .first(),
+          ctx.db
+            .query("relationships")
+            .withIndex("by_target", (q) => q.eq("targetEntityId", entity._id))
+            .first(),
+          ctx.db
+            .query("mergeSuggestions")
+            .withIndex("by_source_and_target", (q) =>
+              q.eq("sourceEntityId", entity._id)
+            )
+            .first(),
+          ctx.db
+            .query("mergeSuggestions")
+            .withIndex("by_target", (q) => q.eq("targetEntityId", entity._id))
+            .first(),
+        ]);
+
+      if (mention || role || asSource || asTarget || mergeFrom || mergeTo) {
+        kept++;
+        continue;
+      }
+      await ctx.db.delete(entity._id);
+      dropped++;
+    }
+    if (dropped > 0 || kept > 0) {
+      console.log(
+        `dropSpeakerPlaceholderEntities: removed ${dropped}, kept ${kept} still referenced`
+      );
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.migrations.dropSpeakerPlaceholderEntities,
+        { cursor: page.continueCursor }
+      );
+    }
+    return null;
+  },
+});
