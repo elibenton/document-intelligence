@@ -113,7 +113,7 @@ export const runFullPipeline = authedAction({
           ctx,
           internal.processingNode.runTranscribe,
           { documentId: args.documentId },
-          processingEnqueueOptions(paused, { documentId: args.documentId, stage: "parse" })
+          processingEnqueueOptions(paused, { documentId: args.documentId, stage })
         )
       : await processingPool.enqueueAction(
           ctx,
@@ -124,7 +124,7 @@ export const runFullPipeline = authedAction({
               ? {}
               : { bypassCache: args.bypassCache }),
           },
-          processingEnqueueOptions(paused, { documentId: args.documentId, stage: "parse" })
+          processingEnqueueOptions(paused, { documentId: args.documentId, stage })
         );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -233,13 +233,13 @@ export const retryBlocked = authedMutation({
             ctx,
             internal.processingNode.runTranscribe,
             { documentId: doc._id },
-            processingEnqueueOptions(paused, { documentId: doc._id, stage: "parse" })
+            processingEnqueueOptions(paused, { documentId: doc._id, stage })
           )
         : await processingPool.enqueueAction(
             ctx,
             internal.processingNode.runDocumentUnderstanding,
             { documentId: doc._id },
-            processingEnqueueOptions(paused, { documentId: doc._id, stage: "parse" })
+            processingEnqueueOptions(paused, { documentId: doc._id, stage })
           );
       if (job) {
         await ctx.db.patch(job._id, {
