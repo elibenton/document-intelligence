@@ -6,7 +6,7 @@
  * inside tables), their heading/list style, and their page breaks. This is a
  * *viewer* renderer — it produces page images and text geometry so DOCX uploads
  * behave like PDFs in the reader. Interfaze still receives the untouched
- * original and remains canonical for OCR text and detections.
+ * original and remains canonical for OCR text.
  *
  * Pagination honours Word's own `lastRenderedPageBreak`/explicit page breaks
  * when the file has them, so our page numbers line up with what Interfaze sees.

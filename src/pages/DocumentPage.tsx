@@ -1129,10 +1129,13 @@ function VisualEvidenceList({
 }
 
 /**
- * Visual objects emitted by the same Interfaze completion as OCR and metadata.
- * Their stored coordinates are normalized against the OCR geometry. Correct
- * the vertical ratio when that geometry represents a stacked visual asset,
- * then place the object over the actual rendered PDF page.
+ * Visual objects stored on the `detections` table, drawn over the rendered PDF
+ * page. Their coordinates are already normalized 0-1 against that same page.
+ *
+ * Only documents ingested before the switch from the full-model completion to
+ * `task: "ocr"` have any — nothing writes the table today, so this renders for
+ * a shrinking subset of the library. See the note in `convex/detections.ts`
+ * before assuming a document is missing detections because of a bug here.
  */
 function VisualObjectOverlay({
   pageNumber,
