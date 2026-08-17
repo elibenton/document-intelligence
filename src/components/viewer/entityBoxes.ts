@@ -73,7 +73,7 @@ function wordRunBoxes(
 
 /**
  * Approximate sub-line boxes from character offsets, for blocks that carry no
- * word-level OCR. Blocks are single lines here (see ImagePdfViewer's text
+ * word-level OCR. Blocks are single lines here (see PdfViewer's text
  * layer), so interpolating across the line's width lands close enough for a
  * hover target.
  */

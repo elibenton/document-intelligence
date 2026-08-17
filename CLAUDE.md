@@ -188,7 +188,7 @@ touched lints clean, which the edit-time hook already enforces.
 
 **Reset state during render, not in an effect.** Both viewer errors were the
 same shape: work that belongs in the render pass deferred into `useEffect`,
-which buys a wasted render and, in `ImagePdfViewer`, one paint against the
+which buys a wasted render and, in `PdfViewer`, one paint against the
 previous document's geometry. Compare against the previous value and adjust
 inline — `if (next !== seen) { setSeen(next); … }` — the way the pin-drop lines
 in `ViewerLayout` already did. A ref written during render is the same mistake

@@ -4,7 +4,7 @@ import { RENDERER_VERSION } from "./rendererConfig";
 import type { Id } from "./_generated/dataModel";
 
 /**
- * Page rasterization runs in a Node action, and Node actions get killed by the
+ * Page geometry extraction runs in a Node action, and Node actions get killed by the
  * platform for reasons the action itself never observes: container eviction,
  * the 10-minute limit, transient capacity errors. Those kills happen *before*
  * renderBatch's catch block, so nothing records a failure and nothing schedules
@@ -14,7 +14,7 @@ import type { Id } from "./_generated/dataModel";
  * retries a failed action. Retrying is safe here in a way it is not for
  * Interfaze: commits are versioned per page, so a retry skips every page that
  * already exists and only redoes the work the dead action never finished. No
- * billable call is duplicated and no pixels are re-rasterized.
+ * billable call is duplicated and no finished page is redone.
  */
 export const RENDER_MAX_PARALLELISM = 3;
 
@@ -37,7 +37,7 @@ export const renderPool = new Workpool(components.renderWorkpool, {
  */
 export function renderEnqueueOptions(documentId: Id<"documents">) {
   return {
-    onComplete: internal.pageImages.renderJobComplete,
+    onComplete: internal.render.renderJobComplete,
     context: { documentId, rendererVersion: RENDERER_VERSION },
   };
 }

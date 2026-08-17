@@ -172,6 +172,27 @@ export const citationSources = authedQuery({
   },
 });
 
+/**
+ * Signed file URLs for a set of documents — what the evidence carousel needs to
+ * draw its pages client-side with pdf.js (see SinglePagePreview). Batched over
+ * the answer's cited documents like `citationSources`, and just as narrow: the
+ * page renderer has no use for the rest of the row. `mediaType` rides along so
+ * the client knows whether the file is drawable at all.
+ */
+export const fileUrls = authedQuery({
+  args: { ids: v.array(v.id("documents")) },
+  handler: async (ctx, args) => {
+    const rows = await filterOwnedDocuments(ctx, args.ids);
+    return await Promise.all(
+      rows.map(async (doc) => ({
+        _id: doc._id,
+        url: await ctx.storage.getUrl(doc.storageId),
+        mediaType: doc.mediaType,
+      }))
+    );
+  },
+});
+
 export const ingestStates = authedQuery({
   args: { ids: v.array(v.id("documents")) },
   handler: async (ctx, args) => {

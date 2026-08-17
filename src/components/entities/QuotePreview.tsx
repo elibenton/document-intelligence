@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { SinglePagePreview } from "@/components/viewer/SinglePagePreview";
 
 const PREVIEW_WIDTH = 320;
 
@@ -16,8 +17,7 @@ interface Bbox {
 interface PreviewTarget {
   documentId: Id<"documents">;
   fileUrl: string | null;
-  pageImageUrl?: string | null;
-  pageImageRotation?: 0 | 90 | 180 | 270;
+  rotation?: 0 | 90 | 180 | 270;
   mediaType: string;
   pageNumber: number; // 0-based
   bbox: Bbox | null;
@@ -32,6 +32,20 @@ function viewerLink(target: PreviewTarget, highlight: string) {
   )}`;
 }
 
+function highlightBox(bbox: Bbox, scale: number) {
+  return (
+    <div
+      className="absolute border-2 border-amber-400 bg-amber-300/30 rounded-sm"
+      style={{
+        left: bbox.x * scale,
+        top: bbox.y * scale,
+        width: bbox.width * scale,
+        height: bbox.height * scale,
+      }}
+    />
+  );
+}
+
 function PreviewCard({
   target,
   highlight,
@@ -39,15 +53,9 @@ function PreviewCard({
   target: PreviewTarget;
   highlight: string;
 }) {
-  const rotation = target.pageImageRotation ?? 0;
-  const sideways = rotation === 90 || rotation === 270;
   const sourceWidth = target.pageWidth ?? PREVIEW_WIDTH;
   const sourceHeight = target.pageHeight ?? PREVIEW_WIDTH;
-  const fitScale = PREVIEW_WIDTH / (sideways ? sourceHeight : sourceWidth);
-  const surfaceWidth = sourceWidth * fitScale;
-  const surfaceHeight = sourceHeight * fitScale;
-  const previewHeight = sideways ? surfaceWidth : surfaceHeight;
-  const bboxScale = sourceWidth > 0 ? surfaceWidth / sourceWidth : null;
+  const imageScale = PREVIEW_WIDTH / sourceWidth;
 
   return (
     // pb-2 (not a margin) keeps the gap between quote and card inside the
@@ -55,44 +63,41 @@ function PreviewCard({
     <div className="absolute left-0 bottom-full pb-2 z-50">
       <div className="w-[336px] rounded-lg border bg-popover shadow-lg p-2 flex flex-col gap-2">
       <div className="relative overflow-hidden rounded border bg-white max-h-[420px]">
-        {(target.mediaType === "image" ? target.fileUrl : target.pageImageUrl) ? (
-          <div className="relative" style={{ height: previewHeight }}>
+        {target.mediaType === "image" ? (
+          target.fileUrl ? (
             <div
-              className="absolute left-1/2 top-1/2"
-              style={{
-                width: surfaceWidth,
-                height: surfaceHeight,
-                transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
-              }}
+              className="relative"
+              style={{ width: PREVIEW_WIDTH, height: sourceHeight * imageScale }}
             >
-            <img
-              src={
-                target.mediaType === "image"
-                  ? target.fileUrl ?? undefined
-                  : target.pageImageUrl ?? undefined
-              }
-              alt=""
-              width={surfaceWidth}
-              height={surfaceHeight}
-              className="block h-full w-full"
-            />
-            {target.bbox && bboxScale && (
-              <div
-                className="absolute border-2 border-amber-400 bg-amber-300/30 rounded-sm"
-                style={{
-                  left: target.bbox.x * bboxScale,
-                  top: target.bbox.y * bboxScale,
-                  width: target.bbox.width * bboxScale,
-                  height: target.bbox.height * bboxScale,
-                }}
+              <img
+                src={target.fileUrl}
+                alt=""
+                width={PREVIEW_WIDTH}
+                height={sourceHeight * imageScale}
+                className="block h-full w-full"
               />
-            )}
+              {target.bbox && highlightBox(target.bbox, imageScale)}
             </div>
-          </div>
+          ) : (
+            <div className="h-24 flex items-center justify-center text-xs text-muted-foreground">
+              Preview unavailable
+            </div>
+          )
         ) : (
-          <div className="h-24 flex items-center justify-center text-xs text-muted-foreground">
-            Preview unavailable
-          </div>
+          // The page itself, drawn by pdf.js from the original file. A DOCX
+          // (no drawable file) keeps the white page with the quote boxed on it.
+          <SinglePagePreview
+            fileUrl={target.fileUrl}
+            mediaType={target.mediaType}
+            pageNumber={target.pageNumber}
+            width={PREVIEW_WIDTH}
+            pageWidth={target.pageWidth}
+            pageHeight={target.pageHeight}
+            rotation={target.rotation ?? 0}
+            overlay={(scale) =>
+              target.bbox ? highlightBox(target.bbox, scale) : null
+            }
+          />
         )}
       </div>
       <div className="flex items-center justify-between px-1">
@@ -152,10 +157,8 @@ export function QuotePreview({
           pageHeight: located.pageHeight,
         }
       : null);
-  // True page geometry, from `pages`. This used to come from pageImages.byPage
-  // alongside a signed PNG URL; no raster has been produced since server
-  // rendering was removed, so the URL was always null and the dimensions were
-  // silently falling back to a hardcoded aspect ratio.
+  // True page geometry from `pages` — the coordinate space the bbox lives in,
+  // plus any per-page viewer rotation adjustment.
   const pageDims = useQuery(
     api.pages.dimensionsByPage,
     hovered && baseTarget && baseTarget.mediaType === "pdf"
@@ -170,8 +173,7 @@ export function QuotePreview({
     baseTarget && pageDims !== undefined
       ? {
           ...baseTarget,
-          pageImageUrl: null,
-          pageImageRotation: pageDims?.rotation ?? 0,
+          rotation: pageDims?.rotation ?? 0,
           pageWidth: pageDims?.width ?? baseTarget.pageWidth,
           pageHeight: pageDims?.height ?? baseTarget.pageHeight,
         }

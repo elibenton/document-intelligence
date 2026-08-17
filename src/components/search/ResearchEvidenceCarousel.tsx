@@ -15,6 +15,7 @@ import type { Formatter } from "@/lib/citation/format";
 import type { CitationStyle } from "../../../convex/projectTemplates";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Tooltip } from "@/components/ui/tooltip";
+import { SinglePagePreview } from "@/components/viewer/SinglePagePreview";
 
 interface ResearchResult {
   documentId: Id<"documents">;
@@ -181,11 +182,14 @@ function CitationButton({
 
 function CitationPage({
   result,
+  file,
   number,
   active,
   cardRef,
 }: {
   result: ResearchResult;
+  /** Signed URL + media type of the original file, for drawing the page. */
+  file: { url: string | null; mediaType?: string } | null;
   number: number;
   active: boolean;
   cardRef: (element: HTMLDivElement | null) => void;
@@ -202,16 +206,6 @@ function CitationPage({
     () => matchingBoxes(blocks ?? [], result.snippet),
     [blocks, result.snippet]
   );
-
-  const rotation = pageDims?.rotation ?? 0;
-  const sourceWidth = pageDims?.width ?? PAGE_WIDTH;
-  const sourceHeight = pageDims?.height ?? PAGE_WIDTH * (11 / 8.5);
-  const sideways = rotation === 90 || rotation === 270;
-  const scale = PAGE_WIDTH / (sideways ? sourceHeight : sourceWidth);
-  const surfaceWidth = sourceWidth * scale;
-  const surfaceHeight = sourceHeight * scale;
-  const renderedHeight = sideways ? surfaceWidth : surfaceHeight;
-  const coordinateScale = sourceWidth > 0 ? surfaceWidth / sourceWidth : 1;
 
   return (
     <article
@@ -252,49 +246,46 @@ function CitationPage({
 
       <div className="bg-muted/50 p-5">
         <div
-          className="relative mx-auto overflow-hidden rounded-sm bg-white shadow-lg"
-          style={{ width: PAGE_WIDTH, height: renderedHeight }}
+          className="mx-auto overflow-hidden rounded-sm bg-white shadow-lg"
+          style={{ width: PAGE_WIDTH }}
         >
-          <div
-            className="absolute left-1/2 top-1/2"
-            style={{
-              width: surfaceWidth,
-              height: surfaceHeight,
-              transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
-            }}
-          >
-            {/* A white page with the citation boxed on it. Pages are drawn
-                client-side from the original file now, so there is no
-                server-rendered raster to show here — the geometry is the
-                point, and it is exact. */}
-            {pageDims === undefined ? (
-              <div className="absolute inset-0 animate-pulse bg-muted" />
-            ) : (
-              <div className="absolute inset-0 bg-white" />
+          {/* The page itself, drawn by pdf.js from the original file, with the
+              citation boxed on it. A DOCX has no drawable file and keeps the
+              white page — the geometry is exact either way. */}
+          <SinglePagePreview
+            fileUrl={file?.url ?? null}
+            mediaType={file?.mediaType}
+            pageNumber={result.pageNumber}
+            width={PAGE_WIDTH}
+            pageWidth={pageDims?.width}
+            pageHeight={pageDims?.height}
+            rotation={pageDims?.rotation ?? 0}
+            overlay={(scale) => (
+              <>
+                {active &&
+                  boxes.map((box) => (
+                    <span
+                      key={box.id}
+                      data-citation-highlight
+                      className="absolute rounded-sm border-2 border-amber-500 bg-amber-300/40 shadow-[0_0_0_2px_rgba(255,255,255,0.7)]"
+                      style={{
+                        left: box.x * scale,
+                        top: box.y * scale,
+                        width: box.width * scale,
+                        height: box.height * scale,
+                      }}
+                    />
+                  ))}
+                {active && blocks !== undefined && boxes.length === 0 && (
+                  <span
+                    data-citation-highlight
+                    className="absolute inset-2 rounded-sm border-4 border-amber-500 shadow-[inset_0_0_0_2px_rgba(255,255,255,0.75)]"
+                    aria-hidden="true"
+                  />
+                )}
+              </>
             )}
-
-            {active &&
-              boxes.map((box) => (
-                <span
-                  key={box.id}
-                  data-citation-highlight
-                  className="pointer-events-none absolute z-10 rounded-sm border-2 border-amber-500 bg-amber-300/40 shadow-[0_0_0_2px_rgba(255,255,255,0.7)]"
-                  style={{
-                    left: box.x * coordinateScale,
-                    top: box.y * coordinateScale,
-                    width: box.width * coordinateScale,
-                    height: box.height * coordinateScale,
-                  }}
-                />
-              ))}
-            {active && blocks !== undefined && boxes.length === 0 && (
-              <span
-                data-citation-highlight
-                className="pointer-events-none absolute inset-2 z-10 rounded-sm border-4 border-amber-500 shadow-[inset_0_0_0_2px_rgba(255,255,255,0.75)]"
-                aria-hidden="true"
-              />
-            )}
-          </div>
+          />
         </div>
       </div>
     </article>
@@ -318,6 +309,16 @@ export function ResearchAnswerWithEvidence({
     [results]
   );
   const { formatter, style } = useCitations(projectId, citedDocumentIds);
+  // One batched subscription for the originals' signed URLs, so every evidence
+  // card can draw its page client-side (see SinglePagePreview).
+  const files = useQuery(
+    api.documents.fileUrls,
+    citedDocumentIds.length > 0 ? { ids: citedDocumentIds } : "skip"
+  );
+  const fileByDocument = useMemo(
+    () => new Map((files ?? []).map((file) => [file._id, file])),
+    [files]
+  );
   const inlineCitations = hasInlineCitations(style);
   const firstCitation = useMemo(() => {
     const first = answer.match(/\[(\d+)]/);
@@ -450,6 +451,7 @@ export function ResearchAnswerWithEvidence({
               <CitationPage
                 key={`${result.documentId}:${result.pageNumber}:${index}`}
                 result={result}
+                file={fileByDocument.get(result.documentId) ?? null}
                 number={index + 1}
                 active={activeCitation === index + 1}
                 cardRef={(element) => {

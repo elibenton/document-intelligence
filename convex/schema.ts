@@ -221,7 +221,7 @@ export default defineSchema({
     reviewSkippedAt: v.optional(v.number()),
     uploadedAt: v.number(),
     completedAt: v.optional(v.number()),
-    // Debounce for page-image rendering (pageImages.ensureRendered)
+    // Debounce for page-geometry rendering (render.ensureRendered)
     renderScheduledAt: v.optional(v.number()),
     // Page-derivative lifecycle is deliberately separate from document AI
     // processing. A document can be parsed while its viewer derivatives are

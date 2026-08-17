@@ -251,11 +251,11 @@ function uniqueBlockIds(spans: Array<{ blockId: string }>): string[] {
   return [...new Set(spans.map((span) => span.blockId))];
 }
 
-export interface ImagePdfViewerRef {
+export interface PdfViewerRef {
   scrollToPage: (pageNumber: number) => void;
 }
 
-interface ImagePdfViewerProps {
+interface PdfViewerProps {
   documentId: Id<"documents">;
   /** URL of the original PDF. Pages are drawn client-side by pdf.js from it. */
   pdfUrl?: string | null;
@@ -277,10 +277,10 @@ interface ImagePdfViewerProps {
   /** The highlight whose comment box is open. Shared with the notes panel. */
   activeAnnotationId?: string | null;
   onActiveAnnotationChange?: (id: string | null) => void;
-  ref?: Ref<ImagePdfViewerRef>;
+  ref?: Ref<PdfViewerRef>;
 }
 
-export function ImagePdfViewer({
+export function PdfViewer({
   documentId,
   pdfUrl,
   pages,
@@ -293,7 +293,7 @@ export function ImagePdfViewer({
   activeAnnotationId = null,
   onActiveAnnotationChange,
   ref,
-}: ImagePdfViewerProps) {
+}: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const { pdf, error: pdfError } = usePdfDocument(pdfUrl);

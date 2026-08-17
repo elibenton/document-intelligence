@@ -24,7 +24,7 @@ export interface ViewerAnnotation {
  * `pointer-events-none` throughout, deliberately: this layer sits under the
  * text layer, and anything clickable here would swallow the pointerdown that
  * starts a text selection. Activating a highlight is a hit-test the text layer
- * performs on a plain click — see ImagePdfViewer.
+ * performs on a plain click — see PdfViewer.
  */
 export function AnnotationLayer({
   annotations,

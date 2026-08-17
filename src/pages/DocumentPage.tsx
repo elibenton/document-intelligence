@@ -5,9 +5,9 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
 import {
-  ImagePdfViewer,
-  type ImagePdfViewerRef,
-} from "@/components/viewer/ImagePdfViewer";
+  PdfViewer,
+  type PdfViewerRef,
+} from "@/components/viewer/PdfViewer";
 import { ImageViewer } from "@/components/viewer/ImageViewer";
 import { WebClipViewer } from "@/components/viewer/WebClipViewer";
 import { CsvViewer } from "@/components/viewer/CsvViewer";
@@ -73,8 +73,8 @@ export default function DocumentPage({ id }: { id: string }) {
   const translatedPages = useQuery(api.translations.pagesByDocument, {
     documentId,
   });
-  const ensureRendered = useMutation(api.pageImages.ensureRendered);
-  const retryRender = useMutation(api.pageImages.retryRender);
+  const ensureRendered = useMutation(api.render.ensureRendered);
+  const retryRender = useMutation(api.render.retryRender);
   const retryTranslation = useMutation(api.translations.retry);
   const rotateDocument = useMutation(api.documents.rotateDocument);
 
@@ -120,14 +120,14 @@ export default function DocumentPage({ id }: { id: string }) {
     viewerMetrics.width,
     viewerMetrics.zoomFloor
   );
-  const imageViewerRef = useRef<ImagePdfViewerRef | null>(null);
+  const viewerRef = useRef<PdfViewerRef | null>(null);
 
   const handleVisiblePageChange = useCallback((page: number) => {
     setCurrentPage(page);
   }, []);
 
   const scrollToPage = useCallback((page: number) => {
-    imageViewerRef.current?.scrollToPage(page);
+    viewerRef.current?.scrollToPage(page);
   }, []);
 
   // The same section list the Contents panel shows, so a new note is filed
@@ -169,12 +169,13 @@ export default function DocumentPage({ id }: { id: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Documents uploaded before page pre-rendering existed have no images —
-  // kick off a render for them on first view (the mutation is a no-op if
-  // images already exist or a render is already scheduled).
+  // Documents from before the geometry pass have no page text geometry —
+  // kick off a render for them on first view (the mutation is a no-op when
+  // the geometry is current or a render is already scheduled).
   const isCsv = document ? isCsvDocument(document) : false;
-  // Paged documents (PDF and DOCX) get server-rendered page images and the
-  // page-image reader; everything else falls back to the text view.
+  // Paged documents (PDF and DOCX) get the paged reader — pages drawn
+  // client-side by pdf.js over the stored text geometry; everything else
+  // falls back to a media-specific view.
   const isPdfDocument =
     !isCsv &&
     (document?.mediaType === "pdf" ||
@@ -631,11 +632,11 @@ export default function DocumentPage({ id }: { id: string }) {
               ) : document.mediaType === "image" ? (
                 <ImageViewer url={url} name={document.name} />
               ) : isPdfDocument ? (
-                // Pre-rendered page images: no client-side PDF parsing, so
-                // pages never come up blank and scanned docs behave the same
-                // as born-digital ones.
-                <ImagePdfViewer
-                  ref={imageViewerRef}
+                // Pages drawn client-side by pdf.js from the original file;
+                // the stored geometry supplies the selectable text layer, so
+                // scanned docs behave the same as born-digital ones.
+                <PdfViewer
+                  ref={viewerRef}
                   documentId={documentId}
                   pdfUrl={url}
                   pages={pages ?? []}

@@ -108,7 +108,7 @@ export const renderDocx = internalAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     try {
-      const doc = await ctx.runQuery(internal.pageImages.docForRender, {
+      const doc = await ctx.runQuery(internal.render.docForRender, {
         documentId: args.documentId,
       });
       if (!doc || doc.mediaType !== "docx") return null;
@@ -136,7 +136,7 @@ export const renderDocx = internalAction({
         );
       }
 
-      await ctx.runMutation(internal.pageImages.beginRender, {
+      await ctx.runMutation(internal.render.beginRender, {
         documentId: args.documentId,
         expectedPages: pages.length,
         rendererVersion: RENDERER_VERSION,
@@ -144,7 +144,7 @@ export const renderDocx = internalAction({
 
       const existingVersions = new Map(
         (
-          await ctx.runQuery(internal.pageImages.renderedPageVersions, {
+          await ctx.runQuery(internal.render.renderedPageVersions, {
             documentId: args.documentId,
           })
         ).map((row) => [row.pageNumber, row.rendererVersion])
@@ -154,7 +154,7 @@ export const renderDocx = internalAction({
         if (existingVersions.get(pageNumber) === RENDERER_VERSION) continue;
         // No raster is produced — DOCX rendering delivers nativeBlocks, which
         // needs the layout, not the pixels.
-        await ctx.runMutation(internal.pageImages.commitPage, {
+        await ctx.runMutation(internal.render.commitPage, {
           documentId: args.documentId,
           pageNumber,
           width: page.width,
@@ -185,7 +185,7 @@ export const renderDocx = internalAction({
         });
       }
 
-      await ctx.runMutation(internal.pageImages.completeRender, {
+      await ctx.runMutation(internal.render.completeRender, {
         documentId: args.documentId,
         expectedPages: pages.length,
         rendererVersion: RENDERER_VERSION,
@@ -193,7 +193,7 @@ export const renderDocx = internalAction({
       return null;
     } catch (error) {
       try {
-        await ctx.runMutation(internal.pageImages.failRender, {
+        await ctx.runMutation(internal.render.failRender, {
           documentId: args.documentId,
           rendererVersion: RENDERER_VERSION,
           error: errorMessage(error),

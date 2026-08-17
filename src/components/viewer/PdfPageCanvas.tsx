@@ -31,7 +31,7 @@ export function PdfPageCanvas({
   onPainted?: (pageNumber: number) => void;
   /**
    * The page's intrinsic size, reported as soon as pdf.js hands over the page.
-   * The caller sizes the surface from it — see the note in ImagePdfViewer on
+   * The caller sizes the surface from it — see the note in PdfViewer on
    * why the stored OCR dimensions cannot be trusted for that.
    */
   onPageSize?: (

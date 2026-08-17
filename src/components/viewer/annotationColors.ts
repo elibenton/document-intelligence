@@ -4,7 +4,7 @@
  * These are raw color literals rather than theme tokens on purpose: a
  * highlight is drawn on the page, and the page is paper — always white,
  * regardless of the app's light/dark theme (see the `bg-white` on the page
- * surface in ImagePdfViewer). A themed token would invert with the chrome and
+ * surface in PdfViewer). A themed token would invert with the chrome and
  * stop reading as ink on paper.
  *
  * `fill` is what goes over the page — translucent, so the glyphs underneath

@@ -247,7 +247,7 @@ export const renderBatch = internalAction({
   handler: async (ctx, args) => {
     let pdf: PDFDocumentProxy | undefined;
     try {
-      const doc = await ctx.runQuery(internal.pageImages.docForRender, {
+      const doc = await ctx.runQuery(internal.render.docForRender, {
         documentId: args.documentId,
       });
       if (!doc) return null;
@@ -283,7 +283,7 @@ export const renderBatch = internalAction({
         disableFontFace: true,
       }).promise;
 
-      await ctx.runMutation(internal.pageImages.beginRender, {
+      await ctx.runMutation(internal.render.beginRender, {
         documentId: args.documentId,
         expectedPages: pdf.numPages,
         rendererVersion: RENDERER_VERSION,
@@ -291,7 +291,7 @@ export const renderBatch = internalAction({
 
       const existingVersions = new Map(
         (
-          await ctx.runQuery(internal.pageImages.renderedPageVersions, {
+          await ctx.runQuery(internal.render.renderedPageVersions, {
             documentId: args.documentId,
           })
         ).map((row) => [row.pageNumber, row.rendererVersion])
@@ -316,7 +316,7 @@ export const renderBatch = internalAction({
             nativeTextVisibility(pdfjs, page),
           ]);
 
-          await ctx.runMutation(internal.pageImages.commitPage, {
+          await ctx.runMutation(internal.render.commitPage, {
             documentId: args.documentId,
             pageNumber: pageIndex,
             width: Math.ceil(viewport.width),
@@ -340,7 +340,7 @@ export const renderBatch = internalAction({
           renderEnqueueOptions(args.documentId)
         );
       } else {
-        await ctx.runMutation(internal.pageImages.completeRender, {
+        await ctx.runMutation(internal.render.completeRender, {
           documentId: args.documentId,
           expectedPages: pdf.numPages,
           rendererVersion: RENDERER_VERSION,

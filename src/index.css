@@ -28,7 +28,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /* Native range/caret behavior remains active, but selection paint comes from
-   validated PDF word boxes in ImagePdfViewer instead of arbitrary DOM rects. */
+   validated PDF word boxes in PdfViewer instead of arbitrary DOM rects. */
 .pdf-text-layer [data-pdf-text-token]::selection {
   background: transparent;
 }
