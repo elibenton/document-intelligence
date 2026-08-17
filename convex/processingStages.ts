@@ -1,9 +1,7 @@
 /**
- * Document pipeline — Node-runtime half. Every stage that calls Interfaze
- * (parse/OCR, extract, transcribe, template extraction) lives here under
- * "use node" because the Interfaze SDK needs the Node runtime. The status
- * mutations and pure-scheduling actions it drives stay in processing.ts on the
- * default runtime and are reached by function reference.
+ * Document pipeline — the stage actions (parse/OCR, analyze, transcribe).
+ * The queueing, pause gate and status mutations they run against live in
+ * processing.ts and are reached by function reference.
  */
 
 import { internalAction } from "./_generated/server";
@@ -120,7 +118,7 @@ async function scheduleTranslation(
     } = await ctx.runQuery(internal.settings.forDocumentInternal, {
       documentId,
     });
-    await ctx.scheduler.runAfter(0, internal.translationNode.translateDocument, {
+    await ctx.scheduler.runAfter(0, internal.translations.translateDocument, {
       documentId,
       languageCode: translationSettings.defaultLanguageCode,
       translationVersion: translationSettings.translationVersion,
@@ -608,7 +606,7 @@ export const runTranscribe = internalAction({
 
       // Recordings skip the metadata pass, so the transcript is the context
       // the rename pass gets to work from (convex/rename.ts).
-      await ctx.scheduler.runAfter(0, internal.renameNode.runRenamePass, {
+      await ctx.scheduler.runAfter(0, internal.rename.runRenamePass, {
         documentId: args.documentId,
       });
       await ctx.runMutation(internal.processing.updateStatus, {

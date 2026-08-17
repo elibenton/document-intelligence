@@ -26,13 +26,13 @@ type StageExtras = { bypassCache?: boolean; promptOverride?: string };
 function stageAction(stage: string) {
   switch (stage) {
     case "parse":
-      return internal.processingNode.runDocumentUnderstanding;
+      return internal.processingStages.runDocumentUnderstanding;
     case "transcribe":
-      return internal.processingNode.runTranscribe;
+      return internal.processingStages.runTranscribe;
     case "analyze":
-      return internal.processingNode.runAnalyze;
+      return internal.processingStages.runAnalyze;
     case "relationships":
-      return internal.relationshipsNode.extract;
+      return internal.relationships.extract;
     default:
       throw new Error(`Unknown pipeline stage: ${stage}`);
   }

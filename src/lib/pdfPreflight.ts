@@ -16,7 +16,7 @@ import { formatBytes } from "./formatBytes";
  * to a model completion that read the embedded text layer and nothing else.
  *
  * It stopped being true when the parse stage moved to Interfaze's dedicated OCR
- * task (`ocrDocument` in convex/processingNode.ts). Re-measured against the live
+ * task (`ocrDocument` in convex/processingStages.ts). Re-measured against the live
  * pipeline: `test-corpus/Matt smith 2022 contract.pdf` — no text layer, no
  * embedded fonts, five iPhone-camera JPEGs, the most unambiguous scan in the
  * corpus — returns 7,769 characters across 128 blocks, correctly. The check was

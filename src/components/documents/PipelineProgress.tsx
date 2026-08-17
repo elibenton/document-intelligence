@@ -61,7 +61,7 @@ function formatDuration(ms: number): string {
  * Live pipeline for a document, as a vertical list: Scan → Analyze → Extract.
  *
  * Those three are the product's vocabulary. Scan and Analyze are now separate
- * pooled stages (convex/processingNode.ts), so Analyze can sit queued behind
+ * pooled stages (convex/processingStages.ts), so Analyze can sit queued behind
  * other documents rather than following Scan immediately. A queued Analyze
  * renders as running: "waiting" is reserved for waiting on the *user*, which
  * is what Extract does before a template is confirmed.
@@ -141,7 +141,7 @@ export function PipelineProgress({
   const csv = isCsvDocument(document);
   const pageTotal = document.pageCount ?? pages?.length;
 
-  // Recordings never run the metadata pass (convex/processingNode.ts hands the
+  // Recordings never run the metadata pass (convex/processingStages.ts hands the
   // transcript to the rename pass instead), so their analysis lands with the
   // transcript rather than after it.
   const analyzeDone = recording
