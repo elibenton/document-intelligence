@@ -608,7 +608,8 @@ export default defineSchema({
   // sharding there is a *deployment-wide* fan-out — twenty parallel chunk
   // parses all incrementing one row. Here those writes are already split
   // across accounts, and one account's own concurrency is bounded by the
-  // workpool. If a single account ever fans out wide enough to conflict with
+  // deployment's scheduled-function limit. If a single account ever fans out
+  // wide enough to conflict with
   // itself, this shards the same way that one did.
   userUsage: defineTable({
     userId: v.string(),
@@ -742,7 +743,9 @@ export default defineSchema({
     documentId: v.id("documents"),
     stage: v.string(),
     status: v.string(), // "pending" | "running" | "completed" | "failed"
-    // Queue metadata is optional for rows created before Workpool was added.
+    // Queue metadata is optional for rows created before it existed. workId
+    // is the scheduled-function id ("enqueuing" until the enqueue records it;
+    // rows from the workpool era carry ids the scheduler cannot parse).
     queuedAt: v.optional(v.number()),
     workId: v.optional(v.string()),
     startedAt: v.optional(v.number()),
@@ -753,8 +756,8 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_stage_and_status", ["stage", "status"]),
 
-  // Operator controls for the shared Interfaze workpool. Kept outside the
-  // component so the application UI can subscribe to pause state directly.
+  // Operator controls for the shared Interfaze pipeline. Every stage action
+  // checks the pause flag as it starts (processing.deferWhilePaused).
   processingControl: defineTable({
     key: v.string(),
     paused: v.boolean(),

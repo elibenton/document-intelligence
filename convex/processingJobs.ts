@@ -1,5 +1,4 @@
 import { v } from "convex/values";
-import { PROCESSING_MAX_PARALLELISM } from "./processingPool";
 import { authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
 
@@ -115,10 +114,11 @@ export const estimateByDocument = authedQuery({
       };
     }
 
-    // One pool runs every Interfaze stage, so every job holding a workId is
-    // in the same queue. Jobs without one (translate runs off the scheduler)
-    // hold no pool slot and must not be counted.
-    const parallelism = PROCESSING_MAX_PARALLELISM;
+    // Estimate only: stages are plain scheduled actions, so real concurrency
+    // is the deployment's scheduled-function limit (8 on S16) shared with
+    // rendering and crons. Jobs without a workId (translate runs off the
+    // scheduler's job rows) hold no slot and must not be counted.
+    const parallelism = 6;
     const samePool = (job: { stage: string; workId?: string }) =>
       job.workId !== undefined;
 

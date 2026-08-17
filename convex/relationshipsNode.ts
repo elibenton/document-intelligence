@@ -9,6 +9,7 @@ import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { chatCompletion, failureCodeOf } from "./interfaze";
+import { deferWhilePaused, PAUSE_RECHECK_MS } from "./processing";
 import { usageLogger } from "./apiLogs";
 
 // ---------------------------------------------------------------------------
@@ -172,11 +173,24 @@ const TYPE_MAP: Record<string, string> = {
 export const extract = internalAction({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
+    if (
+      await deferWhilePaused(
+        ctx,
+        { documentId: args.documentId, stage: "relationships" },
+        () =>
+          ctx.scheduler.runAfter(
+            PAUSE_RECHECK_MS,
+            internal.relationshipsNode.extract,
+            args
+          )
+      )
+    )
+      return null;
     const apiKey = process.env.INTERFAZE_API_KEY;
     if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
 
-    // The job row is created by processing.runRelationships, which enqueues
-    // this action through the pool so a 10-minute kill still lands somewhere.
+    // The job row is created by processing.runRelationships; if the action is
+    // killed mid-run, processing.sweepStuckJobs records the failure.
     await ctx.runMutation(internal.processing.updateStatus, {
       documentId: args.documentId,
       status: "extracting",

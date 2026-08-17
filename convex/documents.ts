@@ -3,7 +3,6 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { processingPool } from "./processingPool";
 import { authedMutation, authedQuery } from "./authz";
 import {
   filterOwnedDocuments,
@@ -118,7 +117,7 @@ export const get = authedQuery({
 /**
  * The same read, for the processing pipeline.
  *
- * The node actions run from the workpool, and Convex does not propagate
+ * The pipeline actions run from the scheduler, and Convex does not propagate
  * identity through the scheduler — so they cannot call the authenticated `get`.
  * They are already unreachable from outside, which is what makes an unguarded
  * read safe here.
@@ -413,17 +412,18 @@ export async function beginDocumentTeardown(
   // Cancellation is cooperative — a stage already running is allowed to
   // finish — but a queued stage that never starts is a whole Interfaze call
   // not spent on a document nobody will ever see. "enqueuing" is the
-  // placeholder written before the pool returns a real id.
+  // placeholder written before the enqueue records a real id.
   const jobs = await ctx.db
     .query("processingJobs")
     .withIndex("by_document", (q) => q.eq("documentId", documentId))
     .collect();
   for (const job of jobs) {
     if (!job.workId || job.workId === "enqueuing") continue;
-    await processingPool.cancel(
-      ctx,
-      job.workId as Parameters<typeof processingPool.cancel>[1]
-    );
+    try {
+      await ctx.scheduler.cancel(job.workId as Id<"_scheduled_functions">);
+    } catch {
+      // Old rows can carry a workpool-era id the scheduler cannot parse.
+    }
   }
 
   // Delete the stored file(s) — web clips also carry a markdown article file.

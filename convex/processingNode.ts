@@ -10,7 +10,7 @@ import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { processingEnqueueOptions, processingPool } from "./processingPool";
+import { deferWhilePaused, PAUSE_RECHECK_MS } from "./processing";
 import {
   ocrDocument,
   analyzeDocumentText,
@@ -165,15 +165,10 @@ async function enqueueAnalyze(
   // Already queued or running — that run owns the stage, including the
   // translation it schedules on the way out.
   if (!shouldEnqueue) return;
-  const { paused } = await ctx.runQuery(
-    internal.processingControl.getInternal,
-    {}
-  );
-  const workId = await processingPool.enqueueAction(
-    ctx,
+  const workId = await ctx.scheduler.runAfter(
+    0,
     internal.processingNode.runAnalyze,
-    { documentId, ...(bypassCache === undefined ? {} : { bypassCache }) },
-    processingEnqueueOptions(paused, { documentId, stage: "analyze" })
+    { documentId, ...(bypassCache === undefined ? {} : { bypassCache }) }
   );
   await ctx.runMutation(internal.processing.attachWorkId, {
     documentId,
@@ -206,6 +201,19 @@ export const runDocumentUnderstanding = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (
+      await deferWhilePaused(
+        ctx,
+        { documentId: args.documentId, stage: "parse" },
+        () =>
+          ctx.scheduler.runAfter(
+            PAUSE_RECHECK_MS,
+            internal.processingNode.runDocumentUnderstanding,
+            args
+          )
+      )
+    )
+      return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
@@ -448,6 +456,19 @@ export const runAnalyze = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (
+      await deferWhilePaused(
+        ctx,
+        { documentId: args.documentId, stage: "analyze" },
+        () =>
+          ctx.scheduler.runAfter(
+            PAUSE_RECHECK_MS,
+            internal.processingNode.runAnalyze,
+            args
+          )
+      )
+    )
+      return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
@@ -546,6 +567,19 @@ export const runTranscribe = internalAction({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (
+      await deferWhilePaused(
+        ctx,
+        { documentId: args.documentId, stage: "transcribe" },
+        () =>
+          ctx.scheduler.runAfter(
+            PAUSE_RECHECK_MS,
+            internal.processingNode.runTranscribe,
+            args
+          )
+      )
+    )
+      return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });

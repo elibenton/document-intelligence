@@ -3,20 +3,49 @@ import type { ActionCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { processingEnqueueOptions, processingPool } from "./processingPool";
-import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { authedAction, authedMutation } from "./authz";
 import { keepOwned, requireDocumentFromAction } from "./ownership";
 import { requireBudget, requireBudgetFromAction } from "./budget";
 import { documentIssueContext, recordIssue } from "./issues";
 
-// Watchdog: actions that hit Convex's 10-minute kill never run their catch
-// blocks, stranding documents in "parsing"/"extracting" with a "running" job
-// forever. The pool's onComplete (processing.jobComplete) is what notices:
-// it fires on the kill itself, so no stage needs its own timer.
+// Stages are plain scheduled actions (ctx.scheduler); there is no workpool.
+// The two guarantees the pool used to provide are covered by:
+//  - sweepStuckJobs (cron): an action killed at the platform limit never runs
+//    its catch, so a job left "running" past any legal action lifetime is
+//    marked failed there.
+//  - deferWhilePaused: each stage action checks the pause flag at start and
+//    re-schedules itself instead of spending against a blocked provider.
 
 export const CANCELED_MESSAGE =
   "Processing was stopped before this job started.";
+
+/**
+ * Pause gate, called first thing by every pipeline stage action. When
+ * processing is paused the action re-schedules itself and records the new
+ * scheduled-function id so cancellation still has a handle. Returns true when
+ * the caller should return immediately.
+ */
+export async function deferWhilePaused(
+  ctx: ActionCtx,
+  job: { documentId: Id<"documents">; stage: string },
+  reschedule: () => Promise<Id<"_scheduled_functions">>
+): Promise<boolean> {
+  const { paused } = await ctx.runQuery(
+    internal.processingControl.getInternal,
+    {}
+  );
+  if (!paused) return false;
+  const workId = await reschedule();
+  await ctx.runMutation(internal.processing.attachWorkId, {
+    documentId: job.documentId,
+    stage: job.stage,
+    workId,
+  });
+  return true;
+}
+
+/** How long to wait before a paused stage re-checks the pause flag. */
+export const PAUSE_RECHECK_MS = 60_000;
 
 
 /** Public retry hook for the transcript UI */
@@ -38,12 +67,10 @@ export const runTranscription = authedAction({
       documentId: args.documentId,
       status: "uploaded",
     });
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-    const workId = await processingPool.enqueueAction(
-      ctx,
+    const workId = await ctx.scheduler.runAfter(
+      0,
       internal.processingNode.runTranscribe,
-      { documentId: args.documentId },
-      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "transcribe" })
+      { documentId: args.documentId }
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -106,24 +133,19 @@ export const runFullPipeline = authedAction({
       documentId: args.documentId,
       stage: "analyze",
     });
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
     const workId = isRecording
-      ? await processingPool.enqueueAction(
-          ctx,
-          internal.processingNode.runTranscribe,
-          { documentId: args.documentId },
-          processingEnqueueOptions(paused, { documentId: args.documentId, stage: "parse" })
-        )
-      : await processingPool.enqueueAction(
-          ctx,
+      ? await ctx.scheduler.runAfter(0, internal.processingNode.runTranscribe, {
+          documentId: args.documentId,
+        })
+      : await ctx.scheduler.runAfter(
+          0,
           internal.processingNode.runDocumentUnderstanding,
           {
             documentId: args.documentId,
             ...(args.bypassCache === undefined
               ? {}
               : { bypassCache: args.bypassCache }),
-          },
-          processingEnqueueOptions(paused, { documentId: args.documentId, stage: "parse" })
+          }
         );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -157,12 +179,10 @@ export const runAnalyze = authedAction({
       { documentId: args.documentId, stage: "analyze" }
     );
     if (!shouldEnqueue) return null;
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-    const workId = await processingPool.enqueueAction(
-      ctx,
+    const workId = await ctx.scheduler.runAfter(
+      0,
       internal.processingNode.runAnalyze,
-      args,
-      processingEnqueueOptions(paused, { documentId: args.documentId, stage: "analyze" })
+      args
     );
     await ctx.runMutation(internal.processing.attachWorkId, {
       documentId: args.documentId,
@@ -207,7 +227,6 @@ export const retryBlocked = authedMutation({
     // parallelism and reads as a button that does nothing. A pause set by hand
     // is left alone, and the enqueue below still honours it.
     await ctx.runMutation(internal.processingControl.resumeAfterProviderBlock, {});
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
 
     for (const doc of blocked) {
       await ctx.db.patch(doc._id, {
@@ -228,17 +247,15 @@ export const retryBlocked = authedMutation({
         )
         .unique();
       const workId = isRecording
-        ? await processingPool.enqueueAction(
-            ctx,
+        ? await ctx.scheduler.runAfter(
+            0,
             internal.processingNode.runTranscribe,
-            { documentId: doc._id },
-            processingEnqueueOptions(paused, { documentId: doc._id, stage: "parse" })
+            { documentId: doc._id }
           )
-        : await processingPool.enqueueAction(
-            ctx,
+        : await ctx.scheduler.runAfter(
+            0,
             internal.processingNode.runDocumentUnderstanding,
-            { documentId: doc._id },
-            processingEnqueueOptions(paused, { documentId: doc._id, stage: "parse" })
+            { documentId: doc._id }
           );
       if (job) {
         await ctx.db.patch(job._id, {
@@ -277,14 +294,12 @@ export const retryBlocked = authedMutation({
  * It used to be a bare `ctx.runAction` at the tail of template extraction, and
  * that cost two things. Template extraction only runs when a human opens the
  * extract dialog, so a document uploaded and processed normally never mapped a
- * single relationship. And a bare runAction has no `onComplete`, so the Convex
- * 10-minute kill left the job row on "running" forever — the exact failure mode
- * processingPool.ts was written to eliminate.
+ * single relationship. And a bare awaited runAction ties the caller's fate to
+ * it — scheduling keeps the job row as the record sweepStuckJobs watches.
  *
  * Scheduled after Extract rather than awaited inside it: relationship mapping
  * is an enrichment pass, and a document whose extraction succeeded must not be
- * failed by it. It shares the processing pool — on S16 a second pool's main
- * loop costs scheduler slots the deployment does not have to spare.
+ * failed by it.
  *
  * Public because that same isolation leaves it without a retry path. A stage
  * that fails without failing its document is invisible to `retryBlocked`,
@@ -301,12 +316,10 @@ async function enqueueRelationships(
     { documentId, stage: "relationships" }
   );
   if (!shouldEnqueue) return null;
-  const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-  const workId = await processingPool.enqueueAction(
-    ctx,
+  const workId = await ctx.scheduler.runAfter(
+    0,
     internal.relationshipsNode.extract,
-    { documentId },
-    processingEnqueueOptions(paused, { documentId, stage: "relationships" })
+    { documentId }
   );
   await ctx.runMutation(internal.processing.attachWorkId, {
     documentId,
@@ -465,108 +478,82 @@ export const updateJobStatus = internalMutation({
 });
 
 
+// How long a job may sit on "running" before the sweep declares its action
+// dead. Default-runtime actions live up to 30 minutes; anything older was
+// killed without reaching its catch block.
+const STUCK_RUNNING_MS = 35 * 60 * 1000;
+
 /**
- * Dead-man's switch scheduled when a stage starts running. If the job is
- * still "running" long after any action could legally live, the action was
- * killed (timeout/crash) without reaching its catch block — surface the
- * failure instead of showing a spinner forever. A retry refreshes startedAt,
- * so a stale watchdog from an earlier attempt never kills a fresh run.
+ * Mark one canceled job and settle its document, shared by "Stop processing"
+ * and document teardown. A canceled extract/relationships leaves a document
+ * that is still fully parsed; only an interrupted parse leaves it unusable.
  */
-/**
- * The terminal state for a processing stage, decided in exactly one place.
- *
- * The workpool calls this whether the work succeeded, failed, or was canceled,
- * and — for a pool that retries — only once retries are exhausted. That covers
- * the two cases this layer used to hand-roll:
- *
- *  - A Node action killed at Convex's 10-minute limit never runs its own catch,
- *    so nothing recorded the failure and the document sat on "parsing" forever.
- *    Five stages each armed a `failIfStuck` timer to notice. onComplete fires
- *    on the kill itself, so there is nothing to notice late.
- *  - "Stop processing" cancels queued work. A 64-row self-rescheduling batch
- *    walker used to mark those jobs canceled. A canceled work item reports
- *    itself here instead.
- *
- * A stage's own catch still writes its own failure — that path has a real error
- * message and a FailureCode. This only speaks for the cases where the action
- * never got to speak for itself, so it takes care not to overwrite a verdict
- * that is already terminal.
- */
-export const jobComplete = internalMutation({
-  args: vOnCompleteArgs(
-    v.object({
-      documentId: v.id("documents"),
-      stage: v.string(),
-    })
-  ),
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    if (args.result.kind === "success") return null;
-    const { documentId, stage } = args.context;
-
-    const job = await ctx.db
-      .query("processingJobs")
-      .withIndex("by_document", (q) =>
-        q.eq("documentId", documentId).eq("stage", stage)
-      )
-      .first();
-
-    // The action already recorded its own outcome — leave it.
-    if (job && (job.status === "failed" || job.status === "completed")) {
-      return null;
-    }
-
-    const canceled = args.result.kind === "canceled";
-    const errorMessage = canceled
-      ? CANCELED_MESSAGE
-      : `${stage} stopped before it could finish — the processing action was terminated (document may be too large): ${
-          args.result.kind === "failed" ? args.result.error : "unknown"
-        }`;
-
-    if (job) {
-      await ctx.db.patch(job._id, {
-        status: canceled ? "canceled" : "failed",
-        errorMessage,
+export async function cancelJob(
+  ctx: MutationCtx,
+  job: { _id: Id<"processingJobs">; documentId: Id<"documents">; stage: string }
+) {
+  await ctx.db.patch(job._id, {
+    status: "canceled",
+    errorMessage: CANCELED_MESSAGE,
+  });
+  const doc = await ctx.db.get(job.documentId);
+  if (!doc) return;
+  if (job.stage === "extract" || job.stage === "relationships") {
+    if (doc.status === "extracting") {
+      await ctx.db.patch(job.documentId, {
+        status: "parsed",
+        errorMessage: undefined,
+        errorCode: undefined,
       });
     }
+    return;
+  }
+  if (doc.status === "parsing" || doc.status === "extracting") {
+    await ctx.db.patch(job.documentId, {
+      status: "failed",
+      errorMessage: CANCELED_MESSAGE,
+      errorCode: "processing_canceled",
+    });
+  }
+}
 
-    // Cancellation is a user pressing Stop, not a defect, so it is not counted
-    // — a ledger that fills up with "someone changed their mind" buries the
-    // rows worth reading. What is counted is the other branch, and it is the
-    // most valuable report in the system: an action killed at Convex's
-    // 10-minute limit never runs its own catch, so this is the *only* place a
-    // too-large document is ever heard from.
-    if (!canceled) {
+/**
+ * Watchdog cron. An action killed by the platform (the action time limit,
+ * container eviction) never runs its own catch, so nothing records the
+ * failure and the document sits on "parsing" forever. A job still "running"
+ * long past any legal action lifetime is that case — surface it. A stage's
+ * own catch still writes its own failure with a real message and FailureCode;
+ * this only speaks for actions that never got to speak for themselves, and a
+ * retry refreshes startedAt so it never kills a fresh run.
+ */
+export const sweepStuckJobs = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const cutoff = Date.now() - STUCK_RUNNING_MS;
+    const running = await ctx.db
+      .query("processingJobs")
+      .withIndex("by_status", (q) => q.eq("status", "running"))
+      .take(200);
+    for (const job of running) {
+      if ((job.startedAt ?? job._creationTime) >= cutoff) continue;
+      const errorMessage = `${job.stage} stopped before it could finish — the processing action was terminated (document may be too large)`;
+      await ctx.db.patch(job._id, { status: "failed", errorMessage });
       await recordIssue(ctx, {
         surface: "pipeline",
-        stage,
+        stage: job.stage,
         message: errorMessage,
         errorCode: "action_terminated",
-        documentId,
-        ...(await documentIssueContext(ctx, documentId)),
+        documentId: job.documentId,
+        ...(await documentIssueContext(ctx, job.documentId)),
       });
-    }
-
-    const doc = await ctx.db.get(documentId);
-    if (!doc) return null;
-    // A canceled extract leaves a document that is still fully parsed; only an
-    // interrupted parse leaves it unusable.
-    if (canceled && (stage === "extract" || stage === "relationships")) {
-      if (doc.status === "extracting") {
-        await ctx.db.patch(documentId, {
-          status: "parsed",
-          errorMessage: undefined,
-          errorCode: undefined,
+      const doc = await ctx.db.get(job.documentId);
+      if (doc && (doc.status === "parsing" || doc.status === "extracting")) {
+        await ctx.db.patch(job.documentId, {
+          status: "failed",
+          errorMessage,
         });
       }
-      return null;
-    }
-    if (doc.status === "parsing" || doc.status === "extracting") {
-      await ctx.db.patch(documentId, {
-        status: "failed",
-        errorMessage,
-        ...(canceled ? { errorCode: "processing_canceled" } : {}),
-      });
     }
     return null;
   },
