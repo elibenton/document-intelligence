@@ -37,7 +37,7 @@ async function writeControl(
   if (existing) await ctx.db.replace(existing._id, value);
   else await ctx.db.insert("processingControl", value);
   // Nothing else to flip: every stage action checks this flag as it starts
-  // (processing.deferWhilePaused) and re-schedules itself while it holds.
+  // (processing.bailIfPaused) and cancels its job while it holds.
 }
 
 export const get = authedQuery({

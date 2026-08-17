@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
@@ -39,7 +39,7 @@ export function RecordingView({
   const segments = useQuery(api.transcripts.byDocument, {
     documentId: doc._id,
   });
-  const retranscribe = useAction(api.processing.runTranscription);
+  const retranscribe = useMutation(api.processing.runTranscription);
 
   const isVideo =
     doc.mediaType === "video" || doc.mimeType.startsWith("video/");

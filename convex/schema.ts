@@ -757,7 +757,7 @@ export default defineSchema({
     .index("by_stage_and_status", ["stage", "status"]),
 
   // Operator controls for the shared Interfaze pipeline. Every stage action
-  // checks the pause flag as it starts (processing.deferWhilePaused).
+  // checks the pause flag as it starts (processing.bailIfPaused).
   processingControl: defineTable({
     key: v.string(),
     paused: v.boolean(),

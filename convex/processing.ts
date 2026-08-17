@@ -1,11 +1,11 @@
-import { internalAction, internalMutation } from "./_generated/server";
-import type { ActionCtx, MutationCtx } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { authedAction, authedMutation } from "./authz";
-import { keepOwned, requireDocumentFromAction } from "./ownership";
-import { requireBudget, requireBudgetFromAction } from "./budget";
+import { authedMutation } from "./authz";
+import { keepOwned, requireDocument } from "./ownership";
+import { requireBudget } from "./budget";
 import { documentIssueContext, recordIssue } from "./issues";
 
 // Stages are plain scheduled actions (ctx.scheduler); there is no workpool.
@@ -13,69 +13,143 @@ import { documentIssueContext, recordIssue } from "./issues";
 //  - sweepStuckJobs (cron): an action killed at the platform limit never runs
 //    its catch, so a job left "running" past any legal action lifetime is
 //    marked failed there.
-//  - deferWhilePaused: each stage action checks the pause flag at start and
-//    re-schedules itself instead of spending against a blocked provider.
+//  - bailIfPaused: each stage action checks the pause flag at start and
+//    cancels its job instead of spending against a blocked provider; the
+//    retry buttons and retryBlocked bring the work back after a resume.
 
 export const CANCELED_MESSAGE =
   "Processing was stopped before this job started.";
 
+/** Extra args a stage's action accepts beyond documentId. */
+type StageExtras = { bypassCache?: boolean; promptOverride?: string };
+
+function stageAction(stage: string) {
+  switch (stage) {
+    case "parse":
+      return internal.processingNode.runDocumentUnderstanding;
+    case "transcribe":
+      return internal.processingNode.runTranscribe;
+    case "analyze":
+      return internal.processingNode.runAnalyze;
+    case "relationships":
+      return internal.relationshipsNode.extract;
+    default:
+      throw new Error(`Unknown pipeline stage: ${stage}`);
+  }
+}
+
 /**
- * Pause gate, called first thing by every pipeline stage action. When
- * processing is paused the action re-schedules itself and records the new
- * scheduled-function id so cancellation still has a handle. Returns true when
- * the caller should return immediately.
+ * The one way a stage gets queued: dedupe against a live job, schedule the
+ * action, and write the job row carrying the scheduled-function id — all in
+ * the caller's transaction, so there is no window where a job exists without
+ * its handle (the workpool era needed an "enqueuing" placeholder for that).
+ * Returns false when a live run already owns the stage.
  */
-export async function deferWhilePaused(
-  ctx: ActionCtx,
-  job: { documentId: Id<"documents">; stage: string },
-  reschedule: () => Promise<Id<"_scheduled_functions">>
+export async function enqueueStage(
+  ctx: MutationCtx,
+  documentId: Id<"documents">,
+  stage: string,
+  extras?: StageExtras
 ): Promise<boolean> {
-  const { paused } = await ctx.runQuery(
-    internal.processingControl.getInternal,
-    {}
-  );
-  if (!paused) return false;
-  const workId = await reschedule();
-  await ctx.runMutation(internal.processing.attachWorkId, {
-    documentId: job.documentId,
-    stage: job.stage,
-    workId,
+  const existing = await ctx.db
+    .query("processingJobs")
+    .withIndex("by_document", (q) =>
+      q.eq("documentId", documentId).eq("stage", stage)
+    )
+    .first();
+  if (
+    existing &&
+    (existing.status === "running" ||
+      (existing.status === "pending" && existing.workId))
+  ) {
+    return false;
+  }
+  const workId = await ctx.scheduler.runAfter(0, stageAction(stage), {
+    documentId,
+    ...(extras?.bypassCache === undefined
+      ? {}
+      : { bypassCache: extras.bypassCache }),
+    ...(extras?.promptOverride === undefined
+      ? {}
+      : { promptOverride: extras.promptOverride }),
   });
+  if (existing) {
+    // Preserve nothing from the old run: this is a fresh queue entry.
+    await ctx.db.patch(existing._id, {
+      status: "pending",
+      queuedAt: Date.now(),
+      workId,
+      startedAt: undefined,
+      completedAt: undefined,
+      errorMessage: undefined,
+    });
+  } else {
+    await ctx.db.insert("processingJobs", {
+      documentId,
+      stage,
+      status: "pending",
+      queuedAt: Date.now(),
+      workId,
+    });
+  }
   return true;
 }
 
-/** How long to wait before a paused stage re-checks the pause flag. */
-export const PAUSE_RECHECK_MS = 60_000;
+/** enqueueStage for callers in action context (stage chaining). */
+export const enqueue = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    stage: v.string(),
+    bypassCache: v.optional(v.boolean()),
+    promptOverride: v.optional(v.string()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) =>
+    enqueueStage(ctx, args.documentId, args.stage, args),
+});
+
+/**
+ * Pause gate, called first thing by every pipeline stage action. When
+ * processing is paused the job is canceled rather than run — pause exists to
+ * stop spend against a provider that is refusing everything, and canceling is
+ * what "Stop processing" already means. Returns true when the caller should
+ * return immediately.
+ */
+export const bailIfPaused = internalMutation({
+  args: { documentId: v.id("documents"), stage: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const control = await ctx.db
+      .query("processingControl")
+      .withIndex("by_key", (q) => q.eq("key", "global"))
+      .unique();
+    if (!control?.paused) return false;
+    const job = await ctx.db
+      .query("processingJobs")
+      .withIndex("by_document", (q) =>
+        q.eq("documentId", args.documentId).eq("stage", args.stage)
+      )
+      .first();
+    if (job && (job.status === "pending" || job.status === "running")) {
+      await cancelJob(ctx, job);
+    }
+    return true;
+  },
+});
 
 
 /** Public retry hook for the transcript UI */
-export const runTranscription = authedAction({
+export const runTranscription = authedMutation({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireDocumentFromAction(ctx, args.documentId);
-    await requireBudgetFromAction(ctx);
-    const shouldEnqueue: boolean = await ctx.runMutation(
-      internal.processing.createJob,
-      {
-        documentId: args.documentId,
-        stage: "transcribe",
-      }
-    );
-    if (!shouldEnqueue) return null;
-    await ctx.runMutation(internal.processing.updateStatus, {
-      documentId: args.documentId,
+    await requireDocument(ctx, args.documentId);
+    await requireBudget(ctx, ctx.user._id);
+    if (!(await enqueueStage(ctx, args.documentId, "transcribe"))) return null;
+    await ctx.db.patch(args.documentId, {
       status: "uploaded",
-    });
-    const workId = await ctx.scheduler.runAfter(
-      0,
-      internal.processingNode.runTranscribe,
-      { documentId: args.documentId }
-    );
-    await ctx.runMutation(internal.processing.attachWorkId, {
-      documentId: args.documentId,
-      stage: "transcribe",
-      workId,
+      errorMessage: undefined,
+      errorCode: undefined,
     });
     return null;
   },
@@ -89,23 +163,15 @@ export const runTranscription = authedAction({
 // user to confirm the suggested template.
 // ---------------------------------------------------------------------------
 
-export const runFullPipeline = authedAction({
+export const runFullPipeline = authedMutation({
   args: {
     documentId: v.id("documents"),
     bypassCache: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireDocumentFromAction(ctx, args.documentId);
-    await requireBudgetFromAction(ctx);
-    // getInternal, not the authenticated get: this action has identity today,
-    // but nothing about the read needs it, and the day someone schedules this
-    // pipeline the difference is a silent Unauthenticated. No convex/ module
-    // should reference `api.*` — see convex/authz.ts.
-    const document = await ctx.runQuery(internal.documents.getInternal, {
-      id: args.documentId,
-    });
-    if (!document) throw new Error("Document not found");
+    const document = await requireDocument(ctx, args.documentId);
+    await requireBudget(ctx, ctx.user._id);
 
     const isRecording =
       document.mediaType === "audio" ||
@@ -114,44 +180,22 @@ export const runFullPipeline = authedAction({
       document.mimeType.startsWith("video/");
 
     const stage = isRecording ? "transcribe" : "parse";
-    const shouldEnqueue: boolean = await ctx.runMutation(
-      internal.processing.createJob,
-      {
-        documentId: args.documentId,
-        stage,
-      }
+    const enqueued = await enqueueStage(
+      ctx,
+      args.documentId,
+      stage,
+      isRecording ? undefined : { bypassCache: args.bypassCache }
     );
-    if (!shouldEnqueue) return null;
-    await ctx.runMutation(internal.processing.updateStatus, {
-      documentId: args.documentId,
+    if (!enqueued) return null;
+    await ctx.db.patch(args.documentId, {
       status: "uploaded",
+      errorMessage: undefined,
+      errorCode: undefined,
     });
     // This run produces its own Analyze, so a job row left behind by a
     // standalone Analyze retry is stale — leaving it would let an old failure
     // outrank the fresh result in the pipeline UI.
-    await ctx.runMutation(internal.processing.clearStageJob, {
-      documentId: args.documentId,
-      stage: "analyze",
-    });
-    const workId = isRecording
-      ? await ctx.scheduler.runAfter(0, internal.processingNode.runTranscribe, {
-          documentId: args.documentId,
-        })
-      : await ctx.scheduler.runAfter(
-          0,
-          internal.processingNode.runDocumentUnderstanding,
-          {
-            documentId: args.documentId,
-            ...(args.bypassCache === undefined
-              ? {}
-              : { bypassCache: args.bypassCache }),
-          }
-        );
-    await ctx.runMutation(internal.processing.attachWorkId, {
-      documentId: args.documentId,
-      stage,
-      workId,
-    });
+    await clearStageJobRow(ctx, args.documentId, "analyze");
     return null;
   },
 });
@@ -164,7 +208,7 @@ export const runFullPipeline = authedAction({
  * geometry are built on, so it is re-run only when it failed, via
  * runFullPipeline. Analyze is text-in and cheap, so it stays retryable forever.
  */
-export const runAnalyze = authedAction({
+export const runAnalyze = authedMutation({
   args: {
     documentId: v.id("documents"),
     promptOverride: v.optional(v.string()),
@@ -172,23 +216,9 @@ export const runAnalyze = authedAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireDocumentFromAction(ctx, args.documentId);
-    await requireBudgetFromAction(ctx);
-    const shouldEnqueue: boolean = await ctx.runMutation(
-      internal.processing.createJob,
-      { documentId: args.documentId, stage: "analyze" }
-    );
-    if (!shouldEnqueue) return null;
-    const workId = await ctx.scheduler.runAfter(
-      0,
-      internal.processingNode.runAnalyze,
-      args
-    );
-    await ctx.runMutation(internal.processing.attachWorkId, {
-      documentId: args.documentId,
-      stage: "analyze",
-      workId,
-    });
+    await requireDocument(ctx, args.documentId);
+    await requireBudget(ctx, ctx.user._id);
+    await enqueueStage(ctx, args.documentId, "analyze", args);
     return null;
   },
 });
@@ -239,42 +269,7 @@ export const retryBlocked = authedMutation({
         doc.mediaType === "video" ||
         doc.mimeType.startsWith("audio/") ||
         doc.mimeType.startsWith("video/");
-      const stage = isRecording ? "transcribe" : "parse";
-      const job = await ctx.db
-        .query("processingJobs")
-        .withIndex("by_document", (q) =>
-          q.eq("documentId", doc._id).eq("stage", stage)
-        )
-        .unique();
-      const workId = isRecording
-        ? await ctx.scheduler.runAfter(
-            0,
-            internal.processingNode.runTranscribe,
-            { documentId: doc._id }
-          )
-        : await ctx.scheduler.runAfter(
-            0,
-            internal.processingNode.runDocumentUnderstanding,
-            { documentId: doc._id }
-          );
-      if (job) {
-        await ctx.db.patch(job._id, {
-          status: "pending",
-          queuedAt: Date.now(),
-          workId,
-          startedAt: undefined,
-          completedAt: undefined,
-          errorMessage: undefined,
-        });
-      } else {
-        await ctx.db.insert("processingJobs", {
-          documentId: doc._id,
-          stage,
-          status: "pending",
-          queuedAt: Date.now(),
-          workId,
-        });
-      }
+      await enqueueStage(ctx, doc._id, isRecording ? "transcribe" : "parse");
     }
     return blocked.length;
   },
@@ -307,35 +302,14 @@ export const retryBlocked = authedMutation({
  * step needs its own re-run, the way Analyze and Extract have theirs.
  * `createJob` returning false is what keeps a second click from stacking runs.
  */
-async function enqueueRelationships(
-  ctx: ActionCtx,
-  documentId: Id<"documents">
-): Promise<null> {
-  const shouldEnqueue: boolean = await ctx.runMutation(
-    internal.processing.createJob,
-    { documentId, stage: "relationships" }
-  );
-  if (!shouldEnqueue) return null;
-  const workId = await ctx.scheduler.runAfter(
-    0,
-    internal.relationshipsNode.extract,
-    { documentId }
-  );
-  await ctx.runMutation(internal.processing.attachWorkId, {
-    documentId,
-    stage: "relationships",
-    workId,
-  });
-  return null;
-}
-
-export const runRelationships = authedAction({
+export const runRelationships = authedMutation({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireDocumentFromAction(ctx, args.documentId);
-    await requireBudgetFromAction(ctx);
-    return await enqueueRelationships(ctx, args.documentId);
+    await requireDocument(ctx, args.documentId);
+    await requireBudget(ctx, ctx.user._id);
+    await enqueueStage(ctx, args.documentId, "relationships");
+    return null;
   },
 });
 
@@ -346,10 +320,13 @@ export const runRelationships = authedAction({
  * authenticated `runRelationships` throws Unauthenticated the moment it runs —
  * silently, from the user's point of view, because nothing is awaiting it.
  */
-export const runRelationshipsInternal = internalAction({
+export const runRelationshipsInternal = internalMutation({
   args: { documentId: v.id("documents") },
   returns: v.null(),
-  handler: async (ctx, args) => enqueueRelationships(ctx, args.documentId),
+  handler: async (ctx, args) => {
+    await enqueueStage(ctx, args.documentId, "relationships");
+    return null;
+  },
 });
 
 
@@ -369,70 +346,6 @@ export const updateStatus = internalMutation({
       errorMessage: undefined,
       errorCode: undefined,
     });
-    return null;
-  },
-});
-
-
-export const createJob = internalMutation({
-  args: {
-    documentId: v.id("documents"),
-    stage: v.string(),
-  },
-  returns: v.boolean(),
-  handler: async (ctx, args) => {
-    // Check if job already exists
-    const existing = await ctx.db
-      .query("processingJobs")
-      .withIndex("by_document", (q) =>
-        q.eq("documentId", args.documentId).eq("stage", args.stage)
-      )
-      .first();
-    if (existing) {
-      // The worker calls createJob again when it starts. Preserve the original
-      // queue timestamp so wait-time estimates do not reset to zero.
-      if (
-        existing.status === "running" ||
-        (existing.status === "pending" && existing.workId)
-      ) {
-        return false;
-      }
-      await ctx.db.patch(existing._id, {
-        status: "pending",
-        queuedAt: Date.now(),
-        workId: "enqueuing",
-        startedAt: undefined,
-        completedAt: undefined,
-        errorMessage: undefined,
-      });
-      return true;
-    }
-    await ctx.db.insert("processingJobs", {
-      documentId: args.documentId,
-      stage: args.stage,
-      status: "pending",
-      queuedAt: Date.now(),
-      workId: "enqueuing",
-    });
-    return true;
-  },
-});
-
-export const attachWorkId = internalMutation({
-  args: {
-    documentId: v.id("documents"),
-    stage: v.string(),
-    workId: v.string(),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const job = await ctx.db
-      .query("processingJobs")
-      .withIndex("by_document", (q) =>
-        q.eq("documentId", args.documentId).eq("stage", args.stage)
-      )
-      .unique();
-    if (job) await ctx.db.patch(job._id, { workId: args.workId });
     return null;
   },
 });
@@ -627,20 +540,19 @@ async function failDocument(
  * the document banner.
  */
 /** Drop a stage's job row, for stages a newer run supersedes. */
-export const clearStageJob = internalMutation({
-  args: { documentId: v.id("documents"), stage: v.string() },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const job = await ctx.db
-      .query("processingJobs")
-      .withIndex("by_document", (q) =>
-        q.eq("documentId", args.documentId).eq("stage", args.stage)
-      )
-      .first();
-    if (job && job.status !== "running") await ctx.db.delete(job._id);
-    return null;
-  },
-});
+async function clearStageJobRow(
+  ctx: MutationCtx,
+  documentId: Id<"documents">,
+  stage: string
+) {
+  const job = await ctx.db
+    .query("processingJobs")
+    .withIndex("by_document", (q) =>
+      q.eq("documentId", documentId).eq("stage", stage)
+    )
+    .first();
+  if (job && job.status !== "running") await ctx.db.delete(job._id);
+}
 
 
 export const markStageFailed = internalMutation({

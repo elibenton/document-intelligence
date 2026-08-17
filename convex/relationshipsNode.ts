@@ -9,7 +9,6 @@ import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { chatCompletion, failureCodeOf } from "./interfaze";
-import { deferWhilePaused, PAUSE_RECHECK_MS } from "./processing";
 import { usageLogger } from "./apiLogs";
 
 // ---------------------------------------------------------------------------
@@ -174,16 +173,10 @@ export const extract = internalAction({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     if (
-      await deferWhilePaused(
-        ctx,
-        { documentId: args.documentId, stage: "relationships" },
-        () =>
-          ctx.scheduler.runAfter(
-            PAUSE_RECHECK_MS,
-            internal.relationshipsNode.extract,
-            args
-          )
-      )
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "relationships",
+      })
     )
       return null;
     const apiKey = process.env.INTERFAZE_API_KEY;

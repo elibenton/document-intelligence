@@ -7,6 +7,7 @@ import { authedMutation, authedQuery } from "./authz";
 import { PROVIDER_URL_SAFE_BYTES } from "./interfazeLimits";
 import { requireProject } from "./ownership";
 import { requireBudget } from "./budget";
+import { enqueueStage } from "./processing";
 
 export const generateUploadUrl = authedMutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
@@ -181,24 +182,10 @@ export const createDocument = authedMutation({
     }
 
     const isRecording = mediaType === "audio" || mediaType === "video";
-    const stage = isRecording ? "transcribe" : "parse";
     // No automatic retries anywhere on this path: Interfaze may have
     // completed a request before a network failure is observed, so a retry
     // could duplicate a billable call.
-    const workId = await ctx.scheduler.runAfter(
-      0,
-      isRecording
-        ? internal.processingNode.runTranscribe
-        : internal.processingNode.runDocumentUnderstanding,
-      { documentId }
-    );
-    await ctx.db.insert("processingJobs", {
-      documentId,
-      stage,
-      status: "pending",
-      queuedAt: Date.now(),
-      workId,
-    });
+    await enqueueStage(ctx, documentId, isRecording ? "transcribe" : "parse");
 
     // Render page images independently for the viewer. Interfaze receives the
     // original whole PDF, so rendering is no longer on the analysis critical

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Link } from "react-router";
 import type { Route } from "./+types/HomePage";
 import {
@@ -66,7 +66,7 @@ function SelectionToolbar({
 }) {
   const addKinds = useMutation(api.documents.addKinds);
   const remove = useMutation(api.documents.remove);
-  const reanalyze = useAction(api.processing.runAnalyze);
+  const reanalyze = useMutation(api.processing.runAnalyze);
   const { trackAnalyze } = useUploads();
   const allKinds = useQuery(api.kinds.list, { projectId });
 

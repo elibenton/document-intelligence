@@ -11,6 +11,7 @@ import { RENDERER_VERSION } from "./rendererConfig";
 import { requireBudget } from "./budget";
 import { clientReportArgs, recordIssue } from "./issues";
 import { requireDocument, requireProject } from "./ownership";
+import { enqueueStage } from "./processing";
 import { seedCategories } from "./documentCategories";
 import { seedEntityTypes } from "./projectEntityTypes";
 import { templateByKey, DEFAULT_TEMPLATE_KEY } from "./projectTemplates";
@@ -382,18 +383,7 @@ export const createDocument = demoMutation({
     // document, so two tabs racing cannot both pass the check above.
     await ctx.db.patch(ctx.session._id, { documentId });
 
-    const workId = await ctx.scheduler.runAfter(
-      0,
-      internal.processingNode.runDocumentUnderstanding,
-      { documentId }
-    );
-    await ctx.db.insert("processingJobs", {
-      documentId,
-      stage: "parse",
-      status: "pending",
-      queuedAt: Date.now(),
-      workId,
-    });
+    await enqueueStage(ctx, documentId, "parse");
 
     // Page images are rendered for the same reason they are on a real upload:
     // nothing here depends on them (the landing page draws pages from the

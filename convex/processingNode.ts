@@ -10,7 +10,6 @@ import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { deferWhilePaused, PAUSE_RECHECK_MS } from "./processing";
 import {
   ocrDocument,
   analyzeDocumentText,
@@ -136,44 +135,26 @@ async function scheduleTranslation(
 
 
 /**
- * Hand Analyze to the pool instead of running it inline.
+ * Queue Analyze as its own stage instead of running it inline.
  *
  * Analyze is roughly eleven times Scan (`analyze` p50 22.6s against `ocr` p50
- * 2.0s), and awaiting it here held one of the pool's slots for that whole time
- * — *after* this stage's own job row had already been marked completed. Two
- * things followed from that:
- *
- *  - A bulk upload queued every other document's two-second Scan behind a full
- *    Scan+Analyze cycle. The `parse` stage measured p50 17.2s / p90 148.2s of
- *    slot occupancy to do 2s of the work that makes a document searchable.
- *  - Every ETA was optimistic. processingJobs.estimateByDocument measures a
- *    slot's occupancy from its job row and counts busy workers the same way,
- *    so an action outliving its own row understated both terms.
- *
- * Splitting the stages makes the job row's lifetime equal the slot's lifetime
- * again, which is what the estimate already assumed.
+ * 2.0s), and awaiting it here kept this action alive for that whole time —
+ * *after* this stage's own job row had already been marked completed. A bulk
+ * upload queued every other document's two-second Scan behind a full
+ * Scan+Analyze cycle. Splitting the stages makes the job row's lifetime equal
+ * the action's lifetime.
  */
 async function enqueueAnalyze(
   ctx: ActionCtx,
   documentId: Id<"documents">,
   bypassCache?: boolean
 ): Promise<void> {
-  const shouldEnqueue: boolean = await ctx.runMutation(
-    internal.processing.createJob,
-    { documentId, stage: "analyze" }
-  );
-  // Already queued or running — that run owns the stage, including the
-  // translation it schedules on the way out.
-  if (!shouldEnqueue) return;
-  const workId = await ctx.scheduler.runAfter(
-    0,
-    internal.processingNode.runAnalyze,
-    { documentId, ...(bypassCache === undefined ? {} : { bypassCache }) }
-  );
-  await ctx.runMutation(internal.processing.attachWorkId, {
+  // enqueueStage dedupes: an already queued or running Analyze owns the
+  // stage, including the translation it schedules on the way out.
+  await ctx.runMutation(internal.processing.enqueue, {
     documentId,
     stage: "analyze",
-    workId,
+    ...(bypassCache === undefined ? {} : { bypassCache }),
   });
 }
 
@@ -202,16 +183,10 @@ export const runDocumentUnderstanding = internalAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     if (
-      await deferWhilePaused(
-        ctx,
-        { documentId: args.documentId, stage: "parse" },
-        () =>
-          ctx.scheduler.runAfter(
-            PAUSE_RECHECK_MS,
-            internal.processingNode.runDocumentUnderstanding,
-            args
-          )
-      )
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "parse",
+      })
     )
       return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
@@ -457,16 +432,10 @@ export const runAnalyze = internalAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     if (
-      await deferWhilePaused(
-        ctx,
-        { documentId: args.documentId, stage: "analyze" },
-        () =>
-          ctx.scheduler.runAfter(
-            PAUSE_RECHECK_MS,
-            internal.processingNode.runAnalyze,
-            args
-          )
-      )
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "analyze",
+      })
     )
       return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
@@ -568,16 +537,10 @@ export const runTranscribe = internalAction({
   returns: v.null(),
   handler: async (ctx, args) => {
     if (
-      await deferWhilePaused(
-        ctx,
-        { documentId: args.documentId, stage: "transcribe" },
-        () =>
-          ctx.scheduler.runAfter(
-            PAUSE_RECHECK_MS,
-            internal.processingNode.runTranscribe,
-            args
-          )
-      )
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "transcribe",
+      })
     )
       return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
