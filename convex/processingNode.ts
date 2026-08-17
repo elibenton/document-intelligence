@@ -1,5 +1,3 @@
-"use node";
-
 /**
  * Document pipeline — Node-runtime half. Every stage that calls Interfaze
  * (parse/OCR, extract, transcribe, template extraction) lives here under

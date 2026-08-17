@@ -1,5 +1,3 @@
-"use node";
-
 /**
  * Interfaze client for Convex actions — a plain-`fetch` implementation of the
  * OpenAI-compatible Chat Completions call Interfaze serves
@@ -27,9 +25,8 @@
  *
  * This module keeps a small set of app-facing helpers (`chatCompletion`,
  * `ocrDocument`, `analyzeDocumentText`, `extract`, and `transcribe`) so the
- * cross-cutting concerns the app owns — usage/cost logging and mapping the
- * SDK's typed errors onto the UI's FailureCodes — live in one place. Everything
- * else is the SDK.
+ * cross-cutting concerns the app owns — usage/cost logging and mapping HTTP
+ * failures onto the UI's FailureCodes — live in one place.
  */
 
 import { fnv1a } from "./hash";

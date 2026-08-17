@@ -1,5 +1,3 @@
-"use node";
-
 /**
  * Deep search — Node-runtime half. The plan → retrieve → synthesize action
  * calls Interfaze, and the Interfaze SDK needs the Node runtime, so it lives

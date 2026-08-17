@@ -1,5 +1,3 @@
-"use node";
-
 /**
  * Relationship mapping — Node-runtime half. The Interfaze call lives here under
  * "use node" (the SDK needs the Node runtime); the mutation that resolves names

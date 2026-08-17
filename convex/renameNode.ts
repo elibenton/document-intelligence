@@ -1,5 +1,3 @@
-"use node";
-
 /**
  * Rename pass — the recordings-only path.
  *
