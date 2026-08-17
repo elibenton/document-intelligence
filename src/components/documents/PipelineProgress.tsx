@@ -9,8 +9,14 @@ import { cn } from "@/lib/utils";
 import { isCsvDocument } from "@/lib/uploadTypes";
 import { languageName } from "@/lib/languages";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { FLOATING_SURFACE } from "@/components/viewer/surfaces";
 import { AnalyzeRetryDialog } from "./StageRetryDialog";
+import {
+  formatApiDuration,
+  formatCost,
+  formatTokens,
+} from "@/lib/usageFormat";
 
 type StepStatus = "pending" | "running" | "completed" | "failed" | "waiting";
 
@@ -169,6 +175,12 @@ export function PipelineProgress({
   );
   const jobs = useQuery(api.processingJobs.byDocument, { documentId });
   const estimate = useQuery(api.processingJobs.estimateByDocument, { documentId });
+  // Only the collapsed "Processing complete" row shows the usage summary, so
+  // only that placement pays for the subscription.
+  const usage = useQuery(
+    api.apiLogs.byDocument,
+    collapseWhenDone ? { documentId } : "skip"
+  );
   const pages = useQuery(
     api.pages.byDocument,
     document.status === "parsing" || document.status === "uploaded"
@@ -367,6 +379,17 @@ export function PipelineProgress({
     document.errorCode !== "processing_canceled";
 
   if (collapseWhenDone && nothingToFlag) {
+    // The one line the user sees on every finished document, so this is where
+    // "what did this cost" lives: total API time, tokens, and dollars, with
+    // the per-operation breakdown one click away in the Info tab.
+    const total = (usage ?? []).reduce(
+      (sum, r) => ({
+        durationMs: sum.durationMs + r.durationMs,
+        tokens: sum.tokens + r.promptTokens + r.completionTokens,
+        costUsd: sum.costUsd + r.costUsd,
+      }),
+      { durationMs: 0, tokens: 0, costUsd: 0 }
+    );
     return (
       <div
         className={cn(
@@ -378,6 +401,14 @@ export function PipelineProgress({
           <Check className="size-3" strokeWidth={3} />
         </span>
         <span className="text-sm text-foreground">Processing complete</span>
+        {usage && usage.length > 0 && (
+          <Tooltip content="Total API time, tokens, and estimated cost for this document — see the Info tab for the per-operation breakdown.">
+            <span className="ml-auto text-2xs tabular-nums text-muted-foreground">
+              {formatApiDuration(total.durationMs)} ·{" "}
+              {formatTokens(total.tokens)} tok · {formatCost(total.costUsd)}
+            </span>
+          </Tooltip>
+        )}
       </div>
     );
   }

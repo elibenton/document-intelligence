@@ -15,6 +15,7 @@ import type { ApiUsage, UsageLogger } from "./interfazeCost";
 import { authedQuery } from "./authz";
 import { chargeUsage } from "./budget";
 import { recordIssue } from "./issues";
+import { requireDocument } from "./ownership";
 
 /** Shard count for the denormalized usage totals (see schema.apiUsageTotals). */
 export const TOTALS_SHARDS = 8;
@@ -176,6 +177,68 @@ export const list = authedQuery({
       ...log,
       documentName: log.documentId ? names.get(log.documentId) : undefined,
     }));
+  },
+});
+
+/**
+ * What one document cost, per pipeline operation.
+ *
+ * Aggregated here rather than shipping the raw rows: the document page only
+ * renders one line per operation, and the rows carry the provider's raw error
+ * text, which the viewer has no use for. Ordered by each operation's first
+ * call, which is pipeline order without hardcoding the pipeline.
+ *
+ * `durationMs` is summed across calls, so chunked stages that run in parallel
+ * report more API time than wall-clock time — the UI says so where it shows it.
+ * Rows expire after 30 days (pruneOldLogs), so an old document legitimately
+ * answers with less than it spent, or nothing.
+ */
+export const byDocument = authedQuery({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
+    const logs = await ctx.db
+      .query("apiLogs")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    const byOperation = new Map<
+      string,
+      {
+        operation: string;
+        calls: number;
+        errors: number;
+        promptTokens: number;
+        completionTokens: number;
+        costUsd: number;
+        durationMs: number;
+        cacheHits: number;
+        firstCallAt: number;
+      }
+    >();
+    for (const log of logs) {
+      const row = byOperation.get(log.operation) ?? {
+        operation: log.operation,
+        calls: 0,
+        errors: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        costUsd: 0,
+        durationMs: 0,
+        cacheHits: 0,
+        firstCallAt: log._creationTime,
+      };
+      row.calls += 1;
+      if (log.status === "error") row.errors += 1;
+      row.promptTokens += log.promptTokens;
+      row.completionTokens += log.completionTokens;
+      row.costUsd += log.costUsd;
+      row.durationMs += log.durationMs;
+      if (log.cacheHit) row.cacheHits += 1;
+      byOperation.set(log.operation, row);
+    }
+    return [...byOperation.values()].sort(
+      (a, b) => a.firstCallAt - b.firstCallAt
+    );
   },
 });
 

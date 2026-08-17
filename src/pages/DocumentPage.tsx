@@ -24,6 +24,7 @@ import { PageOverlays } from "@/components/viewer/PageOverlays";
 import { findPersonMentions } from "@/components/viewer/personMentions";
 import type { EntityHover } from "@/components/viewer/EntityHighlights";
 import { PipelineProgress } from "@/components/documents/PipelineProgress";
+import { DocumentUsage } from "@/components/documents/DocumentUsage";
 import { DocumentActions } from "@/components/documents/DocumentActions";
 import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
 import {
@@ -1006,6 +1007,9 @@ export default function DocumentPage({ id }: { id: string }) {
                       )}
                     </div>
                   )}
+
+                  <DocumentUsage documentId={documentId} />
+
 
                   {/* Page-level view controls: not document properties, so
                       they sit at the bottom rather than beside Name/Media. */}

@@ -11,38 +11,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
 import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { useConfirm } from "@/components/ui/use-confirm";
-
-const operationLabels: Record<string, string> = {
-  parse: "Parse",
-  translate: "Translate",
-  extract: "Extract",
-  transcribe: "Transcribe",
-  visual: "Visual scan",
-  metadata: "Metadata",
-  relationships: "Relationships",
-  research: "Research",
-  search_plan: "Search · plan",
-  search_answer: "Search · answer",
-  embeddings: "Embeddings",
-};
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}k`;
-  return n.toLocaleString();
-}
-
-function formatCost(usd: number): string {
-  if (usd === 0) return "$0.00";
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  return `$${usd.toFixed(2)}`;
-}
-
-function formatDuration(ms: number): string {
-  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
-  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
-  return `${ms}ms`;
-}
+import {
+  formatApiDuration,
+  formatCost,
+  formatTokens,
+  operationLabel,
+} from "@/lib/usageFormat";
 
 function formatTime(ts: number): string {
   const date = new Date(ts);
@@ -265,7 +239,7 @@ export default function SettingsPage() {
                         {formatTime(log._creationTime)}
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">
-                        {operationLabels[log.operation] ?? log.operation}
+                        {operationLabel(log.operation)}
                         <span className="text-xs text-muted-foreground ml-1.5">
                           {log.model}
                         </span>
@@ -290,7 +264,7 @@ export default function SettingsPage() {
                         {formatTokens(log.completionTokens)}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-                        {formatDuration(log.durationMs)}
+                        {formatApiDuration(log.durationMs)}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">
                         {formatCost(log.costUsd)}
