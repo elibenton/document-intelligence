@@ -7,7 +7,15 @@
  * with real regression history — can be read and unit-tested on their own.
  */
 
-import type { Precontext } from "interfaze";
+/**
+ * One entry of the `precontext` array an Interfaze completion returns when an
+ * internal specialist ran (OCR, STT, web search, …). Mirrors the wire shape;
+ * owned here since the app no longer depends on the `interfaze` SDK.
+ */
+export interface Precontext {
+  name: string;
+  result: unknown;
+}
 
 export interface Bbox {
   x: number;
