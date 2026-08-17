@@ -3,7 +3,6 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { components } from "./_generated/api";
 import { v } from "convex/values";
 import { processingPool, PROCESSING_MAX_PARALLELISM } from "./processingPool";
-import { enrichmentPool, ENRICHMENT_MAX_PARALLELISM } from "./enrichmentPool";
 import { adminMutation, authedQuery } from "./authz";
 
 const CONTROL_KEY = "global";
@@ -38,14 +37,8 @@ async function writeControl(
   if (existing) await ctx.db.replace(existing._id, value);
   else await ctx.db.insert("processingControl", value);
 
-  // Both pools, or "pause" would silently mean "pause the half a human is
-  // watching" and leave enrichment spending against a provider the pause may
-  // well have been called to stop spending on.
   await ctx.runMutation(components.processingWorkpool.config.update, {
     maxParallelism: paused ? 0 : PROCESSING_MAX_PARALLELISM,
-  });
-  await ctx.runMutation(components.enrichmentWorkpool.config.update, {
-    maxParallelism: paused ? 0 : ENRICHMENT_MAX_PARALLELISM,
   });
 }
 
@@ -144,7 +137,6 @@ export const cancelWaiting = adminMutation({
     // to walk processingJobs in 64-row self-rescheduling batches to do the same
     // thing on a delay.
     await processingPool.cancelAll(ctx);
-    await enrichmentPool.cancelAll(ctx);
     return null;
   },
 });

@@ -4,7 +4,6 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { processingEnqueueOptions, processingPool } from "./processingPool";
-import { enrichmentEnqueueOptions, enrichmentPool } from "./enrichmentPool";
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { authedAction, authedMutation } from "./authz";
 import { keepOwned, requireDocumentFromAction } from "./ownership";
@@ -284,9 +283,8 @@ export const retryBlocked = authedMutation({
  *
  * Scheduled after Extract rather than awaited inside it: relationship mapping
  * is an enrichment pass, and a document whose extraction succeeded must not be
- * failed by it. That same "nobody is waiting on this" property is why it runs
- * on the enrichment pool rather than the processing one — see
- * convex/enrichmentPool.ts.
+ * failed by it. It shares the processing pool — on S16 a second pool's main
+ * loop costs scheduler slots the deployment does not have to spare.
  *
  * Public because that same isolation leaves it without a retry path. A stage
  * that fails without failing its document is invisible to `retryBlocked`,
@@ -304,11 +302,11 @@ async function enqueueRelationships(
   );
   if (!shouldEnqueue) return null;
   const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-  const workId = await enrichmentPool.enqueueAction(
+  const workId = await processingPool.enqueueAction(
     ctx,
     internal.relationshipsNode.extract,
     { documentId },
-    enrichmentEnqueueOptions(paused, { documentId, stage: "relationships" })
+    processingEnqueueOptions(paused, { documentId, stage: "relationships" })
   );
   await ctx.runMutation(internal.processing.attachWorkId, {
     documentId,

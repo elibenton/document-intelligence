@@ -1,9 +1,5 @@
 import { v } from "convex/values";
 import { PROCESSING_MAX_PARALLELISM } from "./processingPool";
-import {
-  ENRICHMENT_MAX_PARALLELISM,
-  ENRICHMENT_STAGES,
-} from "./enrichmentPool";
 import { authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
 
@@ -119,16 +115,12 @@ export const estimateByDocument = authedQuery({
       };
     }
 
-    // Both terms are per-pool. Enrichment has its own workpool and its own
-    // ceiling (convex/enrichmentPool.ts), so a relationships job neither waits
-    // behind nor occupies a processing slot, and counting them together would
-    // put a Scan in a queue it is not actually in.
-    const enriching = ENRICHMENT_STAGES.has(active.stage);
-    const parallelism = enriching
-      ? ENRICHMENT_MAX_PARALLELISM
-      : PROCESSING_MAX_PARALLELISM;
+    // One pool runs every Interfaze stage, so every job holding a workId is
+    // in the same queue. Jobs without one (translate runs off the scheduler)
+    // hold no pool slot and must not be counted.
+    const parallelism = PROCESSING_MAX_PARALLELISM;
     const samePool = (job: { stage: string; workId?: string }) =>
-      job.workId !== undefined && ENRICHMENT_STAGES.has(job.stage) === enriching;
+      job.workId !== undefined;
 
     const [pending, running] = await Promise.all([
       ctx.db
