@@ -1,4 +1,5 @@
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig } from "vitest/config";
+import type { Plugin } from "vite";
 import { reactRouter } from "@react-router/dev/vite";
 import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
@@ -108,5 +109,12 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+  },
+  test: {
+    // better-auth → @opentelemetry ships an ESM build with bare directory
+    // imports that Node's resolver rejects; inlining the chain routes it
+    // through Vite's resolver, which accepts them. Any convex/ test that
+    // transitively imports authz.ts hits this.
+    server: { deps: { inline: [/@opentelemetry/, /better-auth/] } },
   },
 });
