@@ -48,6 +48,47 @@ export const listPending = authedQuery({
 });
 
 /**
+ * Pending suggestions touching one entity, for its page — the first reader
+ * the by_target index ever had. Same hydrated shape as listPending so the
+ * one review component serves both surfaces.
+ */
+export const forEntity = authedQuery({
+  args: { entityId: v.id("entities") },
+  handler: async (ctx, args) => {
+    await requireEntity(ctx, args.entityId);
+    const touching = [
+      ...(await ctx.db
+        .query("mergeSuggestions")
+        .withIndex("by_source_and_target", (q) =>
+          q.eq("sourceEntityId", args.entityId)
+        )
+        .collect()),
+      ...(await ctx.db
+        .query("mergeSuggestions")
+        .withIndex("by_target", (q) => q.eq("targetEntityId", args.entityId))
+        .collect()),
+    ];
+    const results = [];
+    for (const s of touching) {
+      if (s.status !== "pending") continue;
+      const source = await ctx.db.get(s.sourceEntityId);
+      const target = await ctx.db.get(s.targetEntityId);
+      if (!source || !target) continue;
+      const doc = s.documentId ? await ctx.db.get(s.documentId) : null;
+      results.push({
+        _id: s._id,
+        reason: s.reason,
+        confidence: s.confidence ?? null,
+        source: { _id: source._id, name: source.name, mentionCount: source.mentionCount },
+        target: { _id: target._id, name: target.name, mentionCount: target.mentionCount },
+        documentName: doc?.name ?? null,
+      });
+    }
+    return results;
+  },
+});
+
+/**
  * Accept: fold one of the pair into the other. `keepEntityId` — set by the
  * confirm dialog's survivor picker — decides which name survives; without
  * it, pickSurvivor prefers the entity with more evidence, then the fuller

@@ -282,13 +282,25 @@ export const documentsForEntity = authedQuery({
       )
     );
 
+    // Sorted by local mention count: the documents where this entity matters
+    // most lead. The row carries what the entity page renders — title, date,
+    // and the type-pill fields the row always had but never returned.
     return docs
       .filter((d) => d !== null)
       .map((d) => ({
         _id: d._id,
         name: d.name,
+        displayName: d.displayName,
+        documentDate: d.documentDate,
+        documentDatePrecision: d.documentDatePrecision,
+        metadata: d.metadata,
+        primaryCategory: d.primaryCategory,
+        primaryKind: d.primaryKind,
+        mediaType: d.mediaType,
+        projectId: d.projectId,
         mentionCount: docMentions.get(d._id) ?? 0,
-      }));
+      }))
+      .sort((a, b) => b.mentionCount - a.mentionCount);
   },
 });
 
