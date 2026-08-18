@@ -985,7 +985,6 @@ export const execute = internalAction({
               },
             ],
             responseSchema: { name: "grounded_answer", schema: ANSWER_SCHEMA },
-            reasoning: true,
             maxTokens: 2000,
           });
           answer = (JSON.parse(content) as { answer?: string }).answer ?? "";

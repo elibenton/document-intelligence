@@ -365,9 +365,6 @@ export async function chatCompletion(
     systemPrompt?: string;
     responseSchema?: { name: string; schema: Record<string, unknown> };
     maxTokens?: number;
-    /** Enable reasoning for inference-heavy calls (relationship mapping,
-     * grounded search answers) — off for straight extraction. */
-    reasoning?: boolean;
     /** When set, token usage + cost for this call is reported to the log. */
     usage?: {
       log: UsageLogger;
@@ -475,11 +472,11 @@ export async function chatCompletion(
   messages.push({ role: "user", content: options.content });
 
   // Key order matters: the serialized body is a vcache input, so this follows
-  // the SDK's order exactly — max_tokens?, reasoning_effort?, model, messages,
-  // response_format?.
+  // the SDK's order exactly — max_tokens?, model, messages, response_format?.
+  // Reasoning was removed everywhere (2026-08-18): it multiplied cost on every
+  // call that carried it and never measurably earned it.
   const body: Record<string, unknown> = {
     ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
-    ...(options.reasoning ? { reasoning_effort: "high" } : {}),
     model: INTERFAZE_MODEL,
     messages,
   };
@@ -804,9 +801,6 @@ export async function understandDocument(
       fileUrlContent(fileUrl, filename, options.sizeBytes),
     ],
     responseSchema: options.responseSchema,
-    // The graph is inference-heavy and rides on this call — same setting the
-    // standalone relationships call used.
-    reasoning: true,
     bypassCache: options.bypassCache,
     usage: options.log ? { log: options.log, operation: "understand" } : undefined,
   });

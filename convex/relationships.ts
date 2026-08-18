@@ -592,9 +592,6 @@ export const extract = internalAction({
           log: usageLogger(ctx, { documentId: args.documentId }),
           operation: "relationships",
         },
-        // Inference-heavy — worth Interfaze's reasoning mode (off by default
-        // for straight extraction).
-        reasoning: true,
         systemPrompt:
           "You are an analyst reading a document to find who is in it and how they are connected. " +
           "Work only from the text. Never invent an entity, a connection, a date, or a place. " +

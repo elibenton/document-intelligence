@@ -762,7 +762,13 @@ export const runPipeline = internalAction({
           result.precontext,
           "speech_to_text"
         ) ?? precontextResult<SttTaskResult>(result.precontext, "stt");
-        const segments = stt ? chunksToSegments(stt.chunks ?? []) : [];
+        // Measured 2026-08-18: the merged call's STT precontext arrives without
+        // per-chunk speaker labels, so an hour of interview collapsed into one
+        // "Speaker 1" segment. Diarization is the transcript UI's structure —
+        // trust precontext only when it actually carries speakers, else pay for
+        // the task call, which does.
+        const diarized = stt?.chunks?.some((c) => c.speaker) ?? false;
+        const segments = stt && diarized ? chunksToSegments(stt.chunks ?? []) : [];
         transcriptSegments =
           segments.length > 0
             ? segments
