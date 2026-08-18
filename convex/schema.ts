@@ -953,6 +953,12 @@ export default defineSchema({
     errorCode: v.optional(v.string()), // classified, so errors group without parsing
     buildSha: v.optional(v.string()), // which deploy produced this row
 
+    // Zero-ground-truth quality check on the call's output (convex/ocrChecks.ts):
+    // violations/checked is a per-call accuracy rate that needs no paid corpus.
+    qualityChecked: v.optional(v.number()),
+    qualityViolations: v.optional(v.number()),
+    qualityByKind: v.optional(v.record(v.string(), v.number())),
+
     // The account that caused this call, resolved at write time by walking the
     // document to its project (convex/apiLogs.ts `record`). A v.string() and
     // never a v.id("users") — the user record lives in the Better Auth

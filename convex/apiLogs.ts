@@ -65,6 +65,9 @@ export const record = internalMutation({
     outputHash: v.optional(v.string()),
     errorCode: v.optional(v.string()),
     buildSha: v.optional(v.string()),
+    qualityChecked: v.optional(v.number()),
+    qualityViolations: v.optional(v.number()),
+    qualityByKind: v.optional(v.record(v.string(), v.number())),
   },
   handler: async (ctx, args) => {
     // Resolved here rather than at the twelve logging call sites: this mutation

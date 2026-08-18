@@ -40,6 +40,16 @@ export interface ApiUsage {
   errorCode?: string;
   /** Which deploy produced this row. Without it a metric stream is unattributable. */
   buildSha?: string;
+
+  // --- Quality fields: zero-ground-truth arithmetic checks on the output ---
+  // (see convex/ocrChecks.ts). `violations / checked` is a per-call accuracy
+  // rate that needs no reference corpus — wrong by arithmetic or not wrong.
+  /** How many output units (blocks) the arithmetic check examined. */
+  qualityChecked?: number;
+  /** How many failed. */
+  qualityViolations?: number;
+  /** Violation counts by kind, so regressions group without parsing logs. */
+  qualityByKind?: Record<string, number>;
 }
 
 export type UsageLogger = (usage: ApiUsage) => Promise<void>;

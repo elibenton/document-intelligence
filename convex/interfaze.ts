@@ -35,6 +35,7 @@ import { PROVIDER_FILE_OBJECT_SAFE_BYTES } from "./interfazeLimits";
 import { interfazeCostUsd } from "./interfazeCost";
 import type { UsageLogger } from "./interfazeCost";
 import { ocrPrecontextToPages } from "./interfazeOcr";
+import { checkGeometry } from "./ocrChecks";
 import type { OcrPageResult, Precontext } from "./interfazeOcr";
 import { chunksToSegments } from "./interfazeStt";
 import type { SttTaskResult, TranscriptResult } from "./interfazeStt";
@@ -362,7 +363,20 @@ export async function chatCompletion(
      * grounded search answers) — off for straight extraction. */
     reasoning?: boolean;
     /** When set, token usage + cost for this call is reported to the log. */
-    usage?: { log: UsageLogger; operation: string };
+    usage?: {
+      log: UsageLogger;
+      operation: string;
+      /**
+       * Zero-ground-truth quality check, run at report time on a successful
+       * response so its numbers land on the same apiLogs row as the call's
+       * cost. Must be pure and cheap; a throw here is swallowed — quality
+       * measurement must never break the call it describes.
+       */
+      quality?: (result: {
+        content: string;
+        precontext: Precontext[];
+      }) => { checked: number; violations: number; byKind: Record<string, number> } | undefined;
+    };
     /** Force a fresh provider run for an operator-requested retry. */
     bypassCache?: boolean;
     /**
@@ -397,11 +411,15 @@ export async function chatCompletion(
     finishReason?: string;
     outputHash?: string;
     errorCode?: string;
+    quality?: { checked: number; violations: number; byKind: Record<string, number> };
   }) => {
     if (!options.usage) return;
     const promptTokens = report.promptTokens ?? 0;
     const completionTokens = report.completionTokens ?? 0;
     await options.usage.log({
+      qualityChecked: report.quality?.checked,
+      qualityViolations: report.quality?.violations,
+      qualityByKind: report.quality?.byKind,
       provider: "interfaze",
       operation: options.usage.operation,
       model: INTERFAZE_MODEL,
@@ -476,8 +494,20 @@ export async function chatCompletion(
     const res = await postChatCompletion(apiKey, body, options.bypassCache);
 
     const content = res.choices?.[0]?.message?.content ?? "";
+    let quality;
+    if (options.usage?.quality) {
+      try {
+        quality = options.usage.quality({
+          content,
+          precontext: res.precontext ?? [],
+        });
+      } catch (e) {
+        console.error("Quality check threw; logging the call without it:", e);
+      }
+    }
     await reportUsage({
       status: "ok",
+      quality,
       promptTokens: res.usage?.prompt_tokens,
       completionTokens: res.usage?.completion_tokens,
       cacheHit: res.vcache ?? false,
@@ -602,6 +632,28 @@ export async function translateUnits(
  * precontext that is unreliable there — so analysis stays a completion and only
  * page text moves here. It is also ~100x cheaper and ~3x faster.
  */
+/**
+ * A task returns its payload on message.content as `{ result }` rather than
+ * as precontext, so normalize it into the precontext shape everything
+ * downstream already understands. Unparseable content yields an empty array;
+ * the caller reports that failure in its own terms.
+ */
+function ocrContentToPrecontext(content: string): Precontext[] {
+  try {
+    const parsed = JSON.parse(content) as { result?: unknown };
+    const payload =
+      parsed && typeof parsed === "object" && "result" in parsed
+        ? parsed.result
+        : parsed;
+    if (payload && typeof payload === "object") {
+      return [{ name: "ocr", result: payload }];
+    }
+  } catch {
+    // fall through
+  }
+  return [];
+}
+
 export async function ocrDocument(
   fileUrl: string,
   filename: string,
@@ -615,7 +667,22 @@ export async function ocrDocument(
       fileUrlContent(fileUrl, filename, options?.sizeBytes),
     ],
     bypassCache: options?.bypassCache,
-    usage: options?.log ? { log: options.log, operation: "ocr" } : undefined,
+    usage: options?.log
+      ? {
+          log: options.log,
+          operation: "ocr",
+          // Geometry is wrong by arithmetic or it is not wrong at all, so the
+          // check runs on every scan and its numbers land on this call's own
+          // apiLogs row. Re-parses the content the main path parses again
+          // below — pure string work, microseconds against a multi-second
+          // API call, and it keeps the quality hook side-effect-free.
+          quality: ({ content }) => {
+            const pages = ocrPrecontextToPages(ocrContentToPrecontext(content));
+            const { checked, violations, byKind } = checkGeometry(pages);
+            return { checked, violations, byKind };
+          },
+        }
+      : undefined,
   });
 
   // Interfaze can bill a full OCR and return an empty string for it.
@@ -634,22 +701,7 @@ export async function ocrDocument(
     );
   }
 
-  // A task returns its payload on message.content as `{ result }` rather than
-  // as precontext, so normalize it into the precontext shape everything
-  // downstream already understands.
-  let precontext: Precontext[] = [];
-  try {
-    const parsed = JSON.parse(result.content) as { result?: unknown };
-    const payload =
-      parsed && typeof parsed === "object" && "result" in parsed
-        ? parsed.result
-        : parsed;
-    if (payload && typeof payload === "object") {
-      precontext = [{ name: "ocr", result: payload }];
-    }
-  } catch {
-    // Leave precontext empty; the caller reports the failure in its own terms.
-  }
+  const precontext = ocrContentToPrecontext(result.content);
 
   return {
     pages: ocrPrecontextToPages(precontext),
