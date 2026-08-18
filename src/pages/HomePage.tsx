@@ -27,7 +27,7 @@ import {
 import SearchBar from "@/components/search/SearchBar";
 import { useSearchHotkey } from "@/components/search/useSearchHotkey";
 import { ListGroup } from "@/components/views/ListGroup";
-import { PropertyChips } from "@/components/views/PropertyChips";
+import { PropertyChips, type ChipCommit } from "@/components/views/PropertyChips";
 import { ViewBar } from "@/components/views/ViewBar";
 import { applyView, type ViewGroup } from "@/lib/views/applyView";
 import {
@@ -389,6 +389,33 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
   const mergeSuggestions = useQuery(api.mergeSuggestions.listPending, {
     projectId,
   });
+  // Inline chip editing: one mutation routes every editable document chip,
+  // and the project's live taxonomy feeds the category editor's options.
+  const setDocumentField = useMutation(api.documents.setField);
+  const categories = useQuery(api.documentCategories.list, { projectId });
+  const libraryChipOptions = useMemo(
+    () => ({
+      primaryCategory: (categories ?? []).map((c) => ({
+        value: c.key,
+        label: c.label,
+      })),
+    }),
+    [categories]
+  );
+  const onLibraryChipEdit = useCallback(
+    (doc: LibraryDoc, commit: ChipCommit) =>
+      setDocumentField({
+        id: doc._id,
+        field: commit.field as
+          | "primaryCategory"
+          | "documentDate"
+          | "documentPlace"
+          | "sourceLanguageCode",
+        value: commit.value || undefined,
+        precision: commit.precision ?? undefined,
+      }),
+    [setDocumentField]
+  );
 
   const views = useProjectViews(projectId);
 
@@ -535,6 +562,8 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
           visibleProperties={views.library.visibleProperties}
           onCheckedChange={(checked, at) => toggleSelection(checked, at, doc._id)}
           onShiftClick={extendSelection}
+          onChipEdit={onLibraryChipEdit}
+          chipOptions={libraryChipOptions}
         />
       );
     });

@@ -63,6 +63,25 @@ export interface PropertyDef<T> {
    * breadcrumb while staying independently visible, filterable, and groupable.
    */
   joinWith?: string;
+  /**
+   * Makes the chip editable in place wherever the page supplies a commit
+   * handler (PropertyChips' `onEdit`). The registry stays React-free — this
+   * only declares which control fits and what raw value it edits; the
+   * mutation lives with the page.
+   */
+  editor?: PropertyEditor<T>;
+}
+
+export interface PropertyEditor<T> {
+  control: "text" | "select" | "date";
+  /** The field name handed to the page's commit handler. */
+  field: string;
+  /** Raw editable value (not the formatted display). Defaults to `value`. */
+  read?: (row: T) => string | null;
+  /** Fixed option list (languages); dynamic ones arrive via `liveOptions`. */
+  staticOptions?: PropertyOption[];
+  allowCustom?: boolean;
+  searchable?: boolean;
 }
 
 export type FilterOperator =

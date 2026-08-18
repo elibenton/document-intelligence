@@ -8,7 +8,7 @@ import {
   hasDocumentDate,
 } from "@/lib/documentDate";
 import { documentTitles } from "@/lib/documentTitle";
-import { languageName } from "@/lib/languages";
+import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 import type { PropertyDef, PropertyOption } from "./types";
 
@@ -169,6 +169,9 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
         primaryKind={doc.primaryKind}
       />
     ),
+    // Options arrive via liveOptions["primaryCategory"] — the project's live
+    // taxonomy, which options() above can't reach (it runs outside React).
+    editor: { control: "select", field: "primaryCategory" },
   },
   {
     id: "kind",
@@ -229,6 +232,13 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
         {formatDocumentDate(doc)}
       </span>
     ),
+    editor: {
+      control: "date",
+      field: "documentDate",
+      // The structured field when present; otherwise the parsed legacy date,
+      // so editing a pre-structured row upgrades it to the real column.
+      read: (doc) => doc.documentDate ?? documentDateSortKey(doc),
+    },
   },
   {
     id: "documentPlace",
@@ -242,6 +252,7 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     value: (doc) => doc.documentPlace ?? null,
     format: (doc) => doc.documentPlace ?? null,
     options: (rows) => observedOptions(rows, (doc) => doc.documentPlace),
+    editor: { control: "text", field: "documentPlace" },
   },
   {
     id: "uploadedAt",
@@ -292,6 +303,15 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
       doc.sourceLanguageCode ? languageName(doc.sourceLanguageCode) : null,
     options: (rows) =>
       observedOptions(rows, (doc) => doc.sourceLanguageCode, languageName),
+    editor: {
+      control: "select",
+      field: "sourceLanguageCode",
+      searchable: true,
+      staticOptions: INTERFAZE_LANGUAGES.map((l) => ({
+        value: l.code,
+        label: `${l.name} (${l.code})`,
+      })),
+    },
   },
   {
     id: "author",

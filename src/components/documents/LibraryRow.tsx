@@ -5,7 +5,8 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { DocTypeIcon } from "./DocTypeIcon";
 import { DocumentIdentityMenu } from "./DocumentIdentityMenu";
 import { libraryStatus } from "./docStatus";
-import { PropertyChips } from "@/components/views/PropertyChips";
+import { PropertyChips, type ChipCommit } from "@/components/views/PropertyChips";
+import type { PropertyOption } from "@/lib/views/types";
 import {
   DOCUMENT_PROPERTIES,
   type LibraryDoc,
@@ -39,6 +40,8 @@ export function LibraryRow({
   visibleProperties,
   onCheckedChange,
   onShiftClick,
+  onChipEdit,
+  chipOptions,
 }: {
   doc: LibraryDoc;
   index: number;
@@ -47,6 +50,8 @@ export function LibraryRow({
   visibleProperties: string[];
   onCheckedChange: (checked: boolean, index: number) => void;
   onShiftClick: (index: number) => boolean;
+  onChipEdit?: (doc: LibraryDoc, commit: ChipCommit) => Promise<unknown>;
+  chipOptions?: Record<string, PropertyOption[]>;
 }) {
   const { primary } = documentTitles(doc);
   const failed = libraryStatus(doc) === "Failed";
@@ -153,6 +158,8 @@ export function LibraryRow({
           row={doc}
           defs={DOCUMENT_PROPERTIES}
           visible={visibleProperties}
+          onEdit={onChipEdit}
+          liveOptions={chipOptions}
         />
       </span>
     </div>
