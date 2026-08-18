@@ -52,9 +52,11 @@ const INTERFAZE_MODEL = "interfaze-beta";
 
 // Convex kills actions at 10 minutes without running catch blocks, which would
 // strand documents in "parsing"/"extracting". Time the request out first so
-// the action's own error handling can mark the job failed. (Interfaze itself
-// caps a request at 5 minutes; this is the outer Convex-facing guard.)
-const INTERFAZE_TIMEOUT_MS = 9 * 60 * 1000;
+// the action's own error handling can mark the job failed. Interfaze documents
+// a 5-minute maximum per request (https://interfaze.ai/docs/limits), so
+// anything still open past that is dead air — 5:30 gives the provider its
+// full budget plus network slack while leaving the action minutes to clean up.
+const INTERFAZE_TIMEOUT_MS = 5.5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Wire types — the subset of the Chat Completions shape this app sends and
@@ -235,6 +237,10 @@ async function postChatCompletion(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
+    // Zero data retention: users' documents stay out of provider training.
+    // Verified 2026-08-18 to change neither usage reporting nor cache hits —
+    // an exact repeat under this header still returned vcache: true.
+    "x-interfaze-zdr": "true",
   };
   if (bypassCache) headers["x-interfaze-bypass-cache"] = "true";
   const payload = JSON.stringify(body);
