@@ -18,10 +18,6 @@ export const saveMetadataResult = internalMutation({
   args: {
     documentId: v.id("documents"),
     raw: v.string(),
-    // The merged pipeline call carries the graph on the same response and
-    // ingests it itself; scheduling the standalone pass too would extract
-    // every document twice.
-    skipRelationships: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     let parsed: {
@@ -151,21 +147,9 @@ export const saveMetadataResult = internalMutation({
       await applyDisplayName(ctx, args.documentId, displayTitle);
     }
 
-    // ...and understood well enough to read for people and organizations.
-    //
-    // This used to start the suggested-extraction pass, which asked for
-    // whatever Analyze thought was worth pulling out and typed each entity by
-    // the JSON key that produced it — which is how entities called "dates" and
-    // "parties" got into the table. One pass now finds the entities and their
-    // relationships together; nothing else is extracted.
-    //
-    // Scheduled from here rather than from the pipeline so a standalone
-    // Analyze retry gets the same treatment.
-    if (!args.skipRelationships) {
-      await ctx.scheduler.runAfter(0, internal.processing.runRelationshipsInternal, {
-        documentId: args.documentId,
-      });
-    }
+    // The entity graph is not scheduled from here: it rides along on the same
+    // understanding response this mutation is persisting, and the caller
+    // ingests it (processingStages.runPipeline / analyzeAndStore).
   },
 });
 

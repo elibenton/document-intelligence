@@ -26,14 +26,14 @@ type StageExtras = { bypassCache?: boolean; promptOverride?: string };
 
 function stageAction(stage: string) {
   switch (stage) {
+    // The whole pipeline for any medium: one understanding call, geometry or
+    // transcript from precontext (or its task-call shim), graph included.
     case "parse":
-      return internal.processingStages.runDocumentUnderstanding;
-    case "transcribe":
-      return internal.processingStages.runTranscribe;
+      return internal.processingStages.runPipeline;
+    // Text-in re-run over the stored scan — the retry dialog's editable-prompt
+    // path, and the only understanding call a client-parsed clip ever makes.
     case "analyze":
       return internal.processingStages.runAnalyze;
-    case "relationships":
-      return internal.relationships.extract;
     default:
       throw new Error(`Unknown pipeline stage: ${stage}`);
   }
@@ -139,29 +139,8 @@ export const bailIfPaused = internalMutation({
 });
 
 
-/** Public retry hook for the transcript UI */
-export const runTranscription = authedMutation({
-  args: { documentId: v.id("documents") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await requireDocument(ctx, args.documentId);
-    await requireBudget(ctx, ctx.user._id);
-    if (!(await enqueueStage(ctx, args.documentId, "transcribe"))) return null;
-    await ctx.db.patch(args.documentId, {
-      status: "uploaded",
-      errorMessage: undefined,
-      errorCode: undefined,
-    });
-    return null;
-  },
-});
-
-
 // ---------------------------------------------------------------------------
-// Upload pipeline: visual documents go through one normal Interfaze completion
-// where OCR and object detection happen before metadata analysis is returned.
-// Audio/video documents transcribe instead. Entity extraction waits for the
-// user to confirm the suggested template.
+// Upload pipeline: every medium goes through the one understanding call.
 // ---------------------------------------------------------------------------
 
 export const runFullPipeline = authedMutation({
@@ -171,22 +150,12 @@ export const runFullPipeline = authedMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const document = await requireDocument(ctx, args.documentId);
+    await requireDocument(ctx, args.documentId);
     await requireBudget(ctx, ctx.user._id);
 
-    const isRecording =
-      document.mediaType === "audio" ||
-      document.mediaType === "video" ||
-      document.mimeType.startsWith("audio/") ||
-      document.mimeType.startsWith("video/");
-
-    const stage = isRecording ? "transcribe" : "parse";
-    const enqueued = await enqueueStage(
-      ctx,
-      args.documentId,
-      stage,
-      isRecording ? undefined : { bypassCache: args.bypassCache }
-    );
+    const enqueued = await enqueueStage(ctx, args.documentId, "parse", {
+      bypassCache: args.bypassCache,
+    });
     if (!enqueued) return null;
     await ctx.db.patch(args.documentId, {
       status: "uploaded",
@@ -265,12 +234,7 @@ export const retryBlocked = authedMutation({
         errorMessage: undefined,
         errorCode: undefined,
       });
-      const isRecording =
-        doc.mediaType === "audio" ||
-        doc.mediaType === "video" ||
-        doc.mimeType.startsWith("audio/") ||
-        doc.mimeType.startsWith("video/");
-      await enqueueStage(ctx, doc._id, isRecording ? "transcribe" : "parse");
+      await enqueueStage(ctx, doc._id, "parse");
     }
     return blocked.length;
   },
@@ -282,53 +246,6 @@ export const retryBlocked = authedMutation({
 // ---------------------------------------------------------------------------
 
 
-
-
-/**
- * Relationship mapping, queued like every other stage.
- *
- * It used to be a bare `ctx.runAction` at the tail of template extraction, and
- * that cost two things. Template extraction only runs when a human opens the
- * extract dialog, so a document uploaded and processed normally never mapped a
- * single relationship. And a bare awaited runAction ties the caller's fate to
- * it — scheduling keeps the job row as the record sweepStuckJobs watches.
- *
- * Scheduled after Extract rather than awaited inside it: relationship mapping
- * is an enrichment pass, and a document whose extraction succeeded must not be
- * failed by it.
- *
- * Public because that same isolation leaves it without a retry path. A stage
- * that fails without failing its document is invisible to `retryBlocked`,
- * which only sweeps documents whose own status is "failed" — so the Connections
- * step needs its own re-run, the way Analyze and Extract have theirs.
- * `createJob` returning false is what keeps a second click from stacking runs.
- */
-export const runRelationships = authedMutation({
-  args: { documentId: v.id("documents") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await requireDocument(ctx, args.documentId);
-    await requireBudget(ctx, ctx.user._id);
-    await enqueueStage(ctx, args.documentId, "relationships");
-    return null;
-  },
-});
-
-/**
- * The same enqueue, scheduled by the metadata pass rather than clicked.
- *
- * `ctx.scheduler` does not carry the caller's identity, so scheduling the
- * authenticated `runRelationships` throws Unauthenticated the moment it runs —
- * silently, from the user's point of view, because nothing is awaiting it.
- */
-export const runRelationshipsInternal = internalMutation({
-  args: { documentId: v.id("documents") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await enqueueStage(ctx, args.documentId, "relationships");
-    return null;
-  },
-});
 
 
 // ---------------------------------------------------------------------------

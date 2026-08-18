@@ -139,30 +139,6 @@ async function scheduleTranslation(
 
 
 /**
- * Queue Analyze as its own stage instead of running it inline.
- *
- * Analyze is roughly eleven times Scan (`analyze` p50 22.6s against `ocr` p50
- * 2.0s), and awaiting it here kept this action alive for that whole time —
- * *after* this stage's own job row had already been marked completed. A bulk
- * upload queued every other document's two-second Scan behind a full
- * Scan+Analyze cycle. Splitting the stages makes the job row's lifetime equal
- * the action's lifetime.
- */
-async function enqueueAnalyze(
-  ctx: ActionCtx,
-  documentId: Id<"documents">,
-  bypassCache?: boolean
-): Promise<void> {
-  // enqueueStage dedupes: an already queued or running Analyze owns the
-  // stage, including the translation it schedules on the way out.
-  await ctx.runMutation(internal.processing.enqueue, {
-    documentId,
-    stage: "analyze",
-    ...(bypassCache === undefined ? {} : { bypassCache }),
-  });
-}
-
-/**
  * Stage-prefix a failure message — except for classified provider failures,
  * whose message already names the cause and the fix in the user's terms.
  * "Parse failed: Interfaze API credits exhausted — add credits…" buries the
@@ -173,169 +149,6 @@ function stageMessage(stage: string, e: unknown, msg: string): string {
 }
 
 
-
-// ---------------------------------------------------------------------------
-// Primary upload path: one whole-document Interfaze completion. OCR and object
-// detection run before the structured metadata analysis is returned.
-// ---------------------------------------------------------------------------
-
-export const runDocumentUnderstanding = internalAction({
-  args: {
-    documentId: v.id("documents"),
-    bypassCache: v.optional(v.boolean()),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    if (
-      await ctx.runMutation(internal.processing.bailIfPaused, {
-        documentId: args.documentId,
-        stage: "parse",
-      })
-    )
-      return null;
-    const document = await ctx.runQuery(internal.documents.getInternal, {
-      id: args.documentId,
-    });
-    if (!document) throw new Error("Document not found");
-
-    const apiKey = process.env.INTERFAZE_API_KEY;
-    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
-    const fileUrl = await requireFileUrl(ctx, document);
-    const csvPages = isCsvDocument(document)
-      ? await csvSearchPages(ctx, document)
-      : null;
-    const log = usageLogger(ctx, { documentId: args.documentId });
-
-    await ctx.runMutation(internal.processing.updateStatus, {
-      documentId: args.documentId,
-      status: "parsing",
-    });
-    await ctx.runMutation(internal.processing.updateJobStatus, {
-      documentId: args.documentId,
-      stage: "parse",
-      status: "running",
-    });
-
-    try {
-      // --- Scan -------------------------------------------------------------
-      // The dedicated OCR task, not a full model completion. The full model's
-      // OCR precontext is non-deterministic on the same file — repeat runs
-      // returned duplicate entries, a wrong entry count, and (in production)
-      // every page collapsed onto page 1. The task returns one clean result per
-      // document, every time, for ~1% of the cost. See docs/scan-precontext-plan.md.
-      const parsedPages =
-        csvPages ??
-        (
-          await ocrDocument(fileUrl, document.name, apiKey, {
-            log,
-            bypassCache: args.bypassCache,
-            sizeBytes: document.sizeBytes,
-          })
-        ).pages;
-
-      if (parsedPages.length === 0) {
-        throw new Error(
-          "Interfaze returned no OCR text for this document — it may be an image-only scan the OCR pass could not read"
-        );
-      }
-
-      // A page left blank by a successful OCR is a defect, not a blank page:
-      // it means pagination was misread and that page's text landed elsewhere.
-      const blankPages = parsedPages.filter((page) => !page.text.trim());
-      if (blankPages.length === parsedPages.length) {
-        throw new Error(
-          `OCR returned ${parsedPages.length} pages but no text on any of them`
-        );
-      }
-      if (blankPages.length > 0) {
-        console.warn(
-          `Scan produced ${blankPages.length}/${parsedPages.length} pages with no text ` +
-            `(pages ${blankPages.map((p) => p.pageNumber + 1).join(", ")}) — ` +
-            `possible pagination misread`
-        );
-      }
-
-      // Geometry is wrong by arithmetic or it is not wrong at all, so this
-      // needs no reference output and runs on every scan. A violation here is
-      // a viewer overlay that will land in the wrong place with no error
-      // anywhere — the failure mode that is otherwise invisible until someone
-      // notices a highlight over the wrong sentence.
-      const geometry = checkGeometry(parsedPages);
-      if (geometry.violations > 0) {
-        console.error(
-          `OCR geometry: ${geometry.violations} violations across ` +
-            `${geometry.checked} blocks ` +
-            `(${Object.entries(geometry.byKind)
-              .map(([kind, n]) => `${kind}=${n}`)
-              .join(", ")}) — ${geometry.examples.join("; ")}`
-        );
-      }
-
-      await ctx.runMutation(internal.ingest.ingestParseResults, {
-        documentId: args.documentId,
-        pageText: parsedPages.map((page) => page.text),
-        blocks: parsedPages.flatMap((page) =>
-          page.blocks.map((block) => ({
-            blockId: block.id,
-            blockType: block.block_type,
-            text: block.text,
-            pageNumber: block.page,
-            bbox: block.bbox,
-            confidence: block.confidence,
-            words: block.words,
-          }))
-        ),
-        pageDimensions: parsedPages.flatMap((page) =>
-          page.width && page.height
-            ? [{ page: page.pageNumber, width: page.width, height: page.height }]
-            : []
-        ),
-        pageCount: parsedPages.length,
-      });
-
-      // Scan is done and the document is searchable. Everything below can fail
-      // without costing the user the text.
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "parse",
-        status: "completed",
-      });
-      await ctx.scheduler.runAfter(0, internal.embeddings.embedDocument, {
-        documentId: args.documentId,
-      });
-      await ctx.runMutation(internal.processing.updateStatus, {
-        documentId: args.documentId,
-        status: "parsed",
-      });
-      // --- Analyze ----------------------------------------------------------
-      // Text in, no file. Cheap, and an unchanged re-run hits the semantic
-      // cache, which is what makes Analyze independently re-runnable.
-      console.log(
-        `Scan stored ${parsedPages.length} pages and ` +
-          `${parsedPages.reduce((n, p) => n + p.blocks.length, 0)} blocks`
-      );
-
-      // Enqueued rather than awaited — see enqueueAnalyze. Translation is
-      // queued by that stage on its way out, not here: the skip gate in
-      // translationNode.ts recognizes an already-in-the-target-language
-      // document from `sourceLanguageCode` + `sourceLanguageIsMixed`, and
-      // Analyze is what writes them. Queued before Analyze the gate saw
-      // `undefined`, declined to skip, and translated English documents into
-      // English one page at a time: 101 of the first 106 stored page
-      // translations were en→en.
-      await enqueueAnalyze(ctx, args.documentId, args.bypassCache);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await ctx.runMutation(internal.processing.markFailed, {
-        documentId: args.documentId,
-        errorMessage: stageMessage("Document understanding", error, message),
-        errorCode: failureCodeOf(error),
-        stage: "parse",
-      });
-    }
-    return null;
-  },
-});
 
 /**
  * The vocabulary Analyze is shown for one document: its project's categories
@@ -370,6 +183,7 @@ async function analyzeAndStore(
   ctx: ActionCtx,
   options: {
     documentId: Id<"documents">;
+    projectId: Id<"projects"> | undefined;
     pageTexts: string[];
     apiKey: string;
     csv: boolean;
@@ -384,6 +198,14 @@ async function analyzeAndStore(
   const categoryDefs: CategoryDef[] = options.categories
     .sort((a, b) => a.order - b.order)
     .map((c) => ({ key: c.key, label: c.label, description: c.description }));
+  // The graph rides along here exactly as it does on the file-in call, so a
+  // clip or an Analyze retry ends with the same fields as an upload.
+  const extraTypes: { key: string; label: string; description: string }[] =
+    options.projectId
+      ? await ctx.runQuery(internal.projectEntityTypes.listInternal, {
+          projectId: options.projectId,
+        })
+      : [];
   const analysis = await analyzeDocumentText(options.pageTexts, options.apiKey, {
     log: options.log,
     bypassCache: options.bypassCache,
@@ -395,10 +217,14 @@ async function analyzeAndStore(
         kindNames: options.kindNames,
         categories: categoryDefs,
         fileName: options.fileName,
+        graphExtraTypes: extraTypes,
       }),
     responseSchema: {
-      name: "document_analysis",
-      schema: buildDocumentUnderstandingSchema(categoryDefs.map((c) => c.key)),
+      name: "document_understanding",
+      schema: buildDocumentUnderstandingSchema(
+        categoryDefs.map((c) => c.key),
+        extraTypes.map((t) => t.key)
+      ),
     },
   });
 
@@ -406,7 +232,7 @@ async function analyzeAndStore(
     documentId: options.documentId,
     raw: analysis.content,
   });
-  const structured = JSON.parse(analysis.content) as {
+  const structured = JSON.parse(analysis.content) as GraphResponse & {
     source_language_code?: string;
     is_multilingual?: boolean;
   };
@@ -417,6 +243,17 @@ async function analyzeAndStore(
       sourceLanguageIsMixed: structured.is_multilingual,
     });
   }
+  const graph = normalizeGraphResponse(structured);
+  if (graph.unlisted > 0) {
+    console.warn(
+      `${graph.unlisted} relationship(s) named entities missing from the entity list for ${options.documentId}`
+    );
+  }
+  await ctx.runMutation(internal.relationships.ingestGraph, {
+    documentId: options.documentId,
+    entities: graph.entities,
+    relationships: graph.relationships,
+  });
 }
 
 /**
@@ -476,6 +313,7 @@ export const runAnalyze = internalAction({
       );
       await analyzeAndStore(ctx, {
         documentId: args.documentId,
+        projectId: document.projectId,
         pageTexts,
         apiKey,
         csv: isCsvDocument(document),
@@ -492,6 +330,11 @@ export const runAnalyze = internalAction({
       await ctx.runMutation(internal.processing.updateJobStatus, {
         documentId: args.documentId,
         stage: "analyze",
+        status: "completed",
+      });
+      // The graph rode along, so this call is the whole enrichment.
+      await ctx.runMutation(internal.processing.updateStatus, {
+        documentId: args.documentId,
         status: "completed",
       });
     } catch (e) {
@@ -528,131 +371,6 @@ async function requireFileUrl(
 }
 
 
-
-
-// ---------------------------------------------------------------------------
-// Transcribe — audio/video → diarized transcript with word timestamps.
-// The transcript text is also ingested as a single "page" so search and
-// entity extraction work on recordings the same way they do on documents.
-// ---------------------------------------------------------------------------
-
-export const runTranscribe = internalAction({
-  args: { documentId: v.id("documents") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    if (
-      await ctx.runMutation(internal.processing.bailIfPaused, {
-        documentId: args.documentId,
-        stage: "transcribe",
-      })
-    )
-      return null;
-    const document = await ctx.runQuery(internal.documents.getInternal, {
-      id: args.documentId,
-    });
-    if (!document) throw new Error("Document not found");
-
-    const apiKey = process.env.INTERFAZE_API_KEY;
-    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
-
-    const fileUrl = await ctx.storage.getUrl(document.storageId);
-    if (!fileUrl) throw new Error("Media file not found in storage");
-
-    await ctx.runMutation(internal.processing.updateStatus, {
-      documentId: args.documentId,
-      status: "parsing",
-    });
-    await ctx.runMutation(internal.processing.updateJobStatus, {
-      documentId: args.documentId,
-      stage: "transcribe",
-      status: "running",
-    });
-
-    try {
-      const transcript = await transcribe(
-        fileUrl,
-        apiKey,
-        usageLogger(ctx, { documentId: args.documentId })
-      );
-      const segments = transcript.segments;
-
-      await ctx.runMutation(internal.transcripts.ingestTranscript, {
-        documentId: args.documentId,
-        segments,
-      });
-
-      // Mirror the transcript into pages so text search and entity
-      // extraction treat recordings like any other document.
-      //
-      // One block per speaker turn, not zero. relationships.ingestGraph derives
-      // every mention by substring-matching an entity's name against block
-      // text, so `blocks: []` meant a recording could resolve entities and
-      // relationships and still show an empty entity sidebar — mentions is what
-      // entities.byDocument reads, and what recountEntity counts. Page numbers
-      // here are 0-based: ingest groups incoming blocks by the same index it
-      // walks pages with, and a single-page document is page 0.
-      const transcriptText = segments
-        .map((s) => `${s.speaker} [${Math.round(s.start)}s]: ${s.text}`)
-        .join("\n\n");
-      await ctx.runMutation(internal.ingest.ingestParseResults, {
-        documentId: args.documentId,
-        pageText: [transcriptText],
-        blocks: segments.map((s, i) => ({
-          blockId: `transcript_seg${i}`,
-          blockType: "Text",
-          text: s.text,
-          pageNumber: 0,
-        })),
-        pageDimensions: [],
-        pageCount: 1,
-      });
-
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "transcribe",
-        status: "completed",
-      });
-
-      // Embed the transcript page for semantic search (no-op without key)
-      await ctx.scheduler.runAfter(0, internal.embeddings.embedDocument, {
-        documentId: args.documentId,
-      });
-
-      // Recordings skip the metadata pass, so the transcript is the context
-      // the rename pass gets to work from (convex/rename.ts).
-      await ctx.scheduler.runAfter(0, internal.rename.runRenamePass, {
-        documentId: args.documentId,
-      });
-      await ctx.runMutation(internal.processing.updateStatus, {
-        documentId: args.documentId,
-        status: "parsed",
-      });
-
-      // A recording joins the document pipeline here rather than ending at a
-      // standalone rename. Analyze reads page text, not the file, so the
-      // transcript mirrored above is all it needs — and it supersedes the
-      // rename pass outright: `display_title` is written by the same response
-      // that just derived the document's kind, which is why the title got
-      // better when it moved onto Analyze.
-      //
-      // This is also what schedules everything downstream. Analyze's
-      // saveMetadataResult enqueues the entity/relationship pass, and Analyze's
-      // own `finally` owns the translation this stage used to queue directly —
-      // the skip gate there needs the language fields Analyze writes, so
-      // queueing translation from here raced it with no hint.
-      await enqueueAnalyze(ctx, args.documentId);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await ctx.runMutation(internal.processing.markFailed, {
-        documentId: args.documentId,
-        errorMessage: stageMessage("Transcription", e, msg),
-        errorCode: failureCodeOf(e),
-        stage: "transcribe",
-      });
-    }
-    return null;
-  },
-});
 
 
 // ---------------------------------------------------------------------------
@@ -879,7 +597,6 @@ export const runPipeline = internalAction({
       await ctx.runMutation(internal.metadata.saveMetadataResult, {
         documentId: args.documentId,
         raw: result.content,
-        skipRelationships: true,
       });
       const structured = JSON.parse(result.content) as GraphResponse & {
         source_language_code?: string;

@@ -1,4 +1,4 @@
-import { internalMutation, internalAction } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import {
   resolveEntity,
@@ -13,10 +13,6 @@ import {
 } from "./relationTypes";
 import { authedQuery } from "./authz";
 import { requireDocument, requireEntity } from "./ownership";
-import { internal } from "./_generated/api";
-import { chatCompletion, failureCodeOf } from "./interfaze";
-import { usageLogger } from "./apiLogs";
-import { buildGraphSchema, entityRule } from "./analyzePrompt";
 
 // ---------------------------------------------------------------------------
 // Mutation: resolve names to entities and store relationship rows
@@ -522,125 +518,6 @@ export function normalizeGraphResponse(parsed: GraphResponse): {
   return { entities: [...byName.values()], relationships, unlisted };
 }
 
-// ---------------------------------------------------------------------------
-// Action: extract relationships from a parsed document
-// ---------------------------------------------------------------------------
-
-export const extract = internalAction({
-  args: { documentId: v.id("documents") },
-  handler: async (ctx, args) => {
-    if (
-      await ctx.runMutation(internal.processing.bailIfPaused, {
-        documentId: args.documentId,
-        stage: "relationships",
-      })
-    )
-      return null;
-    const apiKey = process.env.INTERFAZE_API_KEY;
-    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
-
-    // The job row is created by processing.runRelationships; if the action is
-    // killed mid-run, processing.sweepStuckJobs records the failure.
-    await ctx.runMutation(internal.processing.updateStatus, {
-      documentId: args.documentId,
-      status: "extracting",
-    });
-    await ctx.runMutation(internal.processing.updateJobStatus, {
-      documentId: args.documentId,
-      stage: "relationships",
-      status: "running",
-    });
-
-    const pages: { pageNumber: number; text: string }[] =
-      await ctx.runQuery(internal.pages.textByDocument, {
-        documentId: args.documentId,
-      });
-    // Nothing to read is a finished document, not a stalled one.
-    if (pages.length === 0) {
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "relationships",
-        status: "completed",
-      });
-      await ctx.runMutation(internal.processing.updateStatus, {
-        documentId: args.documentId,
-        status: "completed",
-      });
-      return;
-    }
-
-    try {
-      const documentText = pages
-        .map((p) => `[Page ${p.pageNumber + 1}]\n${p.text}`)
-        .join("\n\n");
-
-      // What this project looks for beyond people and organizations. Read at
-      // call time rather than stored with the document, so declaring a type
-      // takes effect on the next document without a migration.
-      const document = await ctx.runQuery(internal.documents.getInternal, {
-        id: args.documentId,
-      });
-      const extraTypes = document?.projectId
-        ? await ctx.runQuery(internal.projectEntityTypes.listInternal, {
-            projectId: document.projectId,
-          })
-        : [];
-      const schema = buildGraphSchema(extraTypes.map((t) => t.key));
-
-      const { content } = await chatCompletion(apiKey, {
-        usage: {
-          log: usageLogger(ctx, { documentId: args.documentId }),
-          operation: "relationships",
-        },
-        systemPrompt:
-          "You are an analyst reading a document to find who is in it and how they are connected. " +
-          "Work only from the text. Never invent an entity, a connection, a date, or a place. " +
-          entityRule(extraTypes),
-        content: [
-          {
-            type: "text",
-            text: `Document text:\n\n${documentText}\n\nList every person and organization this document names, then every relationship between them that the text explicitly supports.`,
-          },
-        ],
-        responseSchema: { name: "document_graph", schema },
-      });
-
-      const parsed = JSON.parse(content) as GraphResponse;
-      const graph = normalizeGraphResponse(parsed);
-      if (graph.unlisted > 0) {
-        console.warn(
-          `${graph.unlisted} relationship(s) named entities missing from the entity list for ${args.documentId}`
-        );
-      }
-
-      await ctx.runMutation(internal.relationships.ingestGraph, {
-        documentId: args.documentId,
-        entities: graph.entities,
-        relationships: graph.relationships,
-      });
-
-      await ctx.runMutation(internal.processing.updateJobStatus, {
-        documentId: args.documentId,
-        stage: "relationships",
-        status: "completed",
-      });
-      await ctx.runMutation(internal.processing.updateStatus, {
-        documentId: args.documentId,
-        status: "completed",
-      });
-    } catch (e) {
-      // This is the product now, not an enrichment pass beside it — a document
-      // that reaches "completed" with no entities has nothing to show. So the
-      // failure goes on the document, the way Extract's used to, which also
-      // routes a provider block through failDocument and pauses the queue.
-      const msg = e instanceof Error ? e.message : String(e);
-      const code = failureCodeOf(e);
-      await ctx.runMutation(internal.processing.markFailed, {
-        documentId: args.documentId,
-        errorMessage: code ? msg : `Entity mapping failed: ${msg}`,
-        errorCode: code,
-        stage: "relationships",
-      });
-    }
-  },
-});
+// The standalone extract action is gone: the entity graph rides along on the
+// single understanding call (processingStages.runPipeline / analyzeAndStore),
+// which ingests it via `ingestGraph` below.

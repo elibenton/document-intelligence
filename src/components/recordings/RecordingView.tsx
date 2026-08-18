@@ -39,7 +39,7 @@ export function RecordingView({
   const segments = useQuery(api.transcripts.byDocument, {
     documentId: doc._id,
   });
-  const retranscribe = useMutation(api.processing.runTranscription);
+  const retranscribe = useMutation(api.processing.runFullPipeline);
 
   const isVideo =
     doc.mediaType === "video" || doc.mimeType.startsWith("video/");

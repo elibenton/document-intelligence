@@ -101,7 +101,6 @@ export function PipelineProgress({
   const documentId = document._id as Id<"documents">;
   const retryPipeline = useMutation(api.processing.runFullPipeline);
   const retryAnalyze = useMutation(api.processing.runAnalyze);
-  const retryRelationships = useMutation(api.processing.runRelationships);
   const [retrying, setRetrying] = useState(false);
   const [dialog, setDialog] = useState<"analyze" | null>(null);
   const analyzePrompt = useQuery(
@@ -124,9 +123,9 @@ export function PipelineProgress({
   );
 
   const jobByStage = new Map((jobs ?? []).map((j) => [j.stage, j]));
+  // "transcribe" rows are from before recordings joined the one-call pipeline.
   const parseJob = jobByStage.get("parse") ?? jobByStage.get("transcribe");
   const analyzeJob = jobByStage.get("analyze");
-  const relationshipsJob = jobByStage.get("relationships");
 
   const failed = document.status === "failed";
 
@@ -153,12 +152,9 @@ export function PipelineProgress({
   const csv = isCsvDocument(document);
   const pageTotal = document.pageCount ?? pages?.length;
 
-  // Recordings never run the metadata pass (convex/processingStages.ts hands the
-  // transcript to the rename pass instead), so their analysis lands with the
-  // transcript rather than after it.
-  const analyzeDone = recording
-    ? parseDone
-    : Boolean(document.metadata || document.primaryKind);
+  // Every medium takes the one understanding call now, recordings included, so
+  // metadata presence is the truth for all of them.
+  const analyzeDone = Boolean(document.metadata || document.primaryKind);
 
   const scanStatus: StepStatus =
     parseJob?.status === "canceled" || (failed && parseStatus === "running")
@@ -170,16 +166,6 @@ export function PipelineProgress({
     setRetrying(true);
     try {
       await retryPipeline({ documentId });
-    } finally {
-      setRetrying(false);
-    }
-  }
-
-  async function runRelationshipsRetry() {
-    if (retrying) return;
-    setRetrying(true);
-    try {
-      await retryRelationships({ documentId });
     } finally {
       setRetrying(false);
     }
@@ -241,12 +227,14 @@ export function PipelineProgress({
         : undefined,
       startedAt: analyzeJob?.startedAt,
       completedAt: analyzeJob?.completedAt,
+      // Entities and relationships ride on the same understanding call, so
+      // this step is the whole enrichment — there is no third stage.
       detail: analyzeDone
         ? [document.primaryKind, document.displayName ? "titled" : undefined]
             .filter(Boolean)
             .join(" · ") || "Understood"
         : parseDone
-          ? "Identifying type and structure"
+          ? "Identifying type, structure, and connections"
           : undefined,
       // A standalone Analyze re-run owns the step while it is in flight, so its
       // job wins over the metadata-derived guess.
@@ -264,31 +252,6 @@ export function PipelineProgress({
                 : parseDone
                   ? "running"
                   : "pending",
-    },
-    {
-      key: "relationships",
-      label: "Entities",
-      // Enrichment, not a gate: this stage records its own failure and the
-      // document stays completed either way (convex/processing.ts jobComplete).
-      // Documents processed before this stage existed have no job and sit at
-      // "pending" — which is the truth, not a stall.
-      detail:
-        relationshipsJob?.status === "running"
-          ? "Finding people, organizations and their connections"
-          : relationshipsJob?.status === "completed"
-            ? "Mapped"
-            : undefined,
-      status: jobStatus(relationshipsJob, "pending"),
-      // The only way back after a failed run.
-      retry:
-        parseDone
-          ? {
-              label: "Re-run connections",
-              onActivate: () => void runRelationshipsRetry(),
-            }
-          : undefined,
-      startedAt: relationshipsJob?.startedAt,
-      completedAt: relationshipsJob?.completedAt,
     },
   ];
 

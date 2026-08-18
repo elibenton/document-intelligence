@@ -181,11 +181,10 @@ export const createDocument = authedMutation({
       return { documentId, duplicateOf: null };
     }
 
-    const isRecording = mediaType === "audio" || mediaType === "video";
     // No automatic retries anywhere on this path: Interfaze may have
     // completed a request before a network failure is observed, so a retry
     // could duplicate a billable call.
-    await enqueueStage(ctx, documentId, isRecording ? "transcribe" : "parse");
+    await enqueueStage(ctx, documentId, "parse");
 
     // Render page images independently for the viewer. Interfaze receives the
     // original whole PDF, so rendering is no longer on the analysis critical
