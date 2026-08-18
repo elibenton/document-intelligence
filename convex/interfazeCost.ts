@@ -40,6 +40,11 @@ export interface ApiUsage {
   errorCode?: string;
   /** Which deploy produced this row. Without it a metric stream is unattributable. */
   buildSha?: string;
+  /**
+   * How many retries the reported duration absorbed. A 429 loop spends ~110s
+   * of backoff that otherwise reads as one slow call.
+   */
+  retryCount?: number;
 
   // --- Quality fields: zero-ground-truth arithmetic checks on the output ---
   // (see convex/ocrChecks.ts). `violations / checked` is a per-call accuracy

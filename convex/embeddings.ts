@@ -97,10 +97,12 @@ export async function embedTexts(
 ): Promise<number[][]> {
   const { log, health, retryOnRateLimit = true } = options;
   const startedAt = Date.now();
+  let retryCount = 0;
   const reportUsage = async (report: {
     status: "ok" | "error";
     promptTokens?: number;
     error?: string;
+    errorCode?: string;
   }) => {
     if (!log) return;
     const promptTokens = report.promptTokens ?? 0;
@@ -115,6 +117,9 @@ export async function embedTexts(
       costUsd: (promptTokens * EMBEDDING_USD_PER_M_TOKENS) / 1e6,
       durationMs: Date.now() - startedAt,
       error: report.error,
+      errorCode: report.errorCode,
+      buildSha: process.env.BUILD_SHA?.slice(0, 7),
+      retryCount: retryCount || undefined,
     });
   };
 
@@ -146,6 +151,7 @@ export async function embedTexts(
       retryOnRateLimit &&
       attempt < RETRY_DELAYS_MS.length
     ) {
+      retryCount++;
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
       continue;
     }
@@ -153,7 +159,11 @@ export async function embedTexts(
   }
   if (!res.ok) {
     const verdict = classifyFailure(res.status, await res.text());
-    await reportUsage({ status: "error", error: verdict.message });
+    await reportUsage({
+      status: "error",
+      error: verdict.message,
+      errorCode: verdict.status,
+    });
     await health?.({
       provider: "google",
       status: verdict.status,

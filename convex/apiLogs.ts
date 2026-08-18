@@ -65,6 +65,7 @@ export const record = internalMutation({
     outputHash: v.optional(v.string()),
     errorCode: v.optional(v.string()),
     buildSha: v.optional(v.string()),
+    retryCount: v.optional(v.number()),
     qualityChecked: v.optional(v.number()),
     qualityViolations: v.optional(v.number()),
     qualityByKind: v.optional(v.record(v.string(), v.number())),

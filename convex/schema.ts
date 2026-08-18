@@ -952,6 +952,7 @@ export default defineSchema({
     outputHash: v.optional(v.string()), // two uncached runs differing = nondeterminism
     errorCode: v.optional(v.string()), // classified, so errors group without parsing
     buildSha: v.optional(v.string()), // which deploy produced this row
+    retryCount: v.optional(v.number()), // retries absorbed into durationMs
 
     // Zero-ground-truth quality check on the call's output (convex/ocrChecks.ts):
     // violations/checked is a per-call accuracy rate that needs no paid corpus.
