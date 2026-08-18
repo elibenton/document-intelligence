@@ -84,3 +84,15 @@ export function styleForColor(color: string | undefined): {
     CATEGORY_COLOR_PALETTE[color as CategoryColor] ?? CATEGORY_COLOR_PALETTE.slate
   );
 }
+
+/** A colour for a category the user just invented, cycling the palette so two
+ *  additions never land on the same one back to back. Shared by the new-project
+ *  template editor and the project settings add form — the picker itself was
+ *  deleted, so this is the only assignment path. */
+export function nextColor(taken: { color: string }[]): string {
+  const used = new Set(taken.map((c) => c.color));
+  return (
+    CATEGORY_COLOR_KEYS.find((color) => !used.has(color)) ??
+    CATEGORY_COLOR_KEYS[taken.length % CATEGORY_COLOR_KEYS.length]
+  );
+}

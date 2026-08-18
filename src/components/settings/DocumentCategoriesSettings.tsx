@@ -1,13 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
-  CATEGORY_COLOR_KEYS,
-  CATEGORY_COLOR_PALETTE,
+  nextColor,
   styleForColor,
-  type CategoryColor,
 } from "@/components/documents/docTypeCategories";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,63 +12,22 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/use-confirm";
 
-interface CategoryBreakdown {
-  categoryKey: string;
-  documentCount: number;
-  truncated: boolean;
-  kinds: { name: string; count: number }[];
-}
-
 const TEXTAREA =
   "w-full resize-none rounded-md border border-input bg-transparent px-2.5 py-1.5 text-xs leading-snug outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring";
 
-function ColorPicker({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (color: CategoryColor) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {CATEGORY_COLOR_KEYS.map((color) => (
-        <button
-          key={color}
-          type="button"
-          aria-pressed={value === color}
-          title={color}
-          onClick={() => onChange(color)}
-          className={cn(
-            "size-4 rounded-full border-2 transition-colors",
-            CATEGORY_COLOR_PALETTE[color].dark,
-            value === color ? "border-foreground" : "border-transparent"
-          )}
-        />
-      ))}
-    </div>
-  );
-}
-
 /**
- * One row: the enforced primary category's live pill preview, its editable
- * label/description/color, and — this is "see what the AI extraction has
- * pulled out and put into each of the categories" — the secondary types
- * Analyze has actually filed underneath it.
+ * One row: the enforced primary category's live pill preview and its editable
+ * label/description — the description is injected verbatim into the Analyze
+ * prompt, so those two fields are the whole setting. Color is assigned from
+ * the palette on creation and never edited; deletion of an in-use category is
+ * refused by the server, and that refusal is what renders below the buttons.
  */
-function CategoryRow({
-  category,
-  breakdown,
-}: {
-  category: Doc<"documentCategories">;
-  breakdown: CategoryBreakdown | undefined;
-}) {
+function CategoryRow({ category }: { category: Doc<"documentCategories"> }) {
   const update = useMutation(api.documentCategories.update);
   const remove = useMutation(api.documentCategories.remove);
 
   const [label, setLabel] = useState(category.label);
   const [description, setDescription] = useState(category.description);
-  const [color, setColor] = useState(category.color as CategoryColor);
-  const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const confirm = useConfirm();
@@ -79,17 +35,18 @@ function CategoryRow({
 
   const dirty =
     label.trim() !== category.label ||
-    description.trim() !== category.description ||
-    color !== category.color;
-
-  const inUse = breakdown === undefined || breakdown.documentCount > 0;
-  const kindCount = breakdown?.kinds.length ?? 0;
+    description.trim() !== category.description;
 
   async function save() {
     if (!dirty || saving) return;
     setSaving(true);
     try {
-      await update({ id: category._id, label, description, color });
+      await update({
+        id: category._id,
+        label,
+        description,
+        color: category.color,
+      });
     } finally {
       setSaving(false);
     }
@@ -115,7 +72,7 @@ function CategoryRow({
     }
   }
 
-  const style = styleForColor(color);
+  const style = styleForColor(category.color);
 
   return (
     <div className="p-4">
@@ -141,7 +98,6 @@ function CategoryRow({
             placeholder="What belongs in this bucket, so Analyze can tell it apart from the others"
             className={TEXTAREA}
           />
-          <ColorPicker value={color} onChange={setColor} />
           <div className="flex flex-wrap items-center gap-2 pt-0.5">
             <Button size="sm" disabled={!dirty || saving} onClick={() => void save()}>
               {saving ? "Saving…" : "Save"}
@@ -149,63 +105,30 @@ function CategoryRow({
             <Button
               size="sm"
               variant="ghost"
-              disabled={deleting || inUse}
-              title={
-                inUse
-                  ? "Still assigned to at least one document — reassign or delete those first"
-                  : undefined
-              }
+              disabled={deleting}
               onClick={() => void handleRemove()}
               className="text-destructive hover:text-destructive"
             >
               {deleting ? "Deleting…" : "Delete"}
             </Button>
-            {kindCount > 0 && (
-              <button
-                type="button"
-                onClick={() => setExpanded((e) => !e)}
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                {expanded ? (
-                  <ChevronDown className="size-3.5" />
-                ) : (
-                  <ChevronRight className="size-3.5" />
-                )}
-                {kindCount} type{kindCount === 1 ? "" : "s"} · {breakdown?.documentCount}{" "}
-                document{breakdown?.documentCount === 1 ? "" : "s"}
-              </button>
-            )}
           </div>
           {deleteError && <p className="text-xs text-destructive">{deleteError}</p>}
-          {expanded && breakdown && (
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {breakdown.kinds.map((k) => (
-                <span
-                  key={k.name}
-                  className={cn(
-                    "rounded-full px-2 py-0.5 text-2xs font-medium leading-none",
-                    style.light
-                  )}
-                >
-                  {k.name} · {k.count}
-                </span>
-              ))}
-              {breakdown.truncated && (
-                <span className="text-2xs text-muted-foreground">and more…</span>
-              )}
-            </div>
-          )}
         </div>
       </div>
     </div>
   );
 }
 
-function AddCategoryForm({ projectId }: { projectId: Id<"projects"> }) {
+function AddCategoryForm({
+  projectId,
+  existing,
+}: {
+  projectId: Id<"projects">;
+  existing: { color: string }[];
+}) {
   const create = useMutation(api.documentCategories.create);
   const [label, setLabel] = useState("");
   const [description, setDescription] = useState("");
-  const [color, setColor] = useState<CategoryColor>("slate");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -218,11 +141,10 @@ function AddCategoryForm({ projectId }: { projectId: Id<"projects"> }) {
         projectId,
         label: label.trim(),
         description: description.trim(),
-        color,
+        color: nextColor(existing),
       });
       setLabel("");
       setDescription("");
-      setColor("slate");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -247,7 +169,6 @@ function AddCategoryForm({ projectId }: { projectId: Id<"projects"> }) {
           rows={2}
           className={TEXTAREA}
         />
-        <ColorPicker value={color} onChange={setColor} />
         <div>
           <Button size="sm" disabled={!label.trim() || saving} onClick={() => void add()}>
             {saving ? "Adding…" : "Add category"}
@@ -260,10 +181,9 @@ function AddCategoryForm({ projectId }: { projectId: Id<"projects"> }) {
 }
 
 /**
- * This project's enforced primary-category taxonomy: see every category, add a
- * new one, and see what Analyze has actually classified into each one so far.
- * Every category shown here is exactly what DocTypePills draws from — the dark
- * half of every pill in the project.
+ * This project's enforced primary-category taxonomy. Every category shown here
+ * is exactly what DocTypePills draws from — the dark half of every pill in the
+ * project.
  */
 export function DocumentCategoriesSettings({
   projectId,
@@ -271,12 +191,6 @@ export function DocumentCategoriesSettings({
   projectId: Id<"projects">;
 }) {
   const categories = useQuery(api.documentCategories.list, { projectId });
-  const breakdown = useQuery(api.documentCategories.bySecondaryType, {
-    projectId,
-  });
-  const breakdownByKey = new Map(
-    (breakdown ?? []).map((b) => [b.categoryKey, b as CategoryBreakdown])
-  );
 
   return (
     <div className="mb-8 rounded-lg border bg-card divide-y">
@@ -287,14 +201,10 @@ export function DocumentCategoriesSettings({
         </div>
       ) : (
         categories.map((category) => (
-          <CategoryRow
-            key={category._id}
-            category={category}
-            breakdown={breakdownByKey.get(category.key)}
-          />
+          <CategoryRow key={category._id} category={category} />
         ))
       )}
-      <AddCategoryForm projectId={projectId} />
+      <AddCategoryForm projectId={projectId} existing={categories ?? []} />
       <p className="px-4 py-3 text-xs text-muted-foreground">
         Documents that don't confidently match any category above are filed as
         "Other" and shown without a pill.

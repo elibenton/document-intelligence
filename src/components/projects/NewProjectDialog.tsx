@@ -10,7 +10,7 @@ import {
   type TemplateCategory,
   type TemplateEntityType,
 } from "../../../convex/projectTemplates";
-import { CATEGORY_COLOR_KEYS } from "@/components/documents/docTypeCategories";
+import { nextColor } from "@/components/documents/docTypeCategories";
 import {
   BaseEntityTypeChips,
   CitationStylePicker,
@@ -63,16 +63,6 @@ function seedDraft(key: string): Draft {
     entityTypes: template.entityTypes,
     citationStyle: template.citationStyle,
   };
-}
-
-/** A colour for a type the user just invented, cycling the palette so two
- *  additions never land on the same one back to back. */
-function nextColor(taken: TemplateCategory[]): string {
-  const used = new Set(taken.map((c) => c.color));
-  return (
-    CATEGORY_COLOR_KEYS.find((color) => !used.has(color)) ??
-    CATEGORY_COLOR_KEYS[taken.length % CATEGORY_COLOR_KEYS.length]
-  );
 }
 
 /**
