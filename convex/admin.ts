@@ -261,9 +261,17 @@ export const usage = adminQuery({
             // One lookup per distinct account in the window, not per row.
             // A null user is an account that has since been deleted; its spend
             // is still real, so the row stays and only the label is missing.
-            const user = ownerId
-              ? await authComponent.getAnyUserById(ctx, ownerId)
-              : null;
+            // The lookup itself is best-effort: an ownerId the auth component
+            // can't decode (a redacted demo hash, a legacy value) must cost
+            // the row its label, not take down the whole dashboard.
+            let user = null;
+            if (ownerId) {
+              try {
+                user = await authComponent.getAnyUserById(ctx, ownerId);
+              } catch {
+                user = null;
+              }
+            }
             return {
               account: ownerId ?? "Unattributed",
               name: user?.name || undefined,
