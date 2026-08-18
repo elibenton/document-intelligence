@@ -393,22 +393,37 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
   const mergeSuggestions = useQuery(api.mergeSuggestions.listPending, {
     projectId,
   });
-  // Inline chip editing: one mutation routes every editable document chip,
-  // and the project's live taxonomy feeds the category editor's options.
+  // Inline chip editing: one router for every editable document chip. The
+  // project's live taxonomy feeds the category options, and its kind
+  // vocabulary feeds the type combobox's suggestions.
   const setDocumentField = useMutation(api.documents.setField);
+  const updateIdentity = useMutation(api.documents.updateIdentity);
   const categories = useQuery(api.documentCategories.list, { projectId });
+  const projectKinds = useQuery(api.kinds.list, { projectId });
   const libraryChipOptions = useMemo(
     () => ({
       primaryCategory: (categories ?? []).map((c) => ({
         value: c.key,
         label: c.label,
       })),
+      kind: (projectKinds ?? []).map((k) => ({
+        value: k.name,
+        label: k.name,
+      })),
     }),
-    [categories]
+    [categories, projectKinds]
   );
   const onLibraryChipEdit = useCallback(
-    (doc: LibraryDoc, commit: ChipCommit) =>
-      setDocumentField({
+    (doc: LibraryDoc, commit: ChipCommit) => {
+      // Renaming the type replaces the primary kind and keeps any secondary
+      // ones — updateIdentity owns the multi-kind model and its provenance.
+      if (commit.field === "kind") {
+        return updateIdentity({
+          id: doc._id,
+          kinds: [commit.value, ...(doc.kinds ?? []).slice(1)],
+        });
+      }
+      return setDocumentField({
         id: doc._id,
         field: commit.field as
           | "primaryCategory"
@@ -417,8 +432,9 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
           | "sourceLanguageCode",
         value: commit.value || undefined,
         precision: commit.precision ?? undefined,
-      }),
-    [setDocumentField]
+      });
+    },
+    [setDocumentField, updateIdentity]
   );
 
   const views = useProjectViews(projectId);

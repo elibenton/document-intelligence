@@ -50,8 +50,9 @@ export function EditableText({
   className,
 }: {
   value: string | null | undefined;
-  /** Rendered (muted, italic) when the value is absent — the fillable slot. */
-  placeholder?: string;
+  /** Rendered when the value is absent — the fillable slot. A node, so the
+   *  library can keep its own styled "Unknown date". */
+  placeholder?: ReactNode;
   /** Accessible name for the trigger, e.g. "Edit place". */
   label: string;
   multiline?: boolean;
@@ -331,16 +332,17 @@ export function EditableDate({
   value,
   display,
   label,
-  placeholder = "Undated",
+  placeholder,
   onCommit,
   className,
 }: {
   /** The raw ISO prefix, for editing. */
   value: string | null | undefined;
-  /** The formatted form, for display ("Aug 8, 2026"). */
-  display: string | null | undefined;
+  /** The formatted form, for display ("Aug 8, 2026") — a node, so callers
+   *  keep their own chip styling (the library's mono right-aligned date). */
+  display: ReactNode;
   label: string;
-  placeholder?: string;
+  placeholder?: ReactNode;
   onCommit: (next: {
     value: string;
     precision: "day" | "month" | "year" | null;
@@ -350,7 +352,7 @@ export function EditableDate({
   return (
     <EditableText
       value={value}
-      placeholder={placeholder}
+      placeholder={placeholder ?? display ?? "Undated"}
       label={label}
       className={className}
       renderValue={() => display ?? value ?? ""}

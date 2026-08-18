@@ -1,4 +1,10 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Autocomplete } from "@/components/ui/autocomplete";
 import type { PropertyDef, PropertyOption } from "@/lib/views/types";
 import {
   EditableDate,
@@ -63,6 +69,7 @@ export function PropertyChips<T>({
           display={content}
           onEdit={onEdit!}
           options={liveOptions?.[def.editor!.field]}
+          liveKindOptions={liveOptions?.kind}
         />
       );
     }
@@ -115,12 +122,14 @@ function EditableChip<T>({
   display,
   onEdit,
   options,
+  liveKindOptions,
 }: {
   row: T;
   def: PropertyDef<T>;
   display: ReactNode;
   onEdit: (row: T, commit: ChipCommit) => Promise<unknown>;
   options?: PropertyOption[];
+  liveKindOptions?: PropertyOption[];
 }) {
   const editor = def.editor!;
   const raw = editor.read
@@ -132,8 +141,34 @@ function EditableChip<T>({
   const shown =
     display == null ? undefined : () => <>{display}</>;
 
+  if (editor.control === "docType") {
+    return (
+      <span className="relative z-10">
+        <DocTypeChipEditor
+          display={display}
+          label={label}
+          categoryValue={raw}
+          kindValue={
+            typeof (row as { primaryKind?: unknown }).primaryKind === "string"
+              ? ((row as { primaryKind?: string }).primaryKind ?? "")
+              : ""
+          }
+          categoryOptions={options ?? []}
+          kindOptions={liveKindOptions ?? []}
+          onCategory={(value) =>
+            onEdit(row, { field: editor.field, value, precision: null })
+          }
+          onKind={(value) =>
+            onEdit(row, { field: "kind", value, precision: null })
+          }
+        />
+      </span>
+    );
+  }
   if (editor.control === "date") {
-    const formatted = def.format?.(row) ?? raw;
+    // The chip's own render is the display — the library's mono
+    // right-aligned date keeps its styling inside the trigger.
+    const formatted = display ?? def.format?.(row) ?? raw;
     return (
       <span className="relative z-10">
         <EditableDate
@@ -178,6 +213,140 @@ function EditableChip<T>({
         }
       />
     </span>
+  );
+}
+
+/**
+ * The two-tone category+kind pill's editor: one popover, both facts. The
+ * category list moves the document between the project's buckets on click;
+ * the type combobox renames its kind — suggestions come from every kind the
+ * project already knows, and free text mints a new one (registering it as a
+ * pill for every other document, via updateIdentity's kind upsert).
+ */
+function DocTypeChipEditor({
+  display,
+  label,
+  categoryValue,
+  kindValue,
+  categoryOptions,
+  kindOptions,
+  onCategory,
+  onKind,
+}: {
+  display: ReactNode;
+  label: string;
+  categoryValue: string | null;
+  kindValue: string;
+  categoryOptions: PropertyOption[];
+  kindOptions: PropertyOption[];
+  onCategory: (value: string) => Promise<unknown>;
+  onKind: (value: string) => Promise<unknown>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [kindDraft, setKindDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openReset(next: boolean) {
+    if (next) {
+      setKindDraft(kindValue);
+      setError(null);
+    }
+    setOpen(next);
+  }
+
+  async function run(action: () => Promise<unknown>) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await action();
+      setOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function commitKind() {
+    const next = kindDraft.trim().toLowerCase();
+    if (!next || next === kindValue.toLowerCase()) {
+      setOpen(false);
+      return;
+    }
+    void run(() => onKind(next));
+  }
+
+  return (
+    <Popover open={open} onOpenChange={openReset}>
+      <PopoverTrigger
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        title={label}
+        aria-label={label}
+        className="inline-flex max-w-full rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:ring-2 data-[popup-open]:ring-ring"
+      >
+        {display ?? (
+          <span className="text-xs italic text-muted-foreground">Type</span>
+        )}
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="flex w-64 max-w-[calc(100vw-2rem)] flex-col p-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="mb-1 px-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+          Category
+        </p>
+        <div className="max-h-48 overflow-y-auto">
+          {categoryOptions.map((option) => (
+            <button
+              key={option.value}
+              onClick={() => void run(() => onCategory(option.value))}
+              className={cn(
+                "block w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                option.value === categoryValue && "font-semibold text-primary"
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <p className="mb-1 mt-2 px-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+          Type
+        </p>
+        <div
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitKind();
+            }
+          }}
+        >
+          <Autocomplete
+            value={kindDraft}
+            onValueChange={setKindDraft}
+            items={kindOptions.filter((k) =>
+              k.label.toLowerCase().includes(kindDraft.trim().toLowerCase())
+            )}
+            placeholder="e.g. legal brief"
+            aria-label="Document type"
+          />
+        </div>
+        <div className="mt-1.5 flex justify-end">
+          <button
+            onClick={commitKind}
+            disabled={saving}
+            className="rounded border bg-background px-2 py-1 text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {saving ? "Saving…" : "Rename type"}
+          </button>
+        </div>
+        {error && <p className="mt-1 px-1 text-xs text-destructive">{error}</p>}
+      </PopoverContent>
+    </Popover>
   );
 }
 

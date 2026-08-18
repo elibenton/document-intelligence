@@ -73,7 +73,9 @@ export interface PropertyDef<T> {
 }
 
 export interface PropertyEditor<T> {
-  control: "text" | "select" | "date";
+  /** "docType" is the two-tone category+kind pill: one popover that moves
+   *  the document between categories and renames its kind via combobox. */
+  control: "text" | "select" | "date" | "docType";
   /** The field name handed to the page's commit handler. */
   field: string;
   /** Raw editable value (not the formatted display). Defaults to `value`. */

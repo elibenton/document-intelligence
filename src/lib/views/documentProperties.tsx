@@ -169,9 +169,10 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
         primaryKind={doc.primaryKind}
       />
     ),
-    // Options arrive via liveOptions["primaryCategory"] — the project's live
-    // taxonomy, which options() above can't reach (it runs outside React).
-    editor: { control: "select", field: "primaryCategory" },
+    // The pill is one object but two facts: category options arrive via
+    // liveOptions["primaryCategory"], kind suggestions via
+    // liveOptions["kind"] — the docType editor edits both from one popover.
+    editor: { control: "docType", field: "primaryCategory" },
   },
   {
     id: "kind",
