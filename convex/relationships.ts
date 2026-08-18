@@ -432,6 +432,96 @@ const TYPE_MAP: Record<string, string> = {
   organization: "organization",
 };
 
+/** The wire shape of a document_graph response — also the graph fields of the
+ *  merged understanding response, which appends the same properties. */
+export interface GraphResponse {
+  entities?: Array<{ name?: string; type?: string; role?: string }>;
+  relationships?: Array<{
+    source_name?: string;
+    target_name?: string;
+    relation_type?: string;
+    quote?: string;
+    page_number?: number;
+    event_date?: string;
+    place?: string;
+    confidence?: number;
+  }>;
+}
+
+/**
+ * Normalize a graph response for ingestGraph. Pure, shared by the standalone
+ * relationships call and the merged pipeline call so the two cannot drift.
+ *
+ * One row per name: a repeated name with a second type is the model
+ * contradicting itself, and the first answer is as good as the second — but a
+ * repeat is also where a role can arrive, so the role is kept. Relationship
+ * endpoints are resolved against that list rather than typed inline, so a
+ * relationship naming someone the model never listed is dropped rather than
+ * silently creating an untyped entity; `unlisted` counts the drops, because a
+ * high rate means the entity list came back incomplete.
+ */
+export function normalizeGraphResponse(parsed: GraphResponse): {
+  entities: Array<{ name: string; type: string; role?: string }>;
+  relationships: Array<{
+    sourceName: string;
+    targetName: string;
+    relationType: string;
+    quote: string;
+    pageNumber?: number;
+    eventDate?: string;
+    place?: string;
+    confidence: number;
+  }>;
+  unlisted: number;
+} {
+  const byName = new Map<string, { name: string; type: string; role?: string }>();
+  for (const entity of parsed.entities ?? []) {
+    const name = (entity.name ?? "").trim();
+    const type = TYPE_MAP[entity.type ?? ""] ?? entity.type?.trim();
+    if (!name || !type) continue;
+    const key = name.toLowerCase();
+    const role = (entity.role ?? "").trim().toLowerCase();
+    const existing = byName.get(key);
+    if (existing) {
+      if (!existing.role && role) existing.role = role;
+      continue;
+    }
+    byName.set(key, { name, type, role: role || undefined });
+  }
+
+  let unlisted = 0;
+  const relationships = [];
+  for (const rel of parsed.relationships ?? []) {
+    const sourceName = (rel.source_name ?? "").trim();
+    const targetName = (rel.target_name ?? "").trim();
+    const relationType = (rel.relation_type ?? "").trim();
+    if (!sourceName || !targetName || !relationType) continue;
+    if (sourceName.toLowerCase() === targetName.toLowerCase()) continue;
+    if (
+      !byName.has(sourceName.toLowerCase()) ||
+      !byName.has(targetName.toLowerCase())
+    ) {
+      unlisted++;
+      continue;
+    }
+    relationships.push({
+      sourceName,
+      targetName,
+      relationType,
+      quote: (rel.quote ?? "").slice(0, 500),
+      pageNumber:
+        typeof rel.page_number === "number" && rel.page_number >= 1
+          ? rel.page_number - 1
+          : undefined,
+      eventDate: (rel.event_date ?? "").trim() || undefined,
+      place: (rel.place ?? "").trim().slice(0, 120) || undefined,
+      confidence: Math.min(1, Math.max(0, rel.confidence ?? 0.5)),
+    });
+  }
+
+  return { entities: [...byName.values()], relationships, unlisted };
+}
+
 // ---------------------------------------------------------------------------
 // Action: extract relationships from a parsed document
 // ---------------------------------------------------------------------------
@@ -518,84 +608,18 @@ export const extract = internalAction({
         responseSchema: { name: "document_graph", schema },
       });
 
-      const parsed = JSON.parse(content) as {
-        entities?: Array<{ name?: string; type?: string; role?: string }>;
-        relationships?: Array<{
-          source_name?: string;
-          target_name?: string;
-          relation_type?: string;
-          quote?: string;
-          page_number?: number;
-          event_date?: string;
-          place?: string;
-          confidence?: number;
-        }>;
-      };
-
-      // One row per name. A repeated name with a second type is the model
-      // contradicting itself, and the first answer is as good as the second —
-      // but a repeat is also where a role can arrive, so the role is kept.
-      const byName = new Map<
-        string,
-        { name: string; type: string; role?: string }
-      >();
-      for (const entity of parsed.entities ?? []) {
-        const name = (entity.name ?? "").trim();
-        const type = TYPE_MAP[entity.type ?? ""] ?? entity.type?.trim();
-        if (!name || !type) continue;
-        const key = name.toLowerCase();
-        const role = (entity.role ?? "").trim().toLowerCase();
-        const existing = byName.get(key);
-        if (existing) {
-          if (!existing.role && role) existing.role = role;
-          continue;
-        }
-        byName.set(key, { name, type, role: role || undefined });
-      }
-
-      // Endpoints are resolved against that list rather than typed inline, so
-      // a relationship naming someone the model never listed is dropped rather
-      // than silently creating an untyped entity. Counted, because a high drop
-      // rate means the entity list came back incomplete.
-      let unlisted = 0;
-      const relationships = [];
-      for (const rel of parsed.relationships ?? []) {
-        const sourceName = (rel.source_name ?? "").trim();
-        const targetName = (rel.target_name ?? "").trim();
-        const relationType = (rel.relation_type ?? "").trim();
-        if (!sourceName || !targetName || !relationType) continue;
-        if (sourceName.toLowerCase() === targetName.toLowerCase()) continue;
-        if (
-          !byName.has(sourceName.toLowerCase()) ||
-          !byName.has(targetName.toLowerCase())
-        ) {
-          unlisted++;
-          continue;
-        }
-        relationships.push({
-          sourceName,
-          targetName,
-          relationType,
-          quote: (rel.quote ?? "").slice(0, 500),
-          pageNumber:
-            typeof rel.page_number === "number" && rel.page_number >= 1
-              ? rel.page_number - 1
-              : undefined,
-          eventDate: (rel.event_date ?? "").trim() || undefined,
-          place: (rel.place ?? "").trim().slice(0, 120) || undefined,
-          confidence: Math.min(1, Math.max(0, rel.confidence ?? 0.5)),
-        });
-      }
-      if (unlisted > 0) {
+      const parsed = JSON.parse(content) as GraphResponse;
+      const graph = normalizeGraphResponse(parsed);
+      if (graph.unlisted > 0) {
         console.warn(
-          `${unlisted} relationship(s) named entities missing from the entity list for ${args.documentId}`
+          `${graph.unlisted} relationship(s) named entities missing from the entity list for ${args.documentId}`
         );
       }
 
       await ctx.runMutation(internal.relationships.ingestGraph, {
         documentId: args.documentId,
-        entities: [...byName.values()],
-        relationships,
+        entities: graph.entities,
+        relationships: graph.relationships,
       });
 
       await ctx.runMutation(internal.processing.updateJobStatus, {

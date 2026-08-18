@@ -168,6 +168,12 @@ export function buildAnalyzePrompt(options: {
    * to the analysis-only shape.
    */
   graphExtraTypes?: { key: string; label: string; description: string }[];
+  /**
+   * True when the call sends the original file rather than page-marked OCR
+   * text — the lead sentence stops describing page markers the model will
+   * never see and asks for 1-based page numbers from the document itself.
+   */
+  fileInput?: boolean;
 }): string {
   const categoryRule = buildCategoryRule(options.categories);
   const typeRule = `${TYPE_RULE} ${buildKindReuseClause(options.kindNames)}`.trim();
@@ -179,9 +185,12 @@ export function buildAnalyzePrompt(options: {
   const graphRule = options.graphExtraTypes
     ? ` ${buildGraphRule(options.graphExtraTypes)}`
     : "";
-  return options.csv
-    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}${graphRule}`
-    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}${graphRule}`;
+  const lead = options.csv
+    ? "Analyze this CSV dataset: its columns, row semantics, subject, and notable structure."
+    : options.fileInput
+      ? "Analyze the attached document and return the requested metadata. Read the entire document. Build the table of contents from headings that actually appear in it, with each entry's page number as the 1-based page it starts on. Flag any page ranges that look like a separate document stapled into the same file."
+      : "Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.";
+  return `${lead}${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}${graphRule}`;
 }
 
 /**

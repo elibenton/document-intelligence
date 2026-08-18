@@ -12,9 +12,15 @@ import {
   ocrDocument,
   analyzeDocumentText,
   transcribe,
+  understandDocument,
+  ocrPrecontextToPages,
+  chunksToSegments,
   failureCodeOf,
 } from "./interfaze";
-import type { OcrPageResult } from "./interfaze";
+import type { OcrPageResult, Precontext } from "./interfaze";
+import type { SttTaskResult } from "./interfazeStt";
+import { normalizeGraphResponse } from "./relationships";
+import type { GraphResponse } from "./relationships";
 import { checkGeometry } from "./ocrChecks";
 import {
   analyzeSystemPrompt,
@@ -648,6 +654,284 @@ export const runTranscribe = internalAction({
   },
 });
 
+
+// ---------------------------------------------------------------------------
+// The merged pipeline: one full-model call per document.
+//
+// Structured analysis (metadata + title + language + entity graph) arrives on
+// `content`; the specialist output (OCR geometry for documents, the transcript
+// for recordings) is expected on `precontext` per the provider's docs. As of
+// 2026-08-18 precontext comes back empty on every full-model call — reported
+// to Interfaze as a bug — so the geometry is shimmed from the dedicated task
+// at exactly one seam below. The shim's task call logs its own apiLogs row,
+// which is how we will see the day their fix lands: the `ocr`/`transcribe`
+// rows disappear and only `understand` remains.
+// ---------------------------------------------------------------------------
+
+/** Read the specialist entry off precontext, if the provider sent one. */
+function precontextResult<T>(precontext: Precontext[], name: string): T | undefined {
+  const entry = precontext.find((p) => p.name === name);
+  return entry?.result as T | undefined;
+}
+
+export const runPipeline = internalAction({
+  args: {
+    documentId: v.id("documents"),
+    bypassCache: v.optional(v.boolean()),
+    promptOverride: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    if (
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "parse",
+      })
+    )
+      return null;
+    const document = await ctx.runQuery(internal.documents.getInternal, {
+      id: args.documentId,
+    });
+    if (!document) throw new Error("Document not found");
+    const apiKey = process.env.INTERFAZE_API_KEY;
+    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
+    const fileUrl = await requireFileUrl(ctx, document);
+    const log = usageLogger(ctx, { documentId: args.documentId });
+    const isRecording =
+      document.mediaType === "audio" || document.mediaType === "video";
+    const csv = isCsvDocument(document);
+
+    await ctx.runMutation(internal.processing.updateStatus, {
+      documentId: args.documentId,
+      status: "parsing",
+    });
+    await ctx.runMutation(internal.processing.updateJobStatus, {
+      documentId: args.documentId,
+      stage: "parse",
+      status: "running",
+    });
+
+    // Everything up to the text being stored fails the document; everything
+    // after it fails softly, because the user already has a searchable scan.
+    let textStored = false;
+    try {
+      const { kindNames, categories } = await projectTaxonomy(
+        ctx,
+        document.projectId
+      );
+      const categoryDefs: CategoryDef[] = categories
+        .sort((a, b) => a.order - b.order)
+        .map((c) => ({ key: c.key, label: c.label, description: c.description }));
+      const extraTypes: { key: string; label: string; description: string }[] =
+        document.projectId
+          ? await ctx.runQuery(internal.projectEntityTypes.listInternal, {
+              projectId: document.projectId,
+            })
+          : [];
+
+      // --- The one call ----------------------------------------------------
+      const result = await understandDocument(fileUrl, document.name, apiKey, {
+        systemPrompt: analyzeSystemPrompt(csv),
+        prompt:
+          args.promptOverride?.trim() ||
+          buildAnalyzePrompt({
+            csv,
+            kindNames,
+            categories: categoryDefs,
+            fileName: document.name,
+            graphExtraTypes: extraTypes,
+            fileInput: true,
+          }),
+        responseSchema: {
+          name: "document_understanding",
+          schema: buildDocumentUnderstandingSchema(
+            categoryDefs.map((c) => c.key),
+            extraTypes.map((t) => t.key)
+          ),
+        },
+        log,
+        bypassCache: args.bypassCache,
+        sizeBytes: document.sizeBytes,
+      });
+
+      // --- Text + geometry: precontext, or the task-call shim --------------
+      let parsedPages: OcrPageResult[];
+      let transcriptSegments: ReturnType<typeof chunksToSegments> | null = null;
+      if (isRecording) {
+        const stt = precontextResult<SttTaskResult>(
+          result.precontext,
+          "speech_to_text"
+        ) ?? precontextResult<SttTaskResult>(result.precontext, "stt");
+        const segments = stt ? chunksToSegments(stt.chunks ?? []) : [];
+        transcriptSegments =
+          segments.length > 0
+            ? segments
+            : (await transcribe(fileUrl, apiKey, log)).segments;
+        const transcriptText = transcriptSegments
+          .map((s) => `${s.speaker} [${Math.round(s.start)}s]: ${s.text}`)
+          .join("\n\n");
+        parsedPages = [
+          {
+            pageNumber: 0,
+            text: transcriptText,
+            blocks: transcriptSegments.map((s, i) => ({
+              id: `transcript_seg${i}`,
+              block_type: "Text",
+              text: s.text,
+              page: 0,
+            })),
+          },
+        ];
+      } else if (csv) {
+        parsedPages = await csvSearchPages(ctx, document);
+      } else {
+        const fromPrecontext = ocrPrecontextToPages(
+          result.precontext.filter((p) => p.name === "ocr")
+        );
+        parsedPages =
+          fromPrecontext.length > 0
+            ? fromPrecontext
+            : (
+                await ocrDocument(fileUrl, document.name, apiKey, {
+                  log,
+                  bypassCache: args.bypassCache,
+                  sizeBytes: document.sizeBytes,
+                })
+              ).pages;
+      }
+
+      if (parsedPages.length === 0) {
+        throw new Error(
+          "Interfaze returned no text for this document — it may be an image-only scan the OCR pass could not read"
+        );
+      }
+      const blankPages = parsedPages.filter((page) => !page.text.trim());
+      if (blankPages.length === parsedPages.length) {
+        throw new Error(
+          `OCR returned ${parsedPages.length} pages but no text on any of them`
+        );
+      }
+      if (blankPages.length > 0) {
+        console.warn(
+          `Scan produced ${blankPages.length}/${parsedPages.length} pages with no text ` +
+            `(pages ${blankPages.map((p) => p.pageNumber + 1).join(", ")}) — ` +
+            `possible pagination misread`
+        );
+      }
+      const geometry = checkGeometry(parsedPages);
+      if (geometry.violations > 0) {
+        console.error(
+          `OCR geometry: ${geometry.violations} violations across ` +
+            `${geometry.checked} blocks ` +
+            `(${Object.entries(geometry.byKind)
+              .map(([kind, n]) => `${kind}=${n}`)
+              .join(", ")}) — ${geometry.examples.join("; ")}`
+        );
+      }
+
+      if (transcriptSegments) {
+        await ctx.runMutation(internal.transcripts.ingestTranscript, {
+          documentId: args.documentId,
+          segments: transcriptSegments,
+        });
+      }
+      await ctx.runMutation(internal.ingest.ingestParseResults, {
+        documentId: args.documentId,
+        pageText: parsedPages.map((page) => page.text),
+        blocks: parsedPages.flatMap((page) =>
+          page.blocks.map((block) => ({
+            blockId: block.id,
+            blockType: block.block_type,
+            text: block.text,
+            pageNumber: block.page,
+            bbox: block.bbox,
+            confidence: block.confidence,
+            words: block.words,
+          }))
+        ),
+        pageDimensions: parsedPages.flatMap((page) =>
+          page.width && page.height
+            ? [{ page: page.pageNumber, width: page.width, height: page.height }]
+            : []
+        ),
+        pageCount: parsedPages.length,
+      });
+      textStored = true;
+      console.log(
+        `Pipeline stored ${parsedPages.length} pages and ` +
+          `${parsedPages.reduce((n, p) => n + p.blocks.length, 0)} blocks`
+      );
+      await ctx.scheduler.runAfter(0, internal.embeddings.embedDocument, {
+        documentId: args.documentId,
+      });
+      await ctx.runMutation(internal.processing.updateStatus, {
+        documentId: args.documentId,
+        status: "parsed",
+      });
+
+      // --- Metadata + graph, off the same response -------------------------
+      await ctx.runMutation(internal.metadata.saveMetadataResult, {
+        documentId: args.documentId,
+        raw: result.content,
+        skipRelationships: true,
+      });
+      const structured = JSON.parse(result.content) as GraphResponse & {
+        source_language_code?: string;
+        is_multilingual?: boolean;
+      };
+      if (structured.source_language_code) {
+        await ctx.runMutation(internal.translations.setSourceLanguage, {
+          documentId: args.documentId,
+          sourceLanguageCode: structured.source_language_code,
+          sourceLanguageIsMixed: structured.is_multilingual,
+        });
+      }
+      const graph = normalizeGraphResponse(structured);
+      if (graph.unlisted > 0) {
+        console.warn(
+          `${graph.unlisted} relationship(s) named entities missing from the entity list for ${args.documentId}`
+        );
+      }
+      await ctx.runMutation(internal.relationships.ingestGraph, {
+        documentId: args.documentId,
+        entities: graph.entities,
+        relationships: graph.relationships,
+      });
+
+      await ctx.runMutation(internal.processing.updateJobStatus, {
+        documentId: args.documentId,
+        stage: "parse",
+        status: "completed",
+      });
+      await ctx.runMutation(internal.processing.updateStatus, {
+        documentId: args.documentId,
+        status: "completed",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (textStored) {
+        // The scan is stored and searchable; only the enrichment failed.
+        await ctx.runMutation(internal.processing.markStageFailed, {
+          documentId: args.documentId,
+          stage: "parse",
+          errorMessage: stageMessage("Understanding", error, message),
+        });
+      } else {
+        await ctx.runMutation(internal.processing.markFailed, {
+          documentId: args.documentId,
+          errorMessage: stageMessage("Document understanding", error, message),
+          errorCode: failureCodeOf(error),
+          stage: "parse",
+        });
+      }
+    } finally {
+      // Translation is derived and survives an enrichment failure; the skip
+      // gate reads the language fields written above when they exist.
+      if (textStored) await scheduleTranslation(ctx, args.documentId);
+    }
+    return null;
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Template-driven extraction: the confirmed template (roles + questions)

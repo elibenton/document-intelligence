@@ -765,24 +765,52 @@ export async function analyzeDocumentText(
 }
 
 /**
- * REMOVED — `understandDocument`, one full-model completion over the original
- * file that returned OCR precontext and structured analysis together.
+ * REINSTATED (2026-08-18) — one full-model completion over the original file:
+ * structured analysis (with the entity graph riding along) on `content`, and
+ * the specialist output (OCR geometry / transcript) expected on `precontext`.
  *
- * It was replaced by the `ocr` run-task plus a text-in Analyze, for two
- * independent reasons, and is recorded here so it does not get reinvented as
- * an obvious simplification:
+ * An earlier version was removed with two measured objections, overturned
+ * deliberately rather than forgotten:
  *
- *  - Correctness. The full model's OCR precontext was non-deterministic on the
- *    same file — repeat runs returned duplicate entries, a wrong entry count,
- *    and in production every page collapsed onto page 1. The task returns one
- *    clean result per document, every time. See docs/scan-precontext-plan.md.
- *  - Cost. It averaged $0.18 a call against $0.012 for the task plus $0.025
- *    for Analyze, and it was 16% of the entire first ledger.
- *
- * Interfaze's own guidance is to batch capabilities into one completion; on
- * this workload that advice is both more expensive and wrong, and the
- * `document_understanding` rows in `apiLogs` are the evidence.
+ *  - Correctness: the full model's OCR precontext was non-deterministic
+ *    (duplicate entries, wrong entry count, pages collapsed onto page 1).
+ *    Today it is worse — probes on 2026-08-18 show `precontext` comes back
+ *    empty on every full-model call, contradicting the provider's docs. That
+ *    is reported to Interfaze as a bug; until it is fixed, callers shim the
+ *    geometry from the dedicated task (see processingStages.runPipeline), so
+ *    the old non-determinism cannot bite either way.
+ *  - Cost: ~$0.18 a call against ~$0.037 for task + text-Analyze. Accepted:
+ *    the merged call replaces Analyze + relationships + rename in one request,
+ *    and the decision (2026-08-18) is to buy the simpler architecture and
+ *    watch the measured cost in apiLogs rather than assume it.
  */
+export async function understandDocument(
+  fileUrl: string,
+  filename: string,
+  apiKey: string,
+  options: {
+    systemPrompt: string;
+    prompt: string;
+    responseSchema: { name: string; schema: Record<string, unknown> };
+    log?: UsageLogger;
+    bypassCache?: boolean;
+    sizeBytes?: number;
+  }
+): Promise<ChatResult> {
+  return chatCompletion(apiKey, {
+    systemPrompt: options.systemPrompt,
+    content: [
+      { type: "text", text: options.prompt },
+      fileUrlContent(fileUrl, filename, options.sizeBytes),
+    ],
+    responseSchema: options.responseSchema,
+    // The graph is inference-heavy and rides on this call — same setting the
+    // standalone relationships call used.
+    reasoning: true,
+    bypassCache: options.bypassCache,
+    usage: options.log ? { log: options.log, operation: "understand" } : undefined,
+  });
+}
 
 
 // ---------------------------------------------------------------------------

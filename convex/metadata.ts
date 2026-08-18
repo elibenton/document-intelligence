@@ -18,6 +18,10 @@ export const saveMetadataResult = internalMutation({
   args: {
     documentId: v.id("documents"),
     raw: v.string(),
+    // The merged pipeline call carries the graph on the same response and
+    // ingests it itself; scheduling the standalone pass too would extract
+    // every document twice.
+    skipRelationships: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     let parsed: {
@@ -157,9 +161,11 @@ export const saveMetadataResult = internalMutation({
     //
     // Scheduled from here rather than from the pipeline so a standalone
     // Analyze retry gets the same treatment.
-    await ctx.scheduler.runAfter(0, internal.processing.runRelationshipsInternal, {
-      documentId: args.documentId,
-    });
+    if (!args.skipRelationships) {
+      await ctx.scheduler.runAfter(0, internal.processing.runRelationshipsInternal, {
+        documentId: args.documentId,
+      });
+    }
   },
 });
 
