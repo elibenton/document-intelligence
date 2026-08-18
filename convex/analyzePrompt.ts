@@ -161,15 +161,27 @@ export function buildAnalyzePrompt(options: {
   /** Original upload filename — sometimes the best identifier in the document,
    *  often meaningless. TITLE_RULE says which is which. */
   fileName?: string;
+  /**
+   * When set, the entity graph rides along on this call and its rule is
+   * appended — the project's extra entity types beyond person/organization
+   * (rows from projectEntityTypes). Undefined keeps the prompt byte-identical
+   * to the analysis-only shape.
+   */
+  graphExtraTypes?: { key: string; label: string; description: string }[];
 }): string {
   const categoryRule = buildCategoryRule(options.categories);
   const typeRule = `${TYPE_RULE} ${buildKindReuseClause(options.kindNames)}`.trim();
   const fileNameFact = options.fileName
     ? ` Original filename: "${options.fileName}".`
     : "";
+  // Appended last, mirroring the schema: the graph fields are declared after
+  // every analysis field, so their rule reads after every analysis rule.
+  const graphRule = options.graphExtraTypes
+    ? ` ${buildGraphRule(options.graphExtraTypes)}`
+    : "";
   return options.csv
-    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}`
-    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}`;
+    ? `Analyze this CSV dataset: its columns, row semantics, subject, and notable structure.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}${graphRule}`
+    : `Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}${graphRule}`;
 }
 
 /**
@@ -264,7 +276,16 @@ export const forDocument = authedQuery({
 // `primary_category` — structured-output generation follows property
 // declaration order, and the pill depends on the model committing to the
 // specific type before it picks a bucket for it (see TYPE_RULE above).
-export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
+export function buildDocumentUnderstandingSchema(
+  categoryKeys: string[],
+  /**
+   * When set, the entity graph rides along on this call: `entities` and
+   * `relationships` are appended after every other property (order is the
+   * reasoning chain — see the comment above `citation`). Undefined keeps the
+   * schema byte-identical to the analysis-only shape.
+   */
+  graphEntityTypes?: string[]
+) {
   return {
     type: "object",
     properties: {
@@ -518,6 +539,10 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
         },
         required: ["type", "contributors"],
       },
+      // Appended after citation: property order is the reasoning chain, and
+      // the graph is read off a document the model has already classified,
+      // titled, and dated. JS object spread preserves insertion order.
+      ...(graphEntityTypes ? graphSchemaProperties(graphEntityTypes) : {}),
     },
     required: [
       "title",
@@ -534,6 +559,176 @@ export function buildDocumentUnderstandingSchema(categoryKeys: string[]) {
       "tags",
       "table_of_contents",
       "additional",
+      ...(graphEntityTypes ? ["entities", "relationships"] : []),
     ],
   };
+}
+
+// ---------------------------------------------------------------------------
+// The entity graph, merged into the understanding call.
+//
+// These lived in convex/relationships.ts as their own `document_graph` call.
+// They are appended after every other property — the reasoning-chain comment
+// above `citation` applies with full force: the graph is read off a document
+// the model has already classified, titled, and dated, and appending cannot
+// move any field the chain depends on.
+// ---------------------------------------------------------------------------
+
+export const BASE_ENTITY_TYPES = ["person", "organization"];
+
+/**
+ * `entities` is declared before `relationships` and is authoritative. The
+ * relationship items reference entities by name only — carrying a type on each
+ * endpoint as well would let the same name be typed two ways in one response,
+ * and there would be no principled way to pick a winner. Endpoints that never
+ * appear in `entities` are dropped at ingest rather than guessed at.
+ *
+ * Within a relationship the order is a reasoning chain: the endpoints, then
+ * what connects them, then the evidence, then the facts read off that evidence
+ * (when, where), then confidence last — so the score is formed with every other
+ * field already in context.
+ */
+function graphSchemaProperties(extraTypes: string[]) {
+  // Sorted and deduped: this enum is part of the prompt, and the prompt is the
+  // Interfaze cache key. Project categories arrive in table order, so two
+  // documents in the same project could otherwise produce two different
+  // prompts and lose a free cache hit. Order carries no meaning to the model.
+  const entityTypes = [...BASE_ENTITY_TYPES, ...[...new Set(extraTypes)].sort()];
+
+  return {
+    entities: {
+      type: "array",
+      description:
+        "Every named entity of the listed types that this document names. Complete: any name used in relationships must appear here.",
+      items: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Entity name as written in the document",
+          },
+          type: { type: "string", enum: entityTypes },
+          role: {
+            type: "string",
+            description:
+              "What this entity does in THIS document — witness, author, signatory, buyer, defendant, employer. Lowercase, one or two words. Empty string when the document gives it no particular role.",
+          },
+        },
+        required: ["name", "type", "role"],
+      },
+    },
+    relationships: {
+      type: "array",
+      description:
+        "Relationships between the entities above that are explicitly supported by the document text.",
+      items: {
+        type: "object",
+        properties: {
+          source_name: {
+            type: "string",
+            description: "Name of the acting entity, exactly as listed in entities",
+          },
+          target_name: {
+            type: "string",
+            description: "Name of the entity acted upon, exactly as listed in entities",
+          },
+          relation_type: {
+            type: "string",
+            description:
+              "Short lowercase verb phrase with underscores, e.g. met_with, employed_by, paid, represents, signed_contract_with, family_of, works_at",
+          },
+          quote: {
+            type: "string",
+            description:
+              "Verbatim sentence from the document that supports this relationship",
+          },
+          page_number: {
+            type: "integer",
+            description:
+              "1-based page number where the supporting quote appears; 0 if unknown",
+          },
+          event_date: {
+            type: "string",
+            description:
+              "When the relationship occurred, if the quote says (ISO format preferred, e.g. 2024-03-03); empty string if not stated",
+          },
+          place: {
+            type: "string",
+            description:
+              "Where this particular event happened, if the quote names a location. Empty string if not stated — do not fall back to where the document itself was written.",
+          },
+          confidence: {
+            type: "number",
+            description:
+              "0-1: how directly the text supports this relationship (1 = stated outright, lower = inferred)",
+          },
+        },
+        required: [
+          "source_name",
+          "target_name",
+          "relation_type",
+          "quote",
+          "page_number",
+          "event_date",
+          "place",
+          "confidence",
+        ],
+      },
+    },
+  };
+}
+
+/** Standalone graph schema — the shape the separate relationships call sends. */
+export function buildGraphSchema(extraTypes: string[]) {
+  return {
+    type: "object",
+    properties: graphSchemaProperties(extraTypes),
+    required: ["entities", "relationships"],
+  };
+}
+
+/**
+ * What counts as an organization, and what counts as neither.
+ *
+ * "Any named collective" is deliberately broad — a review committee and a
+ * family are both groups acting together, and a reader looking for who was
+ * involved wants them. The exclusions are the ones that made the old extraction
+ * path unusable: it typed dates, clauses and addresses as entities because its
+ * vocabulary came from whatever JSON key produced them.
+ */
+export function entityRule(
+  extra: { key: string; label: string; description: string }[]
+) {
+  const base =
+    "A person is a named individual human. An organization is any named collective acting as a group: companies, agencies, courts, committees, partnerships, unions, families, boards. ";
+
+  // Project types are defined before the exclusion, not after it: a rule saying
+  // "nothing else is an entity" read last would override the definitions that
+  // came before it. Sorted so the prompt is byte-identical between documents
+  // in the same project, which is what keeps the Interfaze cache warm.
+  const declared = [...extra]
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map((t) => `A ${t.label.toLowerCase()} (type "${t.key}") is ${t.description} `)
+    .join("");
+
+  return (
+    base +
+    declared +
+    "Nothing else is an entity. Do not list dates, monetary amounts, addresses, document titles, contract clauses, case numbers, or objects — no matter how important they are to the document. " +
+    "Use the fullest form of each name the document gives, and list each entity once."
+  );
+}
+
+/**
+ * The graph rule, for the merged call. Carries what the standalone call's
+ * system prompt carried, restated as a task instruction.
+ */
+export function buildGraphRule(
+  extraTypes: { key: string; label: string; description: string }[]
+): string {
+  return (
+    "Fill in `entities` with every person and organization this document names, then `relationships` with every relationship between them that the text explicitly supports. " +
+    "Work only from the text. Never invent an entity, a connection, a date, or a place. " +
+    entityRule(extraTypes)
+  );
 }
