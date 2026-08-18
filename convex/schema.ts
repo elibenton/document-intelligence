@@ -655,7 +655,20 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_document", ["documentId", "pageNumber"]),
+    .index("by_document", ["documentId", "pageNumber"])
+    // Two indexes, not a concatenated field: the highlighted passage and the
+    // user's own note are different things — quote: searches the former,
+    // note: the latter. Rows from before projectId was denormalized are
+    // invisible to the project filter until touched; acceptable, since
+    // search over your own curation is a forward-looking feature.
+    .searchIndex("search_text", {
+      searchField: "text",
+      filterFields: ["projectId", "documentId"],
+    })
+    .searchIndex("search_comment", {
+      searchField: "comment",
+      filterFields: ["projectId", "documentId"],
+    }),
 
   // Visual evidence detected on document pages (signatures, redactions,
   // stamps, handwriting, photographs, logos). Bboxes are model-estimated
@@ -755,6 +768,22 @@ export default defineSchema({
     .index("by_token", ["token"])
     // Both the daily issuance cap and the expiry sweep read this range.
     .index("by_createdAt", ["createdAt"]),
+
+  // Personal web-clipper credentials: one row per account, minted in Settings.
+  // `token` is a bearer secret the same shape as demoSessions.token — whoever
+  // holds it may file clips, but only into `projectId`, and only while that
+  // project still belongs to `ownerId` (clips.createFromClip re-checks at
+  // write time, because a token outlives project deletion). Deleting the row
+  // IS revocation; re-minting replaces it.
+  clipperTokens: defineTable({
+    token: v.string(),
+    // Better Auth id — v.string(), never v.id (docs/auth-plan.md §7.1).
+    ownerId: v.string(),
+    projectId: v.id("projects"),
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_owner", ["ownerId"]),
 
   // Per-user preferences. One row per account, created on first write.
   //

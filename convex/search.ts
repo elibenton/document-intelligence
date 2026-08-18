@@ -101,6 +101,15 @@ export const suggest = authedQuery({
         languageCode: v.optional(v.string()),
         kind: v.optional(v.string()),
         category: v.optional(v.string()),
+        /** quote:/note: — search the user's own highlights. `field` picks
+         *  passage vs comment; `q` is the chip's own value, independent of
+         *  the free text. */
+        annotations: v.optional(
+          v.object({
+            field: v.union(v.literal("text"), v.literal("comment")),
+            q: v.string(),
+          })
+        ),
       })
     ),
   },
@@ -112,8 +121,58 @@ export const suggest = authedQuery({
     // but failing loudly beats silently returning nothing.
     if (scope.documentId) await requireDocument(ctx, scope.documentId);
     const q = args.q.trim();
+
+    // The user's own highlights, searched by the chip's value — runs with
+    // or without free text, since quote:payment alone is a complete query.
+    const highlights: {
+      annotationId: Id<"annotations">;
+      documentId: Id<"documents">;
+      documentName: string;
+      pageNumber: number;
+      text: string;
+      comment: string | null;
+      color: string;
+      timeStart: number | null;
+    }[] = [];
+    if (scope.annotations && scope.annotations.q.trim().length >= 2) {
+      const noteQ = scope.annotations.q.trim();
+      const rows =
+        scope.annotations.field === "comment"
+          ? await ctx.db
+              .query("annotations")
+              .withSearchIndex("search_comment", (s) =>
+                s.search("comment", noteQ).eq("projectId", args.projectId)
+              )
+              .take(8)
+          : await ctx.db
+              .query("annotations")
+              .withSearchIndex("search_text", (s) =>
+                s.search("text", noteQ).eq("projectId", args.projectId)
+              )
+              .take(8);
+      const nameCache = new Map<Id<"documents">, string>();
+      for (const row of rows) {
+        let name = nameCache.get(row.documentId);
+        if (name === undefined) {
+          const rowDoc = await ctx.db.get(row.documentId);
+          name = rowDoc ? titleOf(rowDoc) : "Unknown document";
+          nameCache.set(row.documentId, name);
+        }
+        highlights.push({
+          annotationId: row._id,
+          documentId: row.documentId,
+          documentName: name,
+          pageNumber: row.pageNumber,
+          text: row.text,
+          comment: row.comment ?? null,
+          color: row.color,
+          timeStart: row.timeRange?.start ?? null,
+        });
+      }
+    }
+
     if (q.length < 2) {
-      return { entities: [], documents: [], pages: [] };
+      return { entities: [], documents: [], pages: [], highlights };
     }
 
     // A prefix narrows the question, so the narrowed section gets more of
@@ -289,6 +348,7 @@ export const suggest = authedQuery({
         mimeType: d.mimeType,
       })),
       pages,
+      highlights,
     };
   },
 });

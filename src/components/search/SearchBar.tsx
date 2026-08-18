@@ -6,6 +6,7 @@ import {
   ChevronDown,
   FileText,
   Hash,
+  Highlighter,
   History,
   MapPin,
   RefreshCw,
@@ -32,6 +33,7 @@ function scopeFromChips(chips: PrefixTerm[]) {
     languageCode?: string;
     kind?: string;
     category?: string;
+    annotations?: { field: "text" | "comment"; q: string };
   } = {};
   for (const chip of chips) {
     if (!chip.value) continue;
@@ -43,6 +45,10 @@ function scopeFromChips(chips: PrefixTerm[]) {
     else if (chip.prefix === "lang") scope.languageCode = chip.value.toLowerCase();
     else if (chip.prefix === "kind") scope.kind = chip.value.toLowerCase();
     else if (chip.prefix === "category") scope.category = chip.value.toLowerCase();
+    else if (chip.prefix === "quote")
+      scope.annotations = { field: "text", q: chip.value };
+    else if (chip.prefix === "note")
+      scope.annotations = { field: "comment", q: chip.value };
   }
   return Object.keys(scope).length > 0 ? scope : undefined;
 }
@@ -101,6 +107,16 @@ type Item =
       documentName: string;
       pageNumber: number;
       snippet: string;
+    }
+  | {
+      kind: "highlight";
+      annotationId: string;
+      documentId: string;
+      documentName: string;
+      pageNumber: number;
+      text: string;
+      comment: string | null;
+      timeStart: number | null;
     };
 
 const SUGGESTED_QUESTION_SETS = [
@@ -189,7 +205,9 @@ export default function SearchBar({
   const scope = useMemo(() => scopeFromChips(chips), [chips]);
   const suggestions = useQuery(
     api.search.suggest,
-    debouncedText.length >= 2
+    // A quote:/note: chip is a complete query on its own — the annotation
+    // leg runs on the chip's value, no free text required.
+    debouncedText.length >= 2 || scope?.annotations
       ? { q: debouncedText, projectId, scope }
       : "skip"
   );
@@ -208,8 +226,17 @@ export default function SearchBar({
   // Flatten into one keyboard-navigable list; the "ask" row leads.
   const items = useMemo<Item[]>(() => {
     if (!value.trim() && chips.length > 0) {
-      // Chips alone are a runnable deep search even with no free text.
-      return [{ kind: "ask" }];
+      // Chips alone are a runnable deep search — and a quote:/note: chip
+      // already has its matches in hand.
+      const list: Item[] = [{ kind: "ask" }];
+      for (const h of suggestions?.highlights ?? [])
+        list.push({
+          kind: "highlight",
+          ...h,
+          annotationId: h.annotationId as string,
+          documentId: h.documentId as string,
+        });
+      return list;
     }
     if (!value.trim()) {
       return [
@@ -228,6 +255,13 @@ export default function SearchBar({
     // user already has in mind. Entities and page hits follow as ways in when
     // it wasn't. Section headings come from this order (see firstOfKind).
     const list: Item[] = [{ kind: "ask" }];
+    for (const h of suggestions?.highlights ?? [])
+      list.push({
+        kind: "highlight",
+        ...h,
+        annotationId: h.annotationId as string,
+        documentId: h.documentId as string,
+      });
     for (const d of suggestions?.documents ?? [])
       list.push({ kind: "document", ...d, documentId: d.documentId as string });
     for (const e of suggestions?.entities ?? [])
@@ -330,6 +364,13 @@ export default function SearchBar({
           `/documents/${item.documentId}?page=${item.pageNumber + 1}&highlight=${encodeURIComponent(debouncedText)}`
         );
         break;
+      case "highlight":
+        // The annotation's own text is the highlight target — the viewer
+        // lands on the exact passage the note marks.
+        navigate(
+          `/documents/${item.documentId}?page=${item.pageNumber + 1}&highlight=${encodeURIComponent(item.text.slice(0, 80))}`
+        );
+        break;
     }
   }
 
@@ -387,6 +428,7 @@ export default function SearchBar({
     entity: "Entities",
     document: "Library",
     page: "In documents",
+    highlight: "Highlights",
   };
 
   const rowClass = (index: number) =>
@@ -408,6 +450,8 @@ export default function SearchBar({
         return `document:${item.documentId}`;
       case "page":
         return `page:${item.documentId}:${item.pageNumber}`;
+      case "highlight":
+        return `highlight:${item.annotationId}`;
     }
   }
 
@@ -581,6 +625,26 @@ export default function SearchBar({
                         {item.filename && (
                           <span className="block text-xs text-muted-foreground truncate">
                             <Highlight text={item.filename} query={debouncedText} />
+                          </span>
+                        )}
+                      </span>
+                    </>
+                  )}
+                  {item.kind === "highlight" && (
+                    <>
+                      <Highlighter className="size-4 text-muted-foreground shrink-0" />
+                      <span className="min-w-0">
+                        <span className="block text-xs text-muted-foreground truncate">
+                          {item.documentName}
+                          {item.timeStart === null &&
+                            ` · p.${item.pageNumber + 1}`}
+                        </span>
+                        <span className="block text-sm truncate">
+                          “{item.text}”
+                        </span>
+                        {item.comment && (
+                          <span className="block text-xs truncate text-muted-foreground">
+                            {item.comment}
                           </span>
                         )}
                       </span>
