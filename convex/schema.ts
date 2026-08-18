@@ -281,9 +281,13 @@ export default defineSchema({
     // every dropped file.
     .index("by_project_hash", ["projectId", "contentHash"])
     .index("by_project_name", ["projectId", "name"])
+    // primaryKind/primaryCategory ride as filterFields so the search bar's
+    // kind:/category: prefixes filter at the index — exact at any corpus
+    // size, unlike post-filtering a capped result set. Both fields already
+    // exist on every analyzed row, so no backfill.
     .searchIndex("search_name", {
       searchField: "name",
-      filterFields: ["projectId"],
+      filterFields: ["projectId", "primaryKind", "primaryCategory"],
     })
     // The two names are searched separately because they are different things:
     // `name` is the upload filename, `displayName` is the title the rename pass
@@ -291,7 +295,7 @@ export default defineSchema({
     // title is the one people type, so it gets its own and leads the results.
     .searchIndex("search_displayName", {
       searchField: "displayName",
-      filterFields: ["projectId"],
+      filterFields: ["projectId", "primaryKind", "primaryCategory"],
     }),
 
   // The enforced primary-category taxonomy ("legal" | "government" | ...),

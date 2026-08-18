@@ -17,6 +17,35 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { DocTypeIcon } from "@/components/documents/DocTypeIcon";
 import { entitySlug } from "@/lib/entitySlug";
+import {
+  parseQuery,
+  serializeQuery,
+  type PrefixTerm,
+} from "@/lib/searchQuery";
+
+/** Chip prefixes the suggest query can push down to an index filter today.
+ *  Everything else still serializes into the deep-search query string. */
+function scopeFromChips(chips: PrefixTerm[]) {
+  const scope: {
+    entityType?: string;
+    docField?: "title" | "file";
+    languageCode?: string;
+    kind?: string;
+    category?: string;
+  } = {};
+  for (const chip of chips) {
+    if (!chip.value) continue;
+    if (chip.prefix === "person") scope.entityType = "person";
+    else if (chip.prefix === "org") scope.entityType = "organization";
+    else if (chip.prefix === "place") scope.entityType = "place";
+    else if (chip.prefix === "title") scope.docField = "title";
+    else if (chip.prefix === "file") scope.docField = "file";
+    else if (chip.prefix === "lang") scope.languageCode = chip.value.toLowerCase();
+    else if (chip.prefix === "kind") scope.kind = chip.value.toLowerCase();
+    else if (chip.prefix === "category") scope.category = chip.value.toLowerCase();
+  }
+  return Object.keys(scope).length > 0 ? scope : undefined;
+}
 
 function EntityTypeIcon({ type }: { type: string }) {
   const cls = "size-4 text-muted-foreground shrink-0";
@@ -119,6 +148,10 @@ export default function SearchBar({
 }) {
   const navigate = useNavigate();
   const [value, setValue] = useState("");
+  // Committed prefix terms, rendered as removable chips above the input —
+  // deliberately outside the combobox ARIA below: real buttons in natural
+  // tab order, so the input's delicate listbox wiring stays untouched.
+  const [chips, setChips] = useState<PrefixTerm[]>([]);
   const [debounced, setDebounced] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -150,10 +183,14 @@ export default function SearchBar({
     return () => clearTimeout(t);
   }, [value]);
 
+  // Prefixes typed but not yet committed to chips are stripped before the
+  // text hits the search indexes — "kind:me" mid-typing is not page text.
+  const debouncedText = useMemo(() => parseQuery(debounced).text, [debounced]);
+  const scope = useMemo(() => scopeFromChips(chips), [chips]);
   const suggestions = useQuery(
     api.search.suggest,
-    debounced.trim().length >= 2
-      ? { q: debounced.trim(), projectId }
+    debouncedText.length >= 2
+      ? { q: debouncedText, projectId, scope }
       : "skip"
   );
   // Past deep searches — shown when the bar is focused but empty; selecting
@@ -170,6 +207,10 @@ export default function SearchBar({
 
   // Flatten into one keyboard-navigable list; the "ask" row leads.
   const items = useMemo<Item[]>(() => {
+    if (!value.trim() && chips.length > 0) {
+      // Chips alone are a runnable deep search even with no free text.
+      return [{ kind: "ask" }];
+    }
     if (!value.trim()) {
       return [
         ...SUGGESTED_QUESTION_SETS[questionSetIndex].map((query) => ({
@@ -196,6 +237,7 @@ export default function SearchBar({
     return list;
   }, [
     value,
+    chips,
     suggestions,
     completedRecentSearches,
     questionSetIndex,
@@ -213,6 +255,52 @@ export default function SearchBar({
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, []);
 
+  /** The full query, chips included — what deep search receives and what a
+   *  shared URL round-trips through the parser. */
+  function effectiveQuery(): string {
+    const parsed = parseQuery(value);
+    return serializeQuery({
+      text: parsed.text,
+      terms: [...chips, ...parsed.terms],
+    });
+  }
+
+  /** Commit terminated prefix terms into chips as they're typed. A term at
+   *  the caret's edge ("kind:me", 'kind:"tax') is still being typed and
+   *  stays in the input; anything followed by more text, or by a trailing
+   *  space, is done. */
+  function handleChange(raw: string) {
+    const parsed = parseQuery(raw);
+    const done = parsed.terms.filter(
+      (t) => t.value !== "" && (t.end < raw.length || /\s$/.test(raw))
+    );
+    if (done.length > 0) {
+      setChips((prev) => [...prev, ...done]);
+      let rest = "";
+      let cursor = 0;
+      for (const t of done) {
+        rest += raw.slice(cursor, t.start);
+        cursor = t.end;
+      }
+      rest += raw.slice(cursor);
+      setValue(rest.replace(/\s{2,}/g, " ").trimStart());
+    } else {
+      setValue(raw);
+    }
+    setActive(0);
+    setOpen(true);
+  }
+
+  /** Backspace at the caret's start pops the last chip back into the input
+   *  as its typed text — one keystroke recovers it for editing. */
+  function popChipIntoInput(): boolean {
+    if (chips.length === 0) return false;
+    const last = chips[chips.length - 1];
+    setChips((prev) => prev.slice(0, -1));
+    setValue(last.raw + (value ? ` ${value}` : ""));
+    return true;
+  }
+
   function go(item: Item) {
     setOpen(false);
     inputRef.current?.blur();
@@ -220,7 +308,7 @@ export default function SearchBar({
     switch (item.kind) {
       case "ask":
         navigate(
-          `/search?q=${encodeURIComponent(value.trim())}&project=${projectId}`
+          `/search?q=${encodeURIComponent(effectiveQuery())}&project=${projectId}`
         );
         break;
       case "suggested":
@@ -239,7 +327,7 @@ export default function SearchBar({
         break;
       case "page":
         navigate(
-          `/documents/${item.documentId}?page=${item.pageNumber + 1}&highlight=${encodeURIComponent(debounced.trim())}`
+          `/documents/${item.documentId}?page=${item.pageNumber + 1}&highlight=${encodeURIComponent(debouncedText)}`
         );
         break;
     }
@@ -260,8 +348,18 @@ export default function SearchBar({
       setActive(items.length - 1);
       return;
     }
+    if (
+      e.key === "Backspace" &&
+      inputRef.current?.selectionStart === 0 &&
+      inputRef.current?.selectionEnd === 0
+    ) {
+      if (popChipIntoInput()) {
+        e.preventDefault();
+        return;
+      }
+    }
     if (!open || items.length === 0) {
-      if (e.key === "Enter" && value.trim()) {
+      if (e.key === "Enter" && (value.trim() || chips.length > 0)) {
         go({ kind: "ask" });
       }
       return;
@@ -327,6 +425,30 @@ export default function SearchBar({
 
   return (
     <div ref={rootRef} className="relative mx-auto w-full max-w-3xl">
+      {chips.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+          {chips.map((chip, index) => (
+            <span
+              key={`${chip.prefix}:${chip.value}:${index}`}
+              className="inline-flex items-center gap-1 rounded-full border bg-card py-0.5 pl-2 pr-1 text-xs"
+            >
+              <span className="font-medium text-primary">{chip.prefix}:</span>
+              <span className="max-w-48 truncate">{chip.value}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${chip.prefix}:${chip.value} filter`}
+                onClick={() => {
+                  setChips((prev) => prev.filter((_, i) => i !== index));
+                  inputRef.current?.focus();
+                }}
+                className="grid size-4 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="relative">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
         <input
@@ -351,11 +473,7 @@ export default function SearchBar({
           }
           aria-label="Search"
           value={value}
-          onChange={(e) => {
-            setValue(e.target.value);
-            setActive(0);
-            setOpen(true);
-          }}
+          onChange={(e) => handleChange(e.target.value)}
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
           placeholder="Search people, documents, connections — or ask a question…"
@@ -412,7 +530,8 @@ export default function SearchBar({
                     <>
                       <Sparkles className="size-4 text-primary shrink-0" />
                       <span className="text-sm">
-                        Ask: <span className="font-medium">“{value.trim()}”</span>
+                        Ask:{" "}
+                        <span className="font-medium">“{effectiveQuery()}”</span>
                       </span>
                       <span className="ml-auto text-2xs text-muted-foreground border rounded px-1.5 py-0.5">
                         deep search ↵
@@ -441,7 +560,7 @@ export default function SearchBar({
                     <>
                       <EntityTypeIcon type={item.type} />
                       <span className="text-sm truncate">
-                        <Highlight text={item.name} query={debounced} />
+                        <Highlight text={item.name} query={debouncedText} />
                       </span>
                       <span className="ml-auto text-xs text-muted-foreground shrink-0">
                         {item.mentionCount} mention
@@ -457,11 +576,11 @@ export default function SearchBar({
                       />
                       <span className="min-w-0">
                         <span className="block text-sm truncate">
-                          <Highlight text={item.name} query={debounced} />
+                          <Highlight text={item.name} query={debouncedText} />
                         </span>
                         {item.filename && (
                           <span className="block text-xs text-muted-foreground truncate">
-                            <Highlight text={item.filename} query={debounced} />
+                            <Highlight text={item.filename} query={debouncedText} />
                           </span>
                         )}
                       </span>
@@ -475,7 +594,7 @@ export default function SearchBar({
                           {item.documentName} · p.{item.pageNumber + 1}
                         </span>
                         <span className="block text-sm truncate">
-                          <Highlight text={item.snippet} query={debounced} />
+                          <Highlight text={item.snippet} query={debouncedText} />
                         </span>
                       </span>
                     </>

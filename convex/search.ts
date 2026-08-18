@@ -25,7 +25,8 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
-import { requireProject, requireSearch } from "./ownership";
+import { requireDocument, requireProject, requireSearch } from "./ownership";
+import { STABLE_TO_LEGACY } from "./entityResolution";
 import { languageForDocument, languageForProject } from "./settings";
 import { requireBudget } from "./budget";
 import { chatCompletion } from "./interfaze";
@@ -85,54 +86,130 @@ function titleOf(doc: { name: string; displayName?: string }): string {
 }
 
 export const suggest = authedQuery({
-  args: { q: v.string(), projectId: v.id("projects") },
+  args: {
+    q: v.string(),
+    projectId: v.id("projects"),
+    // Structured narrowing from the search bar's typed prefixes. Every field
+    // maps to a filterField the indexes already declare, so a scoped query
+    // is exact rather than a post-filter over a capped result set.
+    scope: v.optional(
+      v.object({
+        documentId: v.optional(v.id("documents")),
+        /** Stable entity type: "person" | "organization" | "place" | "other". */
+        entityType: v.optional(v.string()),
+        docField: v.optional(v.union(v.literal("title"), v.literal("file"))),
+        languageCode: v.optional(v.string()),
+        kind: v.optional(v.string()),
+        category: v.optional(v.string()),
+      })
+    ),
+  },
   handler: async (ctx, args) => {
     await requireProject(ctx, args.projectId);
+    const scope = args.scope ?? {};
+    // Caller-supplied document ids get the same ownership walk as everywhere
+    // else — the projectId eq below would already blank a foreign document,
+    // but failing loudly beats silently returning nothing.
+    if (scope.documentId) await requireDocument(ctx, scope.documentId);
     const q = args.q.trim();
     if (q.length < 2) {
       return { entities: [], documents: [], pages: [] };
     }
 
-    const entities = await ctx.db
-      .query("entities")
-      .withSearchIndex("search_name", (s) =>
-        s.search("name", q).eq("projectId", args.projectId)
-      )
-      .take(ENTITY_SUGGESTIONS);
+    // A prefix narrows the question, so the narrowed section gets more of
+    // the answer.
+    const entityCap = scope.entityType ? 8 : ENTITY_SUGGESTIONS;
+    const documentCap =
+      scope.docField || scope.kind || scope.category
+        ? 8
+        : DOCUMENT_SUGGESTIONS;
+    const pageCap = scope.documentId ? 8 : PAGE_SUGGESTIONS;
+
+    // Entity rows store the legacy type spelling ("people") but older rows
+    // may carry either form; probe both when they differ.
+    const entityTypeFilters = scope.entityType
+      ? [
+          ...new Set([
+            STABLE_TO_LEGACY[scope.entityType] ?? scope.entityType,
+            scope.entityType,
+          ]),
+        ]
+      : [undefined];
+    const skipEntities = scope.documentId !== undefined;
+    const entityLists = skipEntities
+      ? []
+      : await Promise.all(
+          entityTypeFilters.map((type) =>
+            ctx.db
+              .query("entities")
+              .withSearchIndex("search_name", (s) => {
+                const base = s
+                  .search("name", q)
+                  .eq("projectId", args.projectId);
+                return type === undefined ? base : base.eq("type", type);
+              })
+              .take(entityCap)
+          )
+        );
+    const entities = [];
+    const seenEntities = new Set<Id<"entities">>();
+    for (const e of entityLists.flat()) {
+      if (entities.length >= entityCap) break;
+      if (seenEntities.has(e._id)) continue;
+      seenEntities.add(e._id);
+      entities.push(e);
+    }
 
     // Both of a document's names are searchable, through one index each.
     // `displayName` — the title the rename pass wrote, and the only name most
     // of the UI shows — leads, because it is what someone typing "Roe" means.
     // `name`, the upload filename, follows for the reader who remembers the
-    // file they dropped in.
-    const [titleMatches, filenameMatches] = await Promise.all([
-      ctx.db
-        .query("documents")
-        .withSearchIndex("search_displayName", (s) =>
-          s.search("displayName", q).eq("projectId", args.projectId)
-        )
-        .take(DOCUMENT_SUGGESTIONS),
-      ctx.db
-        .query("documents")
-        .withSearchIndex("search_name", (s) =>
-          s.search("name", q).eq("projectId", args.projectId)
-        )
-        .take(DOCUMENT_SUGGESTIONS),
-    ]);
+    // file they dropped in. A docField prefix picks exactly one of the two.
+    const skipDocuments = scope.documentId !== undefined;
+    const [titleMatches, filenameMatches] = skipDocuments
+      ? [[], []]
+      : await Promise.all([
+          scope.docField === "file"
+            ? Promise.resolve([])
+            : ctx.db
+                .query("documents")
+                .withSearchIndex("search_displayName", (s) => {
+                  let f = s
+                    .search("displayName", q)
+                    .eq("projectId", args.projectId);
+                  if (scope.kind) f = f.eq("primaryKind", scope.kind);
+                  if (scope.category)
+                    f = f.eq("primaryCategory", scope.category);
+                  return f;
+                })
+                .take(documentCap),
+          scope.docField === "title"
+            ? Promise.resolve([])
+            : ctx.db
+                .query("documents")
+                .withSearchIndex("search_name", (s) => {
+                  let f = s.search("name", q).eq("projectId", args.projectId);
+                  if (scope.kind) f = f.eq("primaryKind", scope.kind);
+                  if (scope.category)
+                    f = f.eq("primaryCategory", scope.category);
+                  return f;
+                })
+                .take(documentCap),
+        ]);
 
     const documents: Doc<"documents">[] = [];
     const seenDocuments = new Set<Id<"documents">>();
     for (const doc of [...titleMatches, ...filenameMatches]) {
-      if (documents.length >= DOCUMENT_SUGGESTIONS) break;
+      if (documents.length >= documentCap) break;
       if (seenDocuments.has(doc._id)) continue;
       seenDocuments.add(doc._id);
       documents.push(doc);
     }
 
-    const targetLanguageCode = (
-      await languageForProject(ctx, args.projectId)
-    ).defaultLanguageCode;
-    const [translatedPageHits, pageHits] = await Promise.all([
+    const targetLanguageCode =
+      scope.languageCode ??
+      (await languageForProject(ctx, args.projectId)).defaultLanguageCode;
+    const [translatedPageHitsRaw, pageHits] = await Promise.all([
       ctx.db
         .query("pageTranslations")
         .withSearchIndex("search_text", (s) =>
@@ -142,14 +219,24 @@ export const suggest = authedQuery({
             .eq("status", "complete")
             .eq("projectId", args.projectId)
         )
-        .take(PAGE_SUGGESTIONS * 2),
+        .take(pageCap * 2),
       ctx.db
         .query("pages")
-        .withSearchIndex("search_text", (s) =>
-          s.search("text", q).eq("projectId", args.projectId)
-        )
-        .take(PAGE_SUGGESTIONS * 2),
+        .withSearchIndex("search_text", (s) => {
+          const base = s.search("text", q).eq("projectId", args.projectId);
+          return scope.documentId
+            ? base.eq("documentId", scope.documentId)
+            : base;
+        })
+        .take(pageCap * 2),
     ]);
+    // pageTranslations' index has no documentId filterField; a doc: scope
+    // post-filters the handful of rows instead.
+    const translatedPageHits = scope.documentId
+      ? translatedPageHitsRaw.filter(
+          (t) => t.documentId === scope.documentId
+        )
+      : translatedPageHitsRaw;
 
     const docNames = new Map<Id<"documents">, string>();
     for (const doc of documents) docNames.set(doc._id, titleOf(doc));
