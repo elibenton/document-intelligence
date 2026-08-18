@@ -62,11 +62,26 @@ export const create = authedMutation({
     sectionTitle: v.optional(v.string()),
     rects: v.array(rectValidator),
     blockIds: v.array(v.string()),
+    timeRange: v.optional(v.object({ start: v.number(), end: v.number() })),
   },
   handler: async (ctx, args) => {
     const document = await requireDocument(ctx, args.documentId);
-    if (args.rects.length === 0) {
-      throw new Error("An annotation needs at least one rect to anchor to");
+    // One anchor, geometry or time — never neither. The XOR keeps the PDF
+    // path failing loudly on empty rects while transcript highlights anchor
+    // by time alone.
+    if (args.rects.length === 0 && args.timeRange === undefined) {
+      throw new Error("An annotation needs a rect or a time range to anchor to");
+    }
+    if (
+      args.timeRange !== undefined &&
+      !(
+        Number.isFinite(args.timeRange.start) &&
+        Number.isFinite(args.timeRange.end) &&
+        args.timeRange.start >= 0 &&
+        args.timeRange.end > args.timeRange.start
+      )
+    ) {
+      throw new Error("A time range must be a forward span of seconds");
     }
 
     const now = Date.now();
@@ -80,6 +95,7 @@ export const create = authedMutation({
       sectionTitle: args.sectionTitle,
       rects: args.rects,
       blockIds: args.blockIds,
+      timeRange: args.timeRange,
       createdAt: now,
       updatedAt: now,
     });

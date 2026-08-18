@@ -625,6 +625,12 @@ export default defineSchema({
     // load every document row to filter.
     projectId: v.optional(v.id("projects")),
     pageNumber: v.number(), // 0-indexed, matching pages/blocks
+    // Transcript highlights anchor by time, not geometry: re-transcription
+    // deletes and rewrites every segment (indices go stale by construction)
+    // but times re-anchor at paint through the word timestamps. Such rows
+    // carry pageNumber 0 (the transcript IS page 0 in the mirror) and empty
+    // rects; one anchor — geometry or time — is required (annotations.ts).
+    timeRange: v.optional(v.object({ start: v.number(), end: v.number() })),
     color: v.union(
       v.literal("yellow"),
       v.literal("green"),

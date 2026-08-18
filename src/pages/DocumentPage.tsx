@@ -12,7 +12,10 @@ import { ImageViewer } from "@/components/viewer/ImageViewer";
 import { WebClipViewer } from "@/components/viewer/WebClipViewer";
 import { CsvViewer } from "@/components/viewer/CsvViewer";
 import { TranslatedDocumentView } from "@/components/viewer/TranslatedDocumentView";
-import { RecordingView } from "@/components/recordings/RecordingView";
+import {
+  RecordingView,
+  type RecordingViewRef,
+} from "@/components/recordings/RecordingView";
 import { ViewerLayout } from "@/components/viewer/ViewerLayout";
 import { ContentsPanel } from "@/components/viewer/ContentsPanel";
 import { NotesPanel } from "@/components/viewer/NotesPanel";
@@ -119,6 +122,7 @@ export default function DocumentPage({ id }: { id: string }) {
     viewerMetrics.zoomFloor
   );
   const viewerRef = useRef<PdfViewerRef | null>(null);
+  const recordingRef = useRef<RecordingViewRef | null>(null);
 
   const handleVisiblePageChange = useCallback((page: number) => {
     setCurrentPage(page);
@@ -584,6 +588,7 @@ export default function DocumentPage({ id }: { id: string }) {
           viewer={
             isRecording ? (
               <RecordingView
+                ref={recordingRef}
                 document={document}
                 url={url}
                 showTranslation={
@@ -918,6 +923,11 @@ export default function DocumentPage({ id }: { id: string }) {
                     activeId={activeAnnotationId}
                     onActivate={setActiveAnnotationId}
                     onNavigate={scrollToPage}
+                    onSeek={
+                      isRecording
+                        ? (seconds) => recordingRef.current?.seekTo(seconds)
+                        : undefined
+                    }
                   />
                 </div>
               </TabsContent>

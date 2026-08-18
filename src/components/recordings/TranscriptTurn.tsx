@@ -3,6 +3,13 @@ import { cn } from "@/lib/utils";
 import { languageDirection } from "@/lib/languages";
 import { formatTime } from "./speakerColors";
 
+export interface TurnHighlight {
+  start: number;
+  end: number;
+  /** Translucent fill from annotationColors — composes with karaoke. */
+  fill: string;
+}
+
 export interface TurnSegment {
   _id: string;
   speaker: string;
@@ -28,6 +35,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   isActive,
   activeWordIndex,
   showTranslation,
+  highlights,
   onSeek,
   activeWordRef,
 }: {
@@ -38,6 +46,9 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   isActive: boolean;
   activeWordIndex: number;
   showTranslation: boolean;
+  /** Time-anchored highlights overlapping this turn; empty for most turns,
+   *  which keeps the memo effective. */
+  highlights?: TurnHighlight[];
   onSeek: (time: number) => void;
   activeWordRef: (el: HTMLSpanElement | null) => void;
 }) {
@@ -70,6 +81,9 @@ export const TranscriptTurn = memo(function TranscriptTurn({
         ) : seg.words.length > 0 ? (
           seg.words.map((w, wi) => {
             const wordActive = isActive && activeWordIndex === wi;
+            const highlight = highlights?.find(
+              (h) => w.start < h.end && w.end > h.start,
+            );
             return (
               <span
                 key={w.start}
@@ -80,6 +94,11 @@ export const TranscriptTurn = memo(function TranscriptTurn({
                   "cursor-pointer rounded px-0.5 hover:bg-primary/15",
                   wordActive && "bg-primary/25",
                 )}
+                style={
+                  highlight && !wordActive
+                    ? { backgroundColor: highlight.fill }
+                    : undefined
+                }
                 title={formatTime(w.start)}
               >
                 {w.word}{" "}

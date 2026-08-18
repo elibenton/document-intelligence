@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQuery, useMutation } from "convex/react";
 import { ArrowDownToLine, Loader2, RefreshCw, Users } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
@@ -13,16 +21,32 @@ import { TranscriptTurn } from "./TranscriptTurn";
 import { TransportBar } from "./TransportBar";
 import { SpeakerNamingDialog } from "./SpeakerNamingDialog";
 import { transcriptSignature } from "../../../convex/speakerSignature";
+import {
+  SelectionPopover,
+  type SelectionAnchor,
+} from "@/components/viewer/SelectionPopover";
+import { annotationColor } from "@/components/viewer/annotationColors";
+import { useConfirm } from "@/components/ui/use-confirm";
 
-export function RecordingView({
-  document: doc,
-  url,
-  showTranslation = false,
-}: {
-  document: Doc<"documents">;
-  url: string | null | undefined;
-  showTranslation?: boolean;
-}) {
+export interface RecordingViewRef {
+  seekTo: (seconds: number) => void;
+}
+
+interface PendingNote {
+  anchor: SelectionAnchor;
+  timeRange: { start: number; end: number };
+  text: string;
+  blockIds: string[];
+}
+
+export const RecordingView = forwardRef<
+  RecordingViewRef,
+  {
+    document: Doc<"documents">;
+    url: string | null | undefined;
+    showTranslation?: boolean;
+  }
+>(function RecordingView({ document: doc, url, showTranslation = false }, ref) {
   const segments = useQuery(api.transcripts.byDocument, {
     documentId: doc._id,
   });
@@ -183,10 +207,127 @@ export function RecordingView({
     onPause: () => setPlaying(false),
   };
 
+  // Notes: highlights anchor by time, so they survive re-transcription (the
+  // segments are disposable, the seconds are not). Selection resolves through
+  // the data-seg/data-word attributes the word spans already carry.
+  const annotations = useQuery(api.annotations.byDocument, {
+    documentId: doc._id,
+  });
+  const createAnnotation = useMutation(api.annotations.create);
+  const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
+
+  const highlightsBySegment = useMemo(() => {
+    const map = new Map<number, { start: number; end: number; fill: string }[]>();
+    if (!segments || !annotations) return map;
+    for (const note of annotations) {
+      if (!note.timeRange) continue;
+      const fill = annotationColor(note.color).fill;
+      for (let si = 0; si < segments.length; si++) {
+        const seg = segments[si];
+        if (note.timeRange.start < seg.endTime && note.timeRange.end > seg.startTime) {
+          const bucket = map.get(si);
+          const entry = { ...note.timeRange, fill };
+          if (bucket) bucket.push(entry);
+          else map.set(si, [entry]);
+        }
+      }
+    }
+    return map;
+  }, [segments, annotations]);
+
+  const clearPendingNote = useCallback(() => {
+    setPendingNote(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
+  const onTranscriptPointerUp = useCallback(() => {
+    if (!segments) return;
+    const selection = window.getSelection();
+    // A click is a zero-length selection; without this every seek would pop
+    // the note menu.
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      setPendingNote(null);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const wordEl = (node: Node) =>
+      (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>(
+        "[data-word]",
+      ) ?? null;
+    const startEl = wordEl(range.startContainer);
+    const endEl = wordEl(range.endContainer);
+    if (!startEl || !endEl) return;
+    const pos = (el: HTMLElement) => ({
+      seg: Number(el.closest<HTMLElement>("[data-seg]")?.dataset.seg ?? -1),
+      word: Number(el.dataset.word ?? -1),
+    });
+    let a = pos(startEl);
+    let b = pos(endEl);
+    if (a.seg < 0 || b.seg < 0 || a.word < 0 || b.word < 0) return;
+    if (a.seg > b.seg || (a.seg === b.seg && a.word > b.word)) [a, b] = [b, a];
+    const startWord = segments[a.seg]?.words[a.word];
+    const endWord = segments[b.seg]?.words[b.word];
+    if (!startWord || !endWord) return;
+    // The stored text is the covered words joined — it matches the anchor
+    // exactly, unlike selection.toString() with its DOM whitespace.
+    const parts: string[] = [];
+    for (let si = a.seg; si <= b.seg; si++) {
+      const words = segments[si].words;
+      const from = si === a.seg ? a.word : 0;
+      const to = si === b.seg ? b.word : words.length - 1;
+      parts.push(words.slice(from, to + 1).map((w) => w.word).join(" "));
+    }
+    const rect = range.getBoundingClientRect();
+    setPendingNote({
+      anchor: {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+      },
+      timeRange: { start: startWord.start, end: endWord.end },
+      text: parts.join(" "),
+      blockIds: Array.from(
+        { length: b.seg - a.seg + 1 },
+        (_, i) => `transcript_seg${a.seg + i}`,
+      ),
+    });
+  }, [segments]);
+
+  async function saveNote(color: string, comment?: string) {
+    if (!pendingNote) return;
+    await createAnnotation({
+      documentId: doc._id,
+      // The transcript IS page 0 in the mirror — truthful, not a fudge.
+      pageNumber: 0,
+      color: color as "yellow" | "green" | "blue" | "pink" | "purple",
+      text: pendingNote.text,
+      comment,
+      rects: [],
+      blockIds: pendingNote.blockIds,
+      timeRange: pendingNote.timeRange,
+    });
+    clearPendingNote();
+  }
+
+  useImperativeHandle(ref, () => ({ seekTo }), [seekTo]);
+
   const isProcessing = doc.status === "uploaded" || doc.status === "parsing";
   const failed = doc.status === "failed";
+  const confirm = useConfirm();
 
   async function startTranscription() {
+    // Destructive for the transcript's derived state: names re-confirm by
+    // signature, highlights re-anchor by time (possibly ±1 word), but any
+    // future text corrections die with the segments. Say so before running.
+    if (segments && segments.length > 0) {
+      const ok = await confirm({
+        title: "Re-transcribe this recording?",
+        body: "The transcript is replaced. Highlights re-anchor by time, and you'll be asked to re-confirm speaker names if the diarization changed.",
+        confirmLabel: "Re-transcribe",
+      });
+      if (!ok) return;
+    }
     setRetrying(true);
     try {
       await retranscribe({ documentId: doc._id });
@@ -242,6 +383,7 @@ export function RecordingView({
       <div
         ref={scrollRef}
         onScroll={onUserScroll}
+        onPointerUp={onTranscriptPointerUp}
         className="relative flex-1 overflow-y-auto p-6"
       >
         <div className="flex items-center justify-between mb-4">
@@ -319,6 +461,7 @@ export function RecordingView({
                 isActive={active.segment === si}
                 activeWordIndex={active.segment === si ? active.word : -1}
                 showTranslation={showTranslation}
+                highlights={highlightsBySegment.get(si)}
                 onSeek={seekTo}
                 activeWordRef={(el) => {
                   if (el) activeWordRef.current = el;
@@ -360,6 +503,15 @@ export function RecordingView({
           onPlayClip={playClip}
         />
       )}
+
+      {pendingNote && (
+        <SelectionPopover
+          anchor={pendingNote.anchor}
+          onHighlight={(color) => void saveNote(color)}
+          onComment={(color, comment) => void saveNote(color, comment)}
+          onDismiss={clearPendingNote}
+        />
+      )}
     </div>
   );
-}
+});

@@ -5,6 +5,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 import { annotationColor } from "./annotationColors";
+import { formatTime } from "@/components/recordings/speakerColors";
 
 /**
  * Every highlight and comment on the document, in reading order, grouped under
@@ -19,12 +20,16 @@ export function NotesPanel({
   activeId,
   onActivate,
   onNavigate,
+  onSeek,
 }: {
   documentId: Id<"documents">;
   activeId: string | null;
   onActivate: (id: string | null) => void;
   /** Scroll the viewer to a 1-indexed page. */
   onNavigate: (pageNumber: number) => void;
+  /** Recordings: seek playback instead of scrolling — a time-anchored note
+   *  navigates by seconds, not pages. */
+  onSeek?: (seconds: number) => void;
 }) {
   const annotations = useQuery(api.annotations.byDocument, { documentId });
   const removeAnnotation = useMutation(api.annotations.remove);
@@ -72,7 +77,8 @@ export function NotesPanel({
               note={note}
               active={note._id === activeId}
               onSelect={() => {
-                onNavigate(note.pageNumber + 1);
+                if (note.timeRange && onSeek) onSeek(note.timeRange.start);
+                else onNavigate(note.pageNumber + 1);
                 onActivate(note._id);
               }}
               onDelete={() => {
@@ -127,7 +133,9 @@ function NoteRow({
           </span>
         )}
         <span className="pl-4.5 text-2xs text-muted-foreground">
-          Page {note.pageNumber + 1}
+          {note.timeRange
+            ? formatTime(note.timeRange.start)
+            : `Page ${note.pageNumber + 1}`}
         </span>
       </button>
       <button
