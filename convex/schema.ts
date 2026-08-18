@@ -221,28 +221,6 @@ export default defineSchema({
     reviewSkippedAt: v.optional(v.number()),
     uploadedAt: v.number(),
     completedAt: v.optional(v.number()),
-    // DEAD (2026-08-18): the server geometry-extraction lifecycle these
-    // tracked is deleted — geometry comes from OCR precontext on the
-    // understanding call, pixels from client pdf.js. Nothing writes or reads
-    // them; they validate rows in the wild until migrations.stripRenderFields
-    // has run everywhere, after which they can be removed (widen → migrate →
-    // narrow).
-    renderScheduledAt: v.optional(v.number()),
-    renderStatus: v.optional(
-      v.union(
-        v.literal("queued"),
-        v.literal("rendering"),
-        v.literal("complete"),
-        v.literal("failed")
-      )
-    ),
-    renderExpectedPages: v.optional(v.number()),
-    renderedPageCount: v.optional(v.number()),
-    rendererVersion: v.optional(v.number()),
-    renderLastError: v.optional(v.string()),
-    renderAttempts: v.optional(v.number()),
-    renderStartedAt: v.optional(v.number()),
-    renderCompletedAt: v.optional(v.number()),
     // Clockwise presentation rotation applied to every page. Per-page
     // adjustments are additive (pages.viewerRotationAdjustment).
     viewerRotation: v.optional(
@@ -417,7 +395,6 @@ export default defineSchema({
       )
     ),
     nativeGeometryScore: v.optional(v.number()),
-    geometryVersion: v.optional(v.number()),
     viewerRotationAdjustment: v.optional(
       v.union(v.literal(0), v.literal(90), v.literal(180), v.literal(270))
     ),

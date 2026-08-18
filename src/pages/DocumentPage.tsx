@@ -177,7 +177,6 @@ export default function DocumentPage({ id }: { id: string }) {
   const isPdfDocument =
     !isCsv &&
     (document?.mediaType === "pdf" ||
-      document?.mediaType === "docx" ||
       document?.mimeType === "application/pdf");
   /**
    * How many pages the viewer lays out.

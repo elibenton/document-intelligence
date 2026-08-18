@@ -218,7 +218,6 @@ async function reconcilePagesAndBlocks(
       textSource: "ocr" as const,
       nativeTextVisibility: canonicalPage?.nativeTextVisibility,
       nativeGeometryScore: canonicalPage?.nativeGeometryScore,
-      geometryVersion: canonicalPage?.geometryVersion,
       viewerRotationAdjustment: canonicalPage?.viewerRotationAdjustment,
       ...(dims ? { width: dims.width, height: dims.height } : {}),
     };
