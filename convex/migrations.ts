@@ -333,3 +333,50 @@ export const backfillMergeSuggestionProjects = internalMutation({
     return null;
   },
 });
+
+/**
+ * Stamp `projectId` onto relationship rows written before the field existed,
+ * so the project timeline's by_project_event index sees their dated events.
+ *
+ * Run once, after the schema push:
+ *   npx convex run migrations:backfillRelationshipProjectIds
+ *
+ * Rows with no documentId (or a deleted document) are left untouched — they
+ * carry no provenance, so the timeline has nothing to cite for them anyway.
+ * Paginated, self-rescheduling, skip-if-stamped: safe to re-run and safe to
+ * run while ingestion writes new rows (which stamp themselves).
+ */
+export const backfillRelationshipProjectIds = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("relationships")
+      .paginate({ cursor: args.cursor ?? null, numItems: 200 });
+
+    // Relationships cluster heavily by document, so one document read serves
+    // most of a batch.
+    const projectByDoc = new Map<Id<"documents">, Id<"projects"> | undefined>();
+    for (const row of page.page) {
+      if (row.projectId !== undefined || !row.documentId) continue;
+      if (!projectByDoc.has(row.documentId)) {
+        projectByDoc.set(
+          row.documentId,
+          (await ctx.db.get(row.documentId))?.projectId
+        );
+      }
+      const projectId = projectByDoc.get(row.documentId);
+      if (projectId === undefined) continue;
+      await ctx.db.patch(row._id, { projectId });
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.migrations.backfillRelationshipProjectIds,
+        { cursor: page.continueCursor }
+      );
+    }
+    return null;
+  },
+});

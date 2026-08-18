@@ -12,7 +12,26 @@ import {
   relationSortIndex,
 } from "./relationTypes";
 import { authedQuery } from "./authz";
-import { requireDocument, requireEntity } from "./ownership";
+import { requireDocument, requireEntity, requireProject } from "./ownership";
+import { sanitizeDocumentDate } from "./metadata";
+
+/**
+ * An event date the by_project_event index can order: an ISO prefix, or
+ * nothing. Same shape/impossible-date validation as document dates (via the
+ * shared sanitizer), minus the future-date rejection — a document can
+ * legitimately describe a scheduled event. Precision is derived from the
+ * shape rather than asked for: events carry no precision field.
+ */
+export function sanitizeEventDate(raw: string | undefined): string | undefined {
+  const value = (raw ?? "").trim();
+  if (!value) return undefined;
+  const precision = /^\d{4}$/.test(value)
+    ? "year"
+    : /^\d{4}-\d{2}$/.test(value)
+      ? "month"
+      : "day";
+  return sanitizeDocumentDate({ value, precision }, Infinity)?.documentDate;
+}
 
 // ---------------------------------------------------------------------------
 // Mutation: resolve names to entities and store relationship rows
@@ -57,7 +76,8 @@ export const ingestGraph = internalMutation({
     // deleted id" rollback every other ingest path relies on. Deleting a
     // document during the reasoning call would otherwise land a whole graph —
     // and inflated counts on surviving entities — for a document that is gone.
-    if ((await ctx.db.get(args.documentId)) === null) return;
+    const document = await ctx.db.get(args.documentId);
+    if (document === null) return;
 
     // Re-run safety: replace this document's relationships
     const existing = await ctx.db
@@ -195,10 +215,13 @@ export const ingestGraph = internalMutation({
         targetEntityId: targetId,
         relationType: rel.relationType,
         confidence: rel.confidence,
+        projectId: document.projectId,
         documentId: args.documentId,
         quote: rel.quote || undefined,
         pageNumber: rel.pageNumber,
-        eventDate: rel.eventDate,
+        // Keep the relationship, drop a malformed date: the fact is real even
+        // when the model put a sentence where an ISO prefix belongs.
+        eventDate: sanitizeEventDate(rel.eventDate),
         place: rel.place,
       });
     }
@@ -521,3 +544,83 @@ export function normalizeGraphResponse(parsed: GraphResponse): {
 // The standalone extract action is gone: the entity graph rides along on the
 // single understanding call (processingStages.runPipeline / analyzeAndStore),
 // which ingests it via `ingestGraph` below.
+
+// The most dated events one timeline page will render; reported alongside the
+// rows so the UI can say when it is showing a truncated view.
+const TIMELINE_EVENT_CAP = 1000;
+
+/**
+ * The project's dated events, oldest first, joined to their endpoints and
+ * source document — the event half of the project timeline. The index range
+ * starts above the empty string, which excludes every undated row for free;
+ * legacy free-text dates (pre-sanitizer) can still lurk in old rows, so the
+ * client's ISO-prefix check remains the final inclusion test.
+ */
+export const forProjectTimeline = authedQuery({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
+    const rows = await ctx.db
+      .query("relationships")
+      .withIndex("by_project_event", (q) =>
+        q.eq("projectId", args.projectId).gt("eventDate", "")
+      )
+      .take(TIMELINE_EVENT_CAP + 1);
+    const capped = rows.length > TIMELINE_EVENT_CAP;
+
+    const entityCache = new Map<
+      Id<"entities">,
+      { _id: Id<"entities">; name: string; slug?: string } | null
+    >();
+    const docCache = new Map<
+      Id<"documents">,
+      { _id: Id<"documents">; name: string; displayName?: string } | null
+    >();
+    const entityOf = async (id: Id<"entities">) => {
+      if (!entityCache.has(id)) {
+        const row = await ctx.db.get(id);
+        entityCache.set(
+          id,
+          row ? { _id: row._id, name: row.name, slug: row.slug } : null
+        );
+      }
+      return entityCache.get(id) ?? null;
+    };
+
+    const events = [];
+    for (const rel of rows.slice(0, TIMELINE_EVENT_CAP)) {
+      const source = await entityOf(rel.sourceEntityId);
+      const target = await entityOf(rel.targetEntityId);
+      if (!source || !target) continue;
+      let document = null;
+      if (rel.documentId) {
+        if (!docCache.has(rel.documentId)) {
+          const doc = await ctx.db.get(rel.documentId);
+          docCache.set(
+            rel.documentId,
+            doc
+              ? { _id: doc._id, name: doc.name, displayName: doc.displayName }
+              : null
+          );
+        }
+        document = docCache.get(rel.documentId) ?? null;
+      }
+      const canonical = canonicalizeRelation(rel.relationType);
+      events.push({
+        _id: rel._id,
+        eventDate: rel.eventDate!,
+        label: relationLabel(canonical.id, canonical.invert ? "incoming" : "outgoing"),
+        relationType: rel.relationType,
+        source,
+        target,
+        quote: rel.quote ?? null,
+        pageNumber: rel.pageNumber ?? null,
+        place: rel.place ?? null,
+        confidence: rel.confidence,
+        document,
+      });
+    }
+    events.sort((a, b) => a.eventDate.localeCompare(b.eventDate));
+    return { events, capped };
+  },
+});

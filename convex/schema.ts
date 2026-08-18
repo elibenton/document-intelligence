@@ -866,11 +866,22 @@ export default defineSchema({
     relationType: v.string(), // short verb phrase, e.g. "employed_by", "met_with", "paid"
     confidence: v.number(),
     mentionId: v.optional(v.id("mentions")),
+    // Denormalized from the document, same bargain as pages.projectId: the
+    // project timeline reads a project's dated events in one index pass.
+    // Optional only until backfillRelationshipProjectIds lands; ingestGraph
+    // always writes it. A relationship without a documentId legitimately has
+    // no project and stays timeline-invisible — it carries no provenance.
+    projectId: v.optional(v.id("projects")),
     // Provenance: which document asserted this, and the supporting quote
     documentId: v.optional(v.id("documents")),
     quote: v.optional(v.string()),
     pageNumber: v.optional(v.number()), // 0-indexed page where the quote appears
-    eventDate: v.optional(v.string()), // when the relationship occurred, if stated (ISO-ish)
+    // When the relationship occurred, if stated. Sanitized at ingest to an
+    // ISO prefix (YYYY / YYYY-MM / YYYY-MM-DD) so the index below orders
+    // cleanly; free-text values from before the sanitizer converge to
+    // undefined as documents re-analyze. Future dates are allowed — a
+    // document can describe a scheduled event.
+    eventDate: v.optional(v.string()),
     // Where this particular event happened, as the quote names it. Distinct
     // from documents.documentPlace, which is where the document itself is
     // from: a London-filed report can describe a meeting in Geneva.
@@ -878,7 +889,8 @@ export default defineSchema({
   })
     .index("by_source", ["sourceEntityId"])
     .index("by_target", ["targetEntityId"])
-    .index("by_document", ["documentId"]),
+    .index("by_document", ["documentId"])
+    .index("by_project_event", ["projectId", "eventDate"]),
 
   // One row per *distinct kind* of failure, not per failure.
   //

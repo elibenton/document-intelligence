@@ -14,6 +14,10 @@ export default function ProjectTimelinePage() {
     api.documents.list,
     project ? { projectId: project._id } : "skip",
   );
+  const eventResult = useQuery(
+    api.relationships.forProjectTimeline,
+    project ? { projectId: project._id } : "skip",
+  );
 
   if (project === null) {
     return (
@@ -45,7 +49,11 @@ export default function ProjectTimelinePage() {
           <Skeleton className="h-12 w-full" />
         </div>
       ) : (
-        <ProjectTimeline documents={documents} />
+        <ProjectTimeline
+          documents={documents}
+          events={eventResult?.events ?? []}
+          eventsCapped={eventResult?.capped ?? false}
+        />
       )}
     </PageShell>
   );
