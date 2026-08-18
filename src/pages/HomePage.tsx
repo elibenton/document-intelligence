@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import type { Route } from "./+types/HomePage";
 import {
   ArrowLeft,
+  CalendarClock,
   Plus,
   RotateCw,
   Settings,
@@ -568,10 +569,18 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
           {project?.name ?? ""}
         </span>
         <Link
+          to={`/p/${project.slug}/timeline`}
+          title="Project timeline"
+          aria-label="Project timeline"
+          className="ml-auto grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+        >
+          <CalendarClock className="size-4" />
+        </Link>
+        <Link
           to={`/p/${project.slug}/settings`}
           title="Project settings"
           aria-label="Project settings"
-          className="ml-auto grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+          className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
         >
           <Settings className="size-4" />
         </Link>

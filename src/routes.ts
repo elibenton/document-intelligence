@@ -18,6 +18,7 @@ export default [
       index("pages/ProjectsPage.tsx"),
       route("p/:slug", "pages/HomePage.tsx"),
       route("p/:slug/settings", "pages/ProjectSettingsPage.tsx"),
+      route("p/:slug/timeline", "pages/ProjectTimelinePage.tsx"),
       route("entity/:slug", "pages/EntityPage.tsx"),
       route("search", "pages/SearchPage.tsx"),
       route("settings", "pages/SettingsPage.tsx"),
