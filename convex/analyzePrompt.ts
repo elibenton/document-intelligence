@@ -687,15 +687,6 @@ function graphSchemaProperties(extraTypes: string[]) {
   };
 }
 
-/** Standalone graph schema — the shape the separate relationships call sends. */
-export function buildGraphSchema(extraTypes: string[]) {
-  return {
-    type: "object",
-    properties: graphSchemaProperties(extraTypes),
-    required: ["entities", "relationships"],
-  };
-}
-
 /**
  * What counts as an organization, and what counts as neither.
  *

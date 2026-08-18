@@ -26,5 +26,4 @@ export const DEMO_MAX_BYTES = 8_000_000;
 export const DEMO_UNAVAILABLE = "demo_unavailable";
 export const DEMO_ALREADY_USED = "demo_already_used";
 export const DEMO_TOO_LARGE = "demo_too_large";
-export const DEMO_TOO_MANY_PAGES = "demo_too_many_pages";
 export const DEMO_WRONG_TYPE = "demo_wrong_type";

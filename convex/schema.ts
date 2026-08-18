@@ -249,7 +249,6 @@ export default defineSchema({
     translationVersion: v.optional(v.number()),
   })
     .index("by_status", ["status"])
-    .index("by_uploadedAt", ["uploadedAt"])
     .index("by_project", ["projectId", "uploadedAt"])
     // Exact, bounded lookups for "is this category in use" and the settings
     // per-category breakdown — an unindexed field would force a full scan.
@@ -483,7 +482,6 @@ export default defineSchema({
       )
     ),
   })
-    .index("by_page", ["pageId"])
     .index("by_document", ["documentId", "pageNumber"]),
 
   // Human markup on a page: a colored highlight over a run of selected text,
@@ -680,7 +678,6 @@ export default defineSchema({
     // renaming the winner), so the value is stable once written.
     slug: v.optional(v.string()),
   })
-    .index("by_type", ["type", "mentionCount"])
     .index("by_name", ["name"])
     .index("by_project", ["projectId"])
     // projectId second: the same real-world name is a separate row per project,
@@ -732,8 +729,7 @@ export default defineSchema({
     errorMessage: v.optional(v.string()),
   })
     .index("by_document", ["documentId", "stage"])
-    .index("by_status", ["status"])
-    .index("by_stage_and_status", ["stage", "status"]),
+    .index("by_status", ["status"]),
 
   // Operator controls for the shared Interfaze pipeline. Every stage action
   // checks the pause flag as it starts (processing.bailIfPaused).
@@ -805,7 +801,6 @@ export default defineSchema({
     errorMessage: v.optional(v.string()),
     createdAt: v.number(),
   })
-    .index("by_createdAt", ["createdAt"])
     .index("by_project", ["projectId", "createdAt"]),
 
   // Entity relationships extracted from documents
@@ -959,10 +954,6 @@ export default defineSchema({
     // project afterwards, and historic rows keep the owner who actually paid.
     ownerId: v.optional(v.string()),
   })
-    // The table had no indexes: `list` worked only by riding by_creation_time.
-    // by_operation carries _creationTime as its implicit tiebreaker, so it
-    // answers every "last N days of operation X" question on its own.
-    .index("by_operation", ["operation"])
     .index("by_document", ["documentId"])
     .index("by_owner", ["ownerId"]),
 

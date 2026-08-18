@@ -307,12 +307,12 @@ export const updateIdentity = authedMutation({
   },
 });
 
+
 /**
- * Add kinds to a document without disturbing the ones it already has.
- *
- * `updateIdentity` replaces the whole set, which is right for the identity
- * editor but wrong for tagging a selection: the documents in a selection rarely
- * share a kind list, and replacing would flatten them all to the same one.
+ * Add kinds to a document without disturbing the ones it already has —
+ * replacing would be wrong for tagging a selection: the documents in a
+ * selection rarely share a kind list, and replacing would flatten them all to
+ * the same one.
  */
 export const addKinds = authedMutation({
   args: { id: v.id("documents"), kinds: v.array(v.string()) },
@@ -357,10 +357,8 @@ const DOCUMENT_SCOPED_TABLES = [
   "pages",
   "pageTranslations",
   "transcriptSegments",
-  "extractions",
   "detections",
   "annotations",
-  "research",
   "processingJobs",
   "relationships",
   "entityRoles",

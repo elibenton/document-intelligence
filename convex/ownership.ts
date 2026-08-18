@@ -1,7 +1,5 @@
-import { ConvexError, v } from "convex/values";
-import { internalQuery } from "./_generated/server";
-import type { ActionCtx, QueryCtx } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { ConvexError } from "convex/values";
+import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 
 /**
@@ -136,18 +134,6 @@ export async function requireProjectEntityType(
   return row;
 }
 
-export async function requireEntityRole(
-  ctx: OwnedCtx,
-  roleId: Id<"entityRoles">
-): Promise<Doc<"entityRoles">> {
-  const role = await ctx.db.get(roleId);
-  if (!role) throw new ConvexError(DENIED);
-  // No projectId of its own — a role is a claim about one entity in one
-  // document, and the document is the shorter walk.
-  await requireDocument(ctx, role.documentId);
-  return role;
-}
-
 export async function requireMergeSuggestion(
   ctx: OwnedCtx,
   suggestionId: Id<"mergeSuggestions">
@@ -162,16 +148,6 @@ export async function requireMergeSuggestion(
   return suggestion;
 }
 
-export async function requireTranscriptSegment(
-  ctx: OwnedCtx,
-  segmentId: Id<"transcriptSegments">
-): Promise<Doc<"transcriptSegments">> {
-  const segment = await ctx.db.get(segmentId);
-  if (!segment) throw new ConvexError(DENIED);
-  await requireDocument(ctx, segment.documentId);
-  return segment;
-}
-
 /**
  * Every project the caller owns. The list endpoints read this instead of
  * `ctx.db.query("projects")`, which is why `by_owner` exists.
@@ -181,45 +157,6 @@ export async function ownedProjects(ctx: OwnedCtx): Promise<Doc<"projects">[]> {
     .query("projects")
     .withIndex("by_owner", (q) => q.eq("ownerId", ctx.user._id))
     .collect();
-}
-
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
-/**
- * The walk, reachable from an action.
- *
- * An action has no `ctx.db`, so it cannot run `requireDocument` itself. It
- * takes the caller's id as an argument rather than reading `ctx.auth`, because
- * this is also the shape that would work if it were ever called from somewhere
- * identity does not reach — and because a query that trusted ambient identity
- * would be one refactor away from being scheduled and silently passing.
- *
- * Internal, so passing your own `userId` is not something an outside caller
- * can do.
- */
-export const assertOwnsDocument = internalQuery({
-  args: { userId: v.string(), documentId: v.id("documents") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await requireDocument(
-      { db: ctx.db, user: { _id: args.userId } },
-      args.documentId
-    );
-    return null;
-  },
-});
-
-/** `requireDocument` for the four authed actions. */
-export async function requireDocumentFromAction(
-  ctx: ActionCtx & { user: { _id: string } },
-  documentId: Id<"documents">
-): Promise<void> {
-  await ctx.runQuery(internal.ownership.assertOwnsDocument, {
-    userId: ctx.user._id,
-    documentId,
-  });
 }
 
 /**

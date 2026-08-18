@@ -48,26 +48,6 @@ export const textByDocument = internalQuery({
 });
 
 /**
- * The document's opening pages only — for pipelines that just need a taste of
- * the content (the rename pass). The by_document index is ordered by page
- * number, so `.take()` returns the first pages rather than an arbitrary few,
- * and a 500-page transcript costs the same read as a one-pager.
- */
-export const openingTextByDocument = internalQuery({
-  args: { documentId: v.id("documents"), pageCount: v.number() },
-  handler: async (ctx, args) => {
-    const pages = await ctx.db
-      .query("pages")
-      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .take(args.pageCount);
-    return pages.map((p) => ({
-      pageNumber: p.pageNumber,
-      text: p.text,
-    }));
-  },
-});
-
-/**
  * One page's display geometry. Replaces pageImages.byPage, which returned a
  * signed PNG URL alongside these dimensions — no raster has been produced since
  * server rendering was removed, so callers were falling back to a hardcoded

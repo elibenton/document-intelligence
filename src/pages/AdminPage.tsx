@@ -8,8 +8,8 @@ import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { StatCard } from "@/components/settings/StatCard";
 import { AccountLimitCell } from "@/components/settings/AccountLimitCell";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Info } from "lucide-react";
 
 /**
  * Deployment spend, for the owner.
@@ -144,10 +144,13 @@ export default function AdminPage() {
           <section>
             <SectionHeading>Last {days} days</SectionHeading>
             {data.window.truncated && (
-              <Alert className="mb-3">
-                Showing the most recent 5,000 calls. Totals below are a floor,
-                not the full window.
-              </Alert>
+              <div className="mb-3 flex gap-3 rounded-lg border border-border bg-muted px-3.5 py-3 text-sm">
+                <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <p className="min-w-0 flex-1 text-muted-foreground">
+                  Showing the most recent 5,000 calls. Totals below are a
+                  floor, not the full window.
+                </p>
+              </div>
             )}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <StatCard

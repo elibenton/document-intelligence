@@ -7,11 +7,9 @@ import { cn } from "@/lib/utils";
 function Progress({
   value,
   className,
-  barClassName,
 }: {
   value?: number | null;
   className?: string;
-  barClassName?: string;
 }) {
   const indeterminate = value == null;
   return (
@@ -28,8 +26,7 @@ function Progress({
       <div
         className={cn(
           "h-full rounded-full bg-primary transition-[width] duration-300 ease-out",
-          indeterminate && "progress-indeterminate absolute w-2/5",
-          barClassName
+          indeterminate && "progress-indeterminate absolute w-2/5"
         )}
         style={indeterminate ? undefined : { width: `${Math.min(100, Math.max(0, value))}%` }}
       />

@@ -29,12 +29,6 @@ export type FailureCode =
   /** Provider billed for transcription and returned no speech at all. */
   | "empty_transcript";
 
-/** Codes that no retry can clear — a human has to act before work resumes. */
-const TERMINAL_CODES: ReadonlySet<FailureCode> = new Set<FailureCode>([
-  "insufficient_credits",
-  "invalid_api_key",
-]);
-
 /** A classified failure: our code + a message written in the user's terms. */
 export class InterfazeFailure extends Error {
   readonly code?: FailureCode;
@@ -49,18 +43,9 @@ export class InterfazeFailure extends Error {
     this.code = options?.code;
     this.status = options?.status;
   }
-
-  /** True when retrying is pointless until someone changes the account state. */
-  get isTerminal(): boolean {
-    return this.code !== undefined && TERMINAL_CODES.has(this.code);
-  }
 }
 
 /** Read the failure code off an unknown caught value. */
 export function failureCodeOf(e: unknown): FailureCode | undefined {
   return e instanceof InterfazeFailure ? e.code : undefined;
-}
-
-export function isTerminalFailure(e: unknown): boolean {
-  return e instanceof InterfazeFailure && e.isTerminal;
 }

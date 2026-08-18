@@ -96,19 +96,6 @@ export async function enqueueStage(
   return true;
 }
 
-/** enqueueStage for callers in action context (stage chaining). */
-export const enqueue = internalMutation({
-  args: {
-    documentId: v.id("documents"),
-    stage: v.string(),
-    bypassCache: v.optional(v.boolean()),
-    promptOverride: v.optional(v.string()),
-  },
-  returns: v.boolean(),
-  handler: async (ctx, args) =>
-    enqueueStage(ctx, args.documentId, args.stage, args),
-});
-
 /**
  * Pause gate, called first thing by every pipeline stage action. When
  * processing is paused the job is canceled rather than run — pause exists to

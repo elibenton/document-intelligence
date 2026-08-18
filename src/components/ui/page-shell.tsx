@@ -80,33 +80,19 @@ export function PageShell({
 }
 
 /**
- * A section label inside a page. Two levels only — promoted out of
- * ViewPopover's PanelHeading, which had already got this right, because the
- * app was carrying sixteen section headers across two competing scales.
+ * A section label inside a page — promoted out of ViewPopover's PanelHeading,
+ * which had already got this right, because the app was carrying sixteen
+ * section headers across two competing scales.
  */
 export function SectionHeading({
   children,
-  level = "section",
   actions,
   className,
 }: {
   children: ReactNode;
-  level?: "section" | "sub";
   actions?: ReactNode;
   className?: string;
 }) {
-  if (level === "sub") {
-    return (
-      <p
-        className={cn(
-          "px-1 pb-1 text-2xs font-semibold uppercase tracking-[0.06em] text-muted-foreground",
-          className
-        )}
-      >
-        {children}
-      </p>
-    );
-  }
   return (
     <div className={cn("mb-3 flex items-center justify-between gap-3", className)}>
       <h2 className="text-lg font-semibold">{children}</h2>

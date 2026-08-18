@@ -8,8 +8,7 @@
     "build": "react-router typegen && tsc -b && react-router build",
     "deploy": "npx @convex-dev/static-hosting upload --build --dist ./build/client",
     "lint": "eslint .",
-    "test": "vitest run",
-    "preview": "vite preview"
+    "test": "vitest run"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

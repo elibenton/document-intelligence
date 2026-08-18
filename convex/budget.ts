@@ -1,7 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { internalQuery } from "./_generated/server";
-import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
-import { internal } from "./_generated/api";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { adminMutation, adminQuery, authedQuery } from "./authz";
 
 /**
@@ -86,24 +84,6 @@ export async function requireBudget(
   }
   return budget;
 }
-
-/** `requireBudget` for the authed actions, which have no `ctx.db`. */
-export async function requireBudgetFromAction(
-  ctx: ActionCtx & { user: { _id: string } }
-): Promise<void> {
-  await ctx.runQuery(internal.budget.assertWithinBudget, {
-    userId: ctx.user._id,
-  });
-}
-
-export const assertWithinBudget = internalQuery({
-  args: { userId: v.string() },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await requireBudget(ctx, args.userId);
-    return null;
-  },
-});
 
 /**
  * Add a call's cost to an account's ledger, creating the row on first spend.

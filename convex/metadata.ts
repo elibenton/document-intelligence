@@ -428,7 +428,7 @@ export const updateDocumentMeta = authedMutation({
   handler: async (ctx, args) => {
     await requireDocument(ctx, args.documentId);
     // The Info tab still edits a single kind; write the array alongside it so
-    // the two never drift (documents.updateIdentity writes both as well).
+    // the two never drift (documents.addKinds keeps both in step as well).
     const kind = args.primaryKind?.trim().toLowerCase();
     await ctx.db.patch(args.documentId, {
       ...(args.primaryKind !== undefined

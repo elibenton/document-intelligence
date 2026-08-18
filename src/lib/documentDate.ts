@@ -178,24 +178,6 @@ export function documentDateSortKey(doc: {
   return documentDateOf(doc)?.value ?? null;
 }
 
-/**
- * Compare two documents by their own date, newest or oldest first, with
- * undated documents pinned to the bottom either way — an unknown date is not
- * "very old", and letting it sort as one would bury real documents under it.
- */
-export function compareByDocumentDate(
-  a: Parameters<typeof documentDateSortKey>[0],
-  b: Parameters<typeof documentDateSortKey>[0],
-  direction: "newest" | "oldest"
-): number {
-  const aKey = documentDateSortKey(a);
-  const bKey = documentDateSortKey(b);
-  if (aKey === null && bKey === null) return 0;
-  if (aKey === null) return 1;
-  if (bKey === null) return -1;
-  return direction === "oldest" ? aKey.localeCompare(bKey) : bKey.localeCompare(aKey);
-}
-
 /** True when the document could be dated, for styling the label as absent. */
 export function hasDocumentDate(doc: {
   documentDate?: string;

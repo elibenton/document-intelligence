@@ -12,12 +12,10 @@ import { cn } from "@/lib/utils";
  */
 export function SearchField({
   className,
-  inputClassName,
   ref,
   ...props
 }: React.ComponentProps<"input"> & {
   className?: string;
-  inputClassName?: string;
 }) {
   return (
     <div className={cn("relative", className)}>
@@ -31,8 +29,7 @@ export function SearchField({
         className={cn(
           "h-12 w-full rounded-xl border border-border bg-card pl-11 pr-4 text-base shadow-sm outline-none transition-shadow",
           "placeholder:text-muted-foreground",
-          "focus:shadow-md focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring",
-          inputClassName
+          "focus:shadow-md focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring"
         )}
         {...props}
       />

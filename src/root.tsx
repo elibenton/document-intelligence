@@ -19,7 +19,6 @@ import "./index.css";
 import { authClient } from "@/lib/auth-client";
 import { ThemeProvider } from "@/lib/theme";
 import { Spinner } from "@/components/ui/spinner";
-import { ToastProvider } from "@/components/ui/toast";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PageShell } from "@/components/ui/page-shell";
@@ -228,8 +227,7 @@ export default function Root() {
         authClient={authClient as unknown as AuthClient}
       >
         <TooltipProvider>
-          <ToastProvider>
-            <ConfirmProvider>
+          <ConfirmProvider>
               {/* Every page's own <main> carries id="main"; the pages built on
                     PageShell get it for free. */}
               <a
@@ -241,8 +239,7 @@ export default function Root() {
               <div className="min-h-screen flex flex-col bg-background text-foreground max-w-[1800px] mx-auto">
                 <Outlet />
               </div>
-            </ConfirmProvider>
-          </ToastProvider>
+          </ConfirmProvider>
         </TooltipProvider>
       </ConvexBetterAuthProvider>
     </ThemeProvider>

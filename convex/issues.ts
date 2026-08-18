@@ -236,24 +236,6 @@ export const report = authedMutation({
   },
 });
 
-/**
- * The reporter for actions, which have no `ctx.db`. Internal: the pipeline
- * reaches it through the scheduler chain, where there is no identity to read
- * and ownership arrives as data.
- */
-export const record = internalMutation({
-  args: {
-    ...clientReportArgs,
-    ownerId: v.optional(v.string()),
-    documentId: v.optional(v.id("documents")),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await recordIssue(ctx, args);
-    return null;
-  },
-});
-
 // ---------------------------------------------------------------------------
 // Operator surface
 // ---------------------------------------------------------------------------

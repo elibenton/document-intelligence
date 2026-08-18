@@ -20,7 +20,6 @@ export function PdfPageCanvas({
   pageNumber,
   cssWidth,
   cssHeight,
-  onPainted,
   onPageSize,
 }: {
   pdf: PDFDocumentProxy;
@@ -28,7 +27,6 @@ export function PdfPageCanvas({
   pageNumber: number;
   cssWidth: number;
   cssHeight: number;
-  onPainted?: (pageNumber: number) => void;
   /**
    * The page's intrinsic size, reported as soon as pdf.js hands over the page.
    * The caller sizes the surface from it — see the note in PdfViewer on
@@ -73,10 +71,7 @@ export function PdfPageCanvas({
       try {
         task = page.render({ canvas, viewport });
         await task.promise;
-        if (!cancelled) {
-          setPainted(true);
-          onPainted?.(pageNumber);
-        }
+        if (!cancelled) setPainted(true);
       } catch (error) {
         // Scrolling past a page cancels its render. That is the normal path,
         // not a failure.
@@ -91,7 +86,7 @@ export function PdfPageCanvas({
       cancelled = true;
       task?.cancel();
     };
-  }, [pdf, pageNumber, cssWidth, onPainted, onPageSize]);
+  }, [pdf, pageNumber, cssWidth, onPageSize]);
 
   return (
     <>

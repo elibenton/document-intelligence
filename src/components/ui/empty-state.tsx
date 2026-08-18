@@ -13,13 +13,11 @@ import { cn } from "@/lib/utils";
 export function EmptyState({
   title,
   description,
-  action,
   variant = "block",
   className,
 }: {
   title: ReactNode;
   description?: ReactNode;
-  action?: ReactNode;
   /** `inline` for inside a panel or list; `block` for a page region. */
   variant?: "inline" | "block";
   className?: string;
@@ -40,7 +38,6 @@ export function EmptyState({
           {description}
         </p>
       )}
-      {action && <div className="mt-4 flex justify-center">{action}</div>}
     </div>
   );
 }

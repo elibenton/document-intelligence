@@ -234,11 +234,3 @@ export function relationLabel(
   if (relation.symmetric || direction === "outgoing") return relation.label;
   return relation.inverse || relation.label;
 }
-
-/** Group heading for a relation, always phrased from the subject's side. */
-export function relationGroupLabel(
-  id: string,
-  direction: "outgoing" | "incoming"
-): string {
-  return relationLabel(id, direction);
-}

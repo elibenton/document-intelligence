@@ -60,60 +60,6 @@ function geometryForPage(
   };
 }
 
-const cleanToken = (s: string) =>
-  s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-
-/**
- * Find the name as a consecutive run of OCR words inside a block; return the
- * union bounding box of the run (a tight box around just the name) and the
- * weakest word confidence in the run.
- */
-export function matchWordRun(
-  words: WordEntry[] | undefined,
-  name: string
-): { bbox?: WordEntry["bbox"]; confidence?: number } | null {
-  if (!words || words.length === 0) return null;
-  const nameTokens = name.split(/\s+/).map(cleanToken).filter(Boolean);
-  if (nameTokens.length === 0) return null;
-  const wordTokens = words.map((w) => cleanToken(w.text));
-
-  for (let i = 0; i + nameTokens.length <= words.length; i++) {
-    let matched = true;
-    for (let j = 0; j < nameTokens.length; j++) {
-      if (wordTokens[i + j] !== nameTokens[j]) {
-        matched = false;
-        break;
-      }
-    }
-    if (!matched) continue;
-
-    const run = words.slice(i, i + nameTokens.length);
-    const boxes = run
-      .map((w) => w.bbox)
-      .filter((b): b is NonNullable<WordEntry["bbox"]> => !!b);
-    const confs = run
-      .map((w) => w.confidence)
-      .filter((c): c is number => typeof c === "number");
-
-    let bbox: WordEntry["bbox"];
-    if (boxes.length > 0) {
-      const x = Math.min(...boxes.map((b) => b.x));
-      const y = Math.min(...boxes.map((b) => b.y));
-      bbox = {
-        x,
-        y,
-        width: Math.max(...boxes.map((b) => b.x + b.width)) - x,
-        height: Math.max(...boxes.map((b) => b.y + b.height)) - y,
-      };
-    }
-    return {
-      bbox,
-      confidence: confs.length > 0 ? Math.min(...confs) : undefined,
-    };
-  }
-  return null;
-}
-
 const parsedBlockValidator = v.object({
   blockId: v.string(),
   blockType: v.string(),

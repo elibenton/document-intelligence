@@ -1,4 +1,4 @@
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -41,18 +41,6 @@ async function writeControl(
 }
 
 export const get = authedQuery({
-  args: {},
-  returns: controlValidator,
-  handler: async (ctx) => {
-    const control = await readControl(ctx);
-    return {
-      paused: control?.paused ?? false,
-      ...(control?.pausedReason ? { pausedReason: control.pausedReason } : {}),
-    };
-  },
-});
-
-export const getInternal = internalQuery({
   args: {},
   returns: controlValidator,
   handler: async (ctx) => {
