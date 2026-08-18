@@ -2,8 +2,6 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
-import { renderEnqueueOptions, renderPool } from "./renderPool";
-import { vOnCompleteArgs } from "@convex-dev/workpool";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { authedMutation } from "./authz";
@@ -31,16 +29,15 @@ const nativeBlockValidator = v.object({
 
 
 // A render action can be killed by the platform (container eviction, the
-// 10-minute action limit) without its catch block ever running, which leaves
+// action time limit) without its catch block ever running, which leaves
 // renderStatus stuck on "rendering" with no renderLastError and no successor
-// scheduled — the viewer then shows "Preparing pages" forever.
+// scheduled — the viewer would show "Preparing pages" forever.
 //
-// renderPool is the primary recovery: its recovery scan reads the platform
-// scheduler and retries work the action itself never got to report on. This
-// watchdog is the backstop underneath it, for the case the pool cannot see —
-// a document left "rendering" with no live work item at all. It only ever
-// reports; retrying belongs to the pool, so the two never form competing
-// ladders. Every commitPage refreshes renderScheduledAt as the heartbeat.
+// Recovery is view-triggered: ensureRendered treats a render whose
+// renderScheduledAt heartbeat is stale as dead and re-schedules it, and
+// rendering is resumable (commits are versioned per page), so a re-kick only
+// redoes what the dead action never finished. Every commitPage refreshes
+// renderScheduledAt as the heartbeat.
 
 /**
  * Existing derivatives and their versions, used to make upgrades resumable.
@@ -91,10 +88,9 @@ export const beginRender = internalMutation({
         ? (doc.renderAttempts ?? 0) + 1
         : doc.renderAttempts,
     });
-    // No watchdog. renderPool retries a killed action and then reports the
-    // verdict once through renderJobComplete — a second timer could only ever
-    // duplicate that, and this one re-armed itself for as long as pages kept
-    // committing.
+    // No watchdog timer here: ensureRendered re-kicks a render whose
+    // heartbeat has gone stale, and rendering is resumable, so a killed
+    // action costs only the pages it never committed.
     return null;
   },
 });
@@ -329,36 +325,6 @@ export const failRender = internalMutation({
   },
 });
 
-/**
- * The single writer of the terminal render state. The pool calls this once the
- * work item is genuinely done — success, exhausted retries, or cancellation —
- * so an individual attempt's death never shows the user a failure the pool is
- * about to recover from.
- */
-export const renderJobComplete = internalMutation({
-  args: vOnCompleteArgs(
-    v.object({
-      documentId: v.id("documents"),
-      rendererVersion: v.number(),
-    })
-  ),
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    if (args.result.kind === "success") return null;
-    const error =
-      args.result.kind === "canceled"
-        ? "Page rendering was canceled."
-        : `Page rendering failed after every retry: ${args.result.error}`;
-    await markRenderFailed(
-      ctx,
-      args.context.documentId,
-      args.context.rendererVersion,
-      error
-    );
-    return null;
-  },
-});
-
 async function scheduleRender(
   ctx: MutationCtx,
   documentId: Id<"documents">
@@ -369,12 +335,10 @@ async function scheduleRender(
     renderLastError: undefined,
     renderScheduledAt: Date.now(),
   });
-  await renderPool.enqueueAction(
-    ctx,
-    internal.renderPages.renderBatch,
-    { documentId, startPage: 0 },
-    renderEnqueueOptions(documentId)
-  );
+  await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
+    documentId,
+    startPage: 0,
+  });
 }
 
 /** Ensure missing or outdated page derivatives are scheduled exactly once. */

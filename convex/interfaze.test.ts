@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ocrPrecontextToPages } from "./interfazeOcr";
-import { chunksToSegments } from "./interfazeStt";
-import type { Precontext } from "interfaze";
+import type { Precontext } from "./interfazeOcr";
 
 /**
  * Build an OCR result in Interfaze's precontext shape.

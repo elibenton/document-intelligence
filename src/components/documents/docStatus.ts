@@ -41,8 +41,9 @@ export function libraryStatus(doc: {
   if (doc.status !== "parsed") return null;
 
   // "parsed" is the window between the scan landing and extraction starting,
-  // which is exactly Analyze's window. Recordings included: they run Analyze
-  // over their mirrored transcript like any other document.
+  // which is exactly Analyze's window — but recordings skip Analyze entirely
+  // (convex/processingStages.ts:runTranscribe), so for them it is just the end.
+  if (isAudioVideo(doc)) return null;
   if (doc.analyzeStatus === "failed") return "Failed";
   // Analyze's output is what marks it finished. Once it lands, extraction is
   // already scheduled, so the row goes quiet for the moment in between rather

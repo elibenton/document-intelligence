@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useAction, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Check, RotateCw, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -45,18 +45,6 @@ interface Step {
   completedAt?: number;
 }
 
-interface ProcessingEstimateValue {
-  stage: string;
-  status: "pending" | "running";
-  queuedAt: number;
-  startedAt?: number;
-  estimatedDurationMs: number;
-  estimatedWaitMs: number;
-  queuePosition?: number;
-  sampleSize: number;
-  paused: boolean;
-}
-
 /** Ticks once per second while `active`, for live elapsed-time labels. */
 function useNow(active: boolean) {
   const [now, setNow] = useState(() => Date.now());
@@ -75,64 +63,11 @@ function formatDuration(ms: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
-function formatRoundedDuration(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 45) return "less than a minute";
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  return minutes === 1 ? "about a minute" : `about ${minutes} minutes`;
-}
-
-function estimateText(
-  estimate: ProcessingEstimateValue,
-  now: number
-): string {
-  if (estimate.paused && estimate.status === "pending") {
-    return "Paused in processing settings";
-  }
-  if (estimate.status === "pending") {
-    const ahead = Math.max(0, (estimate.queuePosition ?? 1) - 1);
-    const waited = Math.max(0, now - estimate.queuedAt);
-    const remainingWait = Math.max(0, estimate.estimatedWaitMs - waited);
-    if (ahead === 0 && remainingWait < 30_000) return "Starting soon";
-    const queue = ahead === 1 ? "1 job ahead" : `${ahead} jobs ahead`;
-    return `${queue} · ${formatRoundedDuration(remainingWait)} to start`;
-  }
-
-  const elapsed = estimate.startedAt ? Math.max(0, now - estimate.startedAt) : 0;
-  const remaining = estimate.estimatedDurationMs - elapsed;
-  if (remaining <= 0) return "Taking longer than recent runs";
-  return `${formatRoundedDuration(remaining)} remaining`;
-}
-
-export function ProcessingEstimate({
-  documentId,
-  className,
-}: {
-  documentId: Id<"documents">;
-  className?: string;
-}) {
-  const estimate = useQuery(api.processingJobs.estimateByDocument, { documentId });
-  const now = useNow(estimate?.status === "pending" || estimate?.status === "running");
-  if (!estimate) return null;
-  return (
-    <span
-      className={className}
-      title={
-        estimate.sampleSize > 0
-          ? `Estimate uses the median of ${estimate.sampleSize} recent ${estimate.stage} run${estimate.sampleSize === 1 ? "" : "s"}.`
-          : "Early estimate; this will improve as more jobs finish."
-      }
-    >
-      {estimateText(estimate, now)}
-    </span>
-  );
-}
-
 /**
  * Live pipeline for a document, as a vertical list: Scan → Analyze → Extract.
  *
  * Those three are the product's vocabulary. Scan and Analyze are now separate
- * pooled stages (convex/processingNode.ts), so Analyze can sit queued behind
+ * pooled stages (convex/processingStages.ts), so Analyze can sit queued behind
  * other documents rather than following Scan immediately. A queued Analyze
  * renders as running: "waiting" is reserved for waiting on the *user*, which
  * is what Extract does before a template is confirmed.
@@ -164,9 +99,9 @@ export function PipelineProgress({
   collapseWhenDone?: boolean;
 }) {
   const documentId = document._id as Id<"documents">;
-  const retryPipeline = useAction(api.processing.runFullPipeline);
-  const retryAnalyze = useAction(api.processing.runAnalyze);
-  const retryRelationships = useAction(api.processing.runRelationships);
+  const retryPipeline = useMutation(api.processing.runFullPipeline);
+  const retryAnalyze = useMutation(api.processing.runAnalyze);
+  const retryRelationships = useMutation(api.processing.runRelationships);
   const [retrying, setRetrying] = useState(false);
   const [dialog, setDialog] = useState<"analyze" | null>(null);
   const analyzePrompt = useQuery(
@@ -174,13 +109,7 @@ export function PipelineProgress({
     dialog === "analyze" ? { documentId } : "skip"
   );
   const jobs = useQuery(api.processingJobs.byDocument, { documentId });
-  const estimate = useQuery(api.processingJobs.estimateByDocument, { documentId });
-  // Only the collapsed "Processing complete" row shows the usage summary, so
-  // only that placement pays for the subscription.
-  const usage = useQuery(
-    api.apiLogs.byDocument,
-    collapseWhenDone ? { documentId } : "skip"
-  );
+  const control = useQuery(api.processingControl.get);
   const pages = useQuery(
     api.pages.byDocument,
     document.status === "parsing" || document.status === "uploaded"
@@ -218,7 +147,12 @@ export function PipelineProgress({
   const csv = isCsvDocument(document);
   const pageTotal = document.pageCount ?? pages?.length;
 
-  const analyzeDone = Boolean(document.metadata || document.primaryKind);
+  // Recordings never run the metadata pass (convex/processingStages.ts hands the
+  // transcript to the rename pass instead), so their analysis lands with the
+  // transcript rather than after it.
+  const analyzeDone = recording
+    ? parseDone
+    : Boolean(document.metadata || document.primaryKind);
 
   const scanStatus: StepStatus =
     parseJob?.status === "canceled" || (failed && parseStatus === "running")
@@ -353,7 +287,10 @@ export function PipelineProgress({
   ];
 
   const anyRunning = steps.some((s) => s.status === "running");
-  const anyActive = anyRunning || estimate?.status === "pending";
+  const anyPending = (jobs ?? []).some(
+    (j) => j.status === "pending" && j.workId
+  );
+  const anyActive = anyRunning || anyPending;
   const now = useNow(anyActive);
 
   const allDone = document.status === "completed" && !anyRunning;
@@ -424,20 +361,13 @@ export function PipelineProgress({
               ? "Processing failed"
               : allDone
                 ? "Processing complete"
-                : estimate?.status === "pending"
+                : anyPending && !anyRunning
                   ? "Queued"
                   : "Processing"}
           </h3>
-          {estimate && (
-            <span
-              className="text-xs text-foreground shrink-0"
-              title={
-                estimate.sampleSize > 0
-                  ? `Estimate uses the median of ${estimate.sampleSize} recent ${estimate.stage} run${estimate.sampleSize === 1 ? "" : "s"}.`
-                  : "Early estimate; this will improve as more jobs finish."
-              }
-            >
-              {estimateText(estimate, now)}
+          {control?.paused && anyActive && (
+            <span className="text-xs text-foreground shrink-0">
+              Paused in processing settings
             </span>
           )}
         </div>

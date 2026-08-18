@@ -23,7 +23,6 @@ import { internal } from "./_generated/api";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { RENDERER_VERSION } from "./rendererConfig";
-import { renderEnqueueOptions, renderPool } from "./renderPool";
 import type {
   PDFDocumentProxy,
   PDFPageProxy,
@@ -255,12 +254,9 @@ export const renderBatch = internalAction({
       // so every scheduling path (upload, ensureRendered, retry, backfill)
       // stays media-agnostic.
       if (doc.mediaType === "docx") {
-        await renderPool.enqueueAction(
-          ctx,
-          internal.docxRender.renderDocx,
-          { documentId: args.documentId },
-          renderEnqueueOptions(args.documentId)
-        );
+        await ctx.scheduler.runAfter(0, internal.docxRender.renderDocx, {
+          documentId: args.documentId,
+        });
         return null;
       }
       if (doc.mimeType !== "application/pdf" && doc.mediaType !== "pdf") {
@@ -332,13 +328,10 @@ export const renderBatch = internalAction({
       }
 
       if (pageIndex < pdf.numPages) {
-        // Continue through the pool so a killed successor is retried too.
-        await renderPool.enqueueAction(
-          ctx,
-          internal.renderPages.renderBatch,
-          { documentId: args.documentId, startPage: pageIndex },
-          renderEnqueueOptions(args.documentId)
-        );
+        await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
+          documentId: args.documentId,
+          startPage: pageIndex,
+        });
       } else {
         await ctx.runMutation(internal.render.completeRender, {
           documentId: args.documentId,
@@ -347,12 +340,21 @@ export const renderBatch = internalAction({
         });
       }
       return null;
-      // Deliberately no catch: errors propagate untouched. Do not write
-      // "failed" here. One attempt's death is not a verdict — the pool
-      // retries, and renderPool's onComplete records the terminal state once
-      // retries are exhausted. Writing it here would flash a failure the pool
-      // is about to recover from, disarm the watchdog, and burn an attempt on
-      // every retry.
+    } catch (error) {
+      // With no pool retrying behind this action, its own throw is the
+      // verdict. Record it (mirroring docxRender), then rethrow so the
+      // platform logs keep the original stack. A platform kill skips this
+      // catch entirely — ensureRendered's stale-heartbeat re-kick covers it.
+      try {
+        await ctx.runMutation(internal.pageImages.failRender, {
+          documentId: args.documentId,
+          rendererVersion: RENDERER_VERSION,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Keep the renderer's original error as the action failure.
+      }
+      throw error;
     } finally {
       if (pdf) await pdf.destroy();
     }

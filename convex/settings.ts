@@ -41,7 +41,7 @@ function normalizeLanguageCode(value: string): string {
 // to whoever owns it, so it is reached by the same walk authorization uses —
 // document → project → owner — and every existing call site already holds a
 // document or a project id. That is why none of this had to be threaded
-// through the workpool: Convex drops identity at the scheduler, but ownership
+// through the pipeline: Convex drops identity at the scheduler, but ownership
 // travels as data, and the language hangs off the owner.
 //
 // An account with no row gets DEFAULTS rather than an error. A missing

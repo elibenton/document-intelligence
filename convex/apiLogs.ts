@@ -70,7 +70,7 @@ export const record = internalMutation({
     // Resolved here rather than at the twelve logging call sites: this mutation
     // is the one place every recorded call passes through, so a new call site
     // cannot forget to attribute itself. There is no `ctx.auth` to read — this
-    // runs inside the workpool → scheduler → internal action chain, where
+    // runs inside the scheduler → internal action chain, where
     // Convex does not propagate identity, so ownership has to arrive as data.
     const { projectId: metaProjectId, ...row } = args;
     const projectId =

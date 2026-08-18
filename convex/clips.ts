@@ -127,7 +127,7 @@ export const createFromClip = internalMutation({
     // metadata pass with a hand-maintained subset schema, which had drifted:
     // it omitted suggested_extractions, so buildExtractionSchema returned null
     // and runInitialExtraction bailed — no clip has ever been extracted.
-    await ctx.scheduler.runAfter(0, internal.processingNode.runAnalyze, {
+    await ctx.scheduler.runAfter(0, internal.processingStages.runAnalyze, {
       documentId,
     });
 

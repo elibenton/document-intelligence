@@ -1,11 +1,21 @@
-"use node";
-
 /**
- * Interfaze client for Convex actions — built on the official `interfaze` SDK
- * (https://interfaze.ai/docs), a typed wrapper over the OpenAI Chat Completions
- * shape. A single completion returns both the model's answer and a `precontext`
- * array carrying the raw specialist metadata (for documents: OCR sections →
- * lines → words with bounding boxes and confidence).
+ * Interfaze client for Convex actions — a plain-`fetch` implementation of the
+ * OpenAI-compatible Chat Completions call Interfaze serves
+ * (https://interfaze.ai/docs). A single completion returns both the model's
+ * answer and a `precontext` array carrying the raw specialist metadata (for
+ * documents: OCR sections → lines → words with bounding boxes and confidence).
+ *
+ * This used to wrap the official `interfaze` SDK; the SDK was the only reason
+ * every Interfaze-calling action carried "use node". The wire behaviors the
+ * SDK contributed are reproduced here exactly, because the request body is a
+ * vcache input and a byte-level drift is a silent cache-miss regression:
+ *   - body key order: max_tokens?, reasoning_effort?, model, messages,
+ *     response_format? (the SDK's `prepare` spread order);
+ *   - `task` is not a body field — it becomes a `<task>…</task>` tag prepended
+ *     as/into the system message, plus an empty json_schema response_format;
+ *   - `bypassCache` is the `x-interfaze-bypass-cache: true` header;
+ *   - a file part is `{ type: "file", file: { file_data, filename?, format? } }`
+ *     with `format` derived from the filename extension.
  *
  * New document uploads run the dedicated `ocr` task rather than a full-model
  * completion: it is deterministic where the full model was not, and about a
@@ -15,29 +25,9 @@
  *
  * This module keeps a small set of app-facing helpers (`chatCompletion`,
  * `ocrDocument`, `analyzeDocumentText`, `extract`, and `transcribe`) so the
- * cross-cutting concerns the app owns — usage/cost logging and mapping the
- * SDK's typed errors onto the UI's FailureCodes — live in one place. Everything
- * else is the SDK.
+ * cross-cutting concerns the app owns — usage/cost logging and mapping HTTP
+ * failures onto the UI's FailureCodes — live in one place.
  */
-
-import {
-  Interfaze,
-  responseFormat,
-  inputs,
-  APIError,
-  AuthenticationError,
-  PermissionDeniedError,
-  RateLimitError,
-  APIConnectionTimeoutError,
-  APIUserAbortError,
-} from "interfaze";
-import type {
-  ChatCompletionContentPart,
-  ChatCompletionMessageParam,
-  Precontext,
-  ReasoningEffort,
-  TaskName,
-} from "interfaze";
 
 import { fnv1a } from "./hash";
 import { InterfazeFailure } from "./interfazeErrors";
@@ -45,9 +35,7 @@ import { PROVIDER_FILE_OBJECT_SAFE_BYTES } from "./interfazeLimits";
 import { interfazeCostUsd } from "./interfazeCost";
 import type { UsageLogger } from "./interfazeCost";
 import { ocrPrecontextToPages } from "./interfazeOcr";
-import { chunksToSegments } from "./interfazeStt";
-import type { SttTaskResult, TranscriptResult } from "./interfazeStt";
-import type { OcrPageResult } from "./interfazeOcr";
+import type { OcrPageResult, Precontext } from "./interfazeOcr";
 
 // Re-exported so every existing `from "./interfaze"` import keeps working —
 // callers should not have to know which of these modules a symbol lives in.
@@ -56,6 +44,7 @@ export * from "./interfazeErrors";
 export * from "./interfazeOcr";
 export * from "./interfazeStt";
 
+const INTERFAZE_BASE_URL = "https://api.interfaze.ai/v1";
 const INTERFAZE_MODEL = "interfaze-beta";
 
 // Convex kills actions at 10 minutes without running catch blocks, which would
@@ -63,6 +52,83 @@ const INTERFAZE_MODEL = "interfaze-beta";
 // the action's own error handling can mark the job failed. (Interfaze itself
 // caps a request at 5 minutes; this is the outer Convex-facing guard.)
 const INTERFAZE_TIMEOUT_MS = 9 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Wire types — the subset of the Chat Completions shape this app sends and
+// reads. Owned here since the `interfaze` SDK dependency was removed.
+// ---------------------------------------------------------------------------
+
+export type ChatCompletionContentPart =
+  | { type: "text"; text: string }
+  | {
+      type: "file";
+      file: { file_data: string; filename?: string; format?: string };
+    };
+
+export type ChatCompletionMessageParam = {
+  role: "system" | "user";
+  content: string | ChatCompletionContentPart[];
+};
+
+/** The one built-in Interfaze task this app runs. */
+export type TaskName = "ocr";
+
+interface WireError {
+  error?: { code?: string; message?: string };
+}
+
+interface WireCompletion {
+  choices?: {
+    message?: { content?: string | null };
+    finish_reason?: string | null;
+  }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  precontext?: Precontext[];
+  vcache?: boolean;
+}
+
+/**
+ * Mime type from a filename extension — the SDK's table, kept verbatim so the
+ * `format` field on file parts (a vcache input) is byte-identical to what the
+ * SDK sent for the same filename. Unknown extensions omit the field, as the
+ * SDK did.
+ */
+const EXT_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  bmp: "image/bmp",
+  heic: "image/heic",
+  heif: "image/heif",
+  pdf: "application/pdf",
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  xml: "application/xml",
+  json: "application/json",
+  txt: "text/plain",
+  md: "text/markdown",
+  markdown: "text/markdown",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  wav: "audio/wav",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  avi: "video/x-msvideo",
+  mkv: "video/x-matroska",
+  "3gp": "video/3gpp",
+};
+
+function mimeFromFilename(name: string): string | undefined {
+  const ext = name.split(/[?#]/)[0]?.split(".").pop()?.toLowerCase();
+  return ext ? EXT_MIME[ext] : undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,70 +162,118 @@ export interface TranslationResult {
 
 
 /**
- * Turn a caught SDK error into a classified InterfazeFailure. The SDK re-exports
- * OpenAI's typed error classes carrying `status`/`code`; classify on those. An
- * exhausted balance surfaces as a 403 permission error whose code/message names
- * quota or credits, so check that before the generic cases.
+ * Classify a non-OK HTTP response into an InterfazeFailure. An exhausted
+ * balance surfaces as a 403 whose error code/message names quota or credits,
+ * so check that before the generic status cases (which would misread it as a
+ * key problem).
  */
-function classifyError(e: unknown): InterfazeFailure {
-  if (e instanceof InterfazeFailure) return e;
+function classifyHttpError(status: number, body: WireError): InterfazeFailure {
+  const providerCode =
+    typeof body.error?.code === "string" ? body.error.code.toLowerCase() : "";
+  const message = body.error?.message ?? "";
+  const haystack = `${providerCode} ${message}`.toLowerCase();
 
-  if (e instanceof APIConnectionTimeoutError || e instanceof APIUserAbortError) {
+  if (
+    providerCode === "insufficient_quota" ||
+    /no credits|insufficient (quota|credit|funds)|out of credits|billing/.test(
+      haystack
+    )
+  ) {
     return new InterfazeFailure(
-      `Interfaze request timed out after ${Math.round(
-        INTERFAZE_TIMEOUT_MS / 60000
-      )} minutes — the document may be too large to process in one pass`,
-      { code: "timeout" }
+      "Interfaze API credits exhausted — add credits at interfaze.ai to resume processing.",
+      { code: "insufficient_credits", status }
     );
   }
-
-  if (e instanceof APIError) {
-    const status = e.status;
-    const providerCode =
-      typeof e.code === "string" ? e.code.toLowerCase() : "";
-    const haystack = `${providerCode} ${e.message ?? ""}`.toLowerCase();
-
-    if (
-      providerCode === "insufficient_quota" ||
-      /no credits|insufficient (quota|credit|funds)|out of credits|billing/.test(
-        haystack
-      )
-    ) {
-      return new InterfazeFailure(
-        "Interfaze API credits exhausted — add credits at interfaze.ai to resume processing.",
-        { code: "insufficient_credits", status }
-      );
-    }
-    if (e instanceof AuthenticationError) {
-      return new InterfazeFailure(
-        "Interfaze rejected the API key — check INTERFAZE_API_KEY in the Convex deployment.",
-        { code: "invalid_api_key", status }
-      );
-    }
-    if (e instanceof RateLimitError) {
-      return new InterfazeFailure(
-        "Interfaze rate limit hit — processing will retry shortly.",
-        { code: "rate_limited", status }
-      );
-    }
-    if (e instanceof PermissionDeniedError) {
-      return new InterfazeFailure(
-        "Interfaze rejected the API key — check INTERFAZE_API_KEY in the Convex deployment.",
-        { code: "invalid_api_key", status }
-      );
-    }
-    const detail = (e.message ?? "").slice(0, 300);
+  if (status === 401 || status === 403) {
     return new InterfazeFailure(
-      `Interfaze API error (${status})${detail ? `: ${detail}` : ""}`,
-      { status }
+      "Interfaze rejected the API key — check INTERFAZE_API_KEY in the Convex deployment.",
+      { code: "invalid_api_key", status }
     );
   }
+  if (status === 429) {
+    return new InterfazeFailure(
+      "Interfaze rate limit hit — processing will retry shortly.",
+      { code: "rate_limited", status }
+    );
+  }
+  const detail = message.slice(0, 300);
+  return new InterfazeFailure(
+    `Interfaze API error (${status})${detail ? `: ${detail}` : ""}`,
+    { status }
+  );
+}
 
-  return new InterfazeFailure(e instanceof Error ? e.message : String(e));
+function timeoutFailure(): InterfazeFailure {
+  return new InterfazeFailure(
+    `Interfaze request timed out after ${Math.round(
+      INTERFAZE_TIMEOUT_MS / 60000
+    )} minutes — the document may be too large to process in one pass`,
+    { code: "timeout" }
+  );
+}
+
+// Statuses worth an automatic retry — transient by definition. Mirrors what
+// the SDK retried, except timeouts: retrying a 9-minute timeout inside one
+// action would blow past the Convex action limit, so a timeout fails fast and
+// the job-level retry policy decides.
+const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const MAX_RETRIES = 2;
+
+/**
+ * POST one Chat Completions request. Throws InterfazeFailure on anything that
+ * is not a 2xx with a JSON body; retries transient statuses and network
+ * errors with a short backoff.
+ */
+async function postChatCompletion(
+  apiKey: string,
+  body: Record<string, unknown>,
+  bypassCache?: boolean
+): Promise<WireCompletion> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  if (bypassCache) headers["x-interfaze-bypass-cache"] = "true";
+  const payload = JSON.stringify(body);
+
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), INTERFAZE_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${INTERFAZE_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: payload,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (controller.signal.aborted) throw timeoutFailure();
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        continue;
+      }
+      throw new InterfazeFailure(
+        `Interfaze request failed: ${e instanceof Error ? e.message : String(e)}`
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (res.ok) {
+      return (await res.json()) as WireCompletion;
+    }
+    if (RETRYABLE_STATUSES.has(res.status) && attempt < MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      continue;
+    }
+    const errBody = (await res.json().catch(() => ({}))) as WireError;
+    throw classifyHttpError(res.status, errBody);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Content-part helpers — thin wrappers over the SDK's `inputs.*` builders.
+// Content-part helpers.
 // ---------------------------------------------------------------------------
 
 /**
@@ -188,7 +302,11 @@ export function fileUrlContent(
   if (sizeBytes !== undefined && sizeBytes > PROVIDER_FILE_OBJECT_SAFE_BYTES) {
     return { type: "text", text: `The document to work on is at this URL: ${url}` };
   }
-  return inputs.file(url, { filename });
+  const format = mimeFromFilename(filename);
+  return {
+    type: "file",
+    file: { file_data: url, filename, ...(format ? { format } : {}) },
+  };
 }
 
 /**
@@ -305,43 +423,62 @@ export async function chatCompletion(
     });
   };
 
-  const interfaze = new Interfaze({
-    apiKey,
-    timeout: INTERFAZE_TIMEOUT_MS,
-    maxRetries: 2,
-    bypassCache: options.bypassCache,
-  });
+  if (options.task && options.responseSchema) {
+    throw new InterfazeFailure(
+      "A response schema cannot be combined with a task — Interfaze runs tasks with raw output."
+    );
+  }
 
+  // A task is not a body field: it rides as a `<task>` tag in the system
+  // message and forces an empty json_schema response_format (the SDK's
+  // `injectTags` + `emptyTaskSchema` behavior, reproduced byte-for-byte).
+  const taskTag = options.task ? `<task>${options.task}</task>` : undefined;
   const messages: ChatCompletionMessageParam[] = [];
   if (options.systemPrompt) {
-    messages.push({ role: "system", content: options.systemPrompt });
+    messages.push({
+      role: "system",
+      content: taskTag
+        ? `${taskTag}\n${options.systemPrompt}`
+        : options.systemPrompt,
+    });
+  } else if (taskTag) {
+    messages.push({ role: "system", content: taskTag });
   }
   messages.push({ role: "user", content: options.content });
 
+  // Key order matters: the serialized body is a vcache input, so this follows
+  // the SDK's order exactly — max_tokens?, reasoning_effort?, model, messages,
+  // response_format?.
+  const body: Record<string, unknown> = {
+    ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+    ...(options.reasoning ? { reasoning_effort: "high" } : {}),
+    model: INTERFAZE_MODEL,
+    messages,
+  };
+  if (options.task) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: { name: "empty_schema", schema: {} },
+    };
+  } else if (options.responseSchema) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name: options.responseSchema.name,
+        schema: options.responseSchema.schema,
+      },
+    };
+  }
+
   try {
-    const res = await interfaze.chat.completions.create({
-      messages,
-      ...(options.task ? { task: options.task } : {}),
-      ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
-      ...(options.reasoning
-        ? { reasoning_effort: "high" as ReasoningEffort }
-        : {}),
-      ...(options.responseSchema
-        ? {
-            response_format: responseFormat(
-              options.responseSchema.schema,
-              options.responseSchema.name
-            ),
-          }
-        : {}),
-    });
+    const res = await postChatCompletion(apiKey, body, options.bypassCache);
 
     const content = res.choices?.[0]?.message?.content ?? "";
     await reportUsage({
       status: "ok",
       promptTokens: res.usage?.prompt_tokens,
       completionTokens: res.usage?.completion_tokens,
-      cacheHit: res.vcache,
+      cacheHit: res.vcache ?? false,
       // "length" means the provider stopped early. We pay for the emitted
       // tokens either way and get unparseable JSON back, so this is the one
       // quality signal that is free, self-evident, and currently unmeasured.
@@ -351,11 +488,14 @@ export async function chatCompletion(
     return {
       content,
       precontext: res.precontext ?? [],
-      vcache: res.vcache,
+      vcache: res.vcache ?? false,
       completionTokens: res.usage?.completion_tokens ?? 0,
     };
   } catch (e) {
-    const failure = classifyError(e);
+    const failure =
+      e instanceof InterfazeFailure
+        ? e
+        : new InterfazeFailure(e instanceof Error ? e.message : String(e));
     await reportUsage({
       status: "error",
       error: failure.message,

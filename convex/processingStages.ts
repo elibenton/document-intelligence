@@ -1,18 +1,13 @@
-"use node";
-
 /**
- * Document pipeline — Node-runtime half. Every stage that calls Interfaze
- * (parse/OCR, extract, transcribe, template extraction) lives here under
- * "use node" because the Interfaze SDK needs the Node runtime. The status
- * mutations and pure-scheduling actions it drives stay in processing.ts on the
- * default runtime and are reached by function reference.
+ * Document pipeline — the stage actions (parse/OCR, analyze, transcribe).
+ * The queueing, pause gate and status mutations they run against live in
+ * processing.ts and are reached by function reference.
  */
 
 import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { processingEnqueueOptions, processingPool } from "./processingPool";
 import {
   ocrDocument,
   analyzeDocumentText,
@@ -123,7 +118,7 @@ async function scheduleTranslation(
     } = await ctx.runQuery(internal.settings.forDocumentInternal, {
       documentId,
     });
-    await ctx.scheduler.runAfter(0, internal.translationNode.translateDocument, {
+    await ctx.scheduler.runAfter(0, internal.translations.translateDocument, {
       documentId,
       languageCode: translationSettings.defaultLanguageCode,
       translationVersion: translationSettings.translationVersion,
@@ -138,49 +133,26 @@ async function scheduleTranslation(
 
 
 /**
- * Hand Analyze to the pool instead of running it inline.
+ * Queue Analyze as its own stage instead of running it inline.
  *
  * Analyze is roughly eleven times Scan (`analyze` p50 22.6s against `ocr` p50
- * 2.0s), and awaiting it here held one of the pool's slots for that whole time
- * — *after* this stage's own job row had already been marked completed. Two
- * things followed from that:
- *
- *  - A bulk upload queued every other document's two-second Scan behind a full
- *    Scan+Analyze cycle. The `parse` stage measured p50 17.2s / p90 148.2s of
- *    slot occupancy to do 2s of the work that makes a document searchable.
- *  - Every ETA was optimistic. processingJobs.estimateByDocument measures a
- *    slot's occupancy from its job row and counts busy workers the same way,
- *    so an action outliving its own row understated both terms.
- *
- * Splitting the stages makes the job row's lifetime equal the slot's lifetime
- * again, which is what the estimate already assumed.
+ * 2.0s), and awaiting it here kept this action alive for that whole time —
+ * *after* this stage's own job row had already been marked completed. A bulk
+ * upload queued every other document's two-second Scan behind a full
+ * Scan+Analyze cycle. Splitting the stages makes the job row's lifetime equal
+ * the action's lifetime.
  */
 async function enqueueAnalyze(
   ctx: ActionCtx,
   documentId: Id<"documents">,
   bypassCache?: boolean
 ): Promise<void> {
-  const shouldEnqueue: boolean = await ctx.runMutation(
-    internal.processing.createJob,
-    { documentId, stage: "analyze" }
-  );
-  // Already queued or running — that run owns the stage, including the
-  // translation it schedules on the way out.
-  if (!shouldEnqueue) return;
-  const { paused } = await ctx.runQuery(
-    internal.processingControl.getInternal,
-    {}
-  );
-  const workId = await processingPool.enqueueAction(
-    ctx,
-    internal.processingNode.runAnalyze,
-    { documentId, ...(bypassCache === undefined ? {} : { bypassCache }) },
-    processingEnqueueOptions(paused, { documentId, stage: "analyze" })
-  );
-  await ctx.runMutation(internal.processing.attachWorkId, {
+  // enqueueStage dedupes: an already queued or running Analyze owns the
+  // stage, including the translation it schedules on the way out.
+  await ctx.runMutation(internal.processing.enqueue, {
     documentId,
     stage: "analyze",
-    workId,
+    ...(bypassCache === undefined ? {} : { bypassCache }),
   });
 }
 
@@ -208,6 +180,13 @@ export const runDocumentUnderstanding = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "parse",
+      })
+    )
+      return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
@@ -450,6 +429,13 @@ export const runAnalyze = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "analyze",
+      })
+    )
+      return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
@@ -548,6 +534,13 @@ export const runTranscribe = internalAction({
   args: { documentId: v.id("documents") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (
+      await ctx.runMutation(internal.processing.bailIfPaused, {
+        documentId: args.documentId,
+        stage: "transcribe",
+      })
+    )
+      return null;
     const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });
@@ -619,6 +612,11 @@ export const runTranscribe = internalAction({
         documentId: args.documentId,
       });
 
+      // Recordings skip the metadata pass, so the transcript is the context
+      // the rename pass gets to work from (convex/rename.ts).
+      await ctx.scheduler.runAfter(0, internal.rename.runRenamePass, {
+        documentId: args.documentId,
+      });
       await ctx.runMutation(internal.processing.updateStatus, {
         documentId: args.documentId,
         status: "parsed",

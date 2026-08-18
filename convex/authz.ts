@@ -46,7 +46,7 @@ import { authComponent } from "./auth";
  * convex/ may reference `api.*`.** Seven pipeline call sites read
  * `api.documents.get` / `api.kinds.list` / `api.documentCategories.list`, and
  * `metadata` scheduled `api.processing.runRelationships`. Gating those made
- * every one of them throw Unauthenticated from inside the workpool — silently,
+ * every one of them throw Unauthenticated from inside the scheduler — silently,
  * because nothing awaits a scheduled function, so uploads simply stopped at
  * "Queued" with no error surfaced anywhere the user could see.
  *
@@ -127,9 +127,9 @@ export const adminQuery = customQuery(query, adminOnly);
  * remembering. That held while the only admin surface was a usage dashboard.
  *
  * It stopped holding when the processing queue turned out to be shared
- * infrastructure. `setPaused` and `cancelWaiting` act on one workpool that
- * every account's documents run through — pausing it stops everyone's uploads,
- * and `cancelAll` discards everyone's queued work. Those are operator
+ * infrastructure. `setPaused` and `cancelWaiting` act on one processing queue
+ * that every account's documents run through — pausing it stops everyone's
+ * uploads, and cancel discards everyone's queued work. Those are operator
  * controls wearing a user control's clothes, and the honest fix is an operator
  * wrapper rather than leaving them reachable by anyone with a session.
  *

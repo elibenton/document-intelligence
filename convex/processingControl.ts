@@ -1,9 +1,8 @@
 import { internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { components } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { processingPool, PROCESSING_MAX_PARALLELISM } from "./processingPool";
-import { enrichmentPool, ENRICHMENT_MAX_PARALLELISM } from "./enrichmentPool";
+import { cancelJob } from "./processing";
 import { adminMutation, authedQuery } from "./authz";
 
 const CONTROL_KEY = "global";
@@ -37,16 +36,8 @@ async function writeControl(
   };
   if (existing) await ctx.db.replace(existing._id, value);
   else await ctx.db.insert("processingControl", value);
-
-  // Both pools, or "pause" would silently mean "pause the half a human is
-  // watching" and leave enrichment spending against a provider the pause may
-  // well have been called to stop spending on.
-  await ctx.runMutation(components.processingWorkpool.config.update, {
-    maxParallelism: paused ? 0 : PROCESSING_MAX_PARALLELISM,
-  });
-  await ctx.runMutation(components.enrichmentWorkpool.config.update, {
-    maxParallelism: paused ? 0 : ENRICHMENT_MAX_PARALLELISM,
-  });
+  // Nothing else to flip: every stage action checks this flag as it starts
+  // (processing.bailIfPaused) and cancels its job while it holds.
 }
 
 export const get = authedQuery({
@@ -134,17 +125,26 @@ export const cancelWaiting = adminMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    // Freeze new starts first. Workpool cancellation is cooperative: queued
-    // work will not start, while actions already running are allowed to finish.
+    // Freeze new starts first. Cancellation is cooperative: a queued stage
+    // will not start, while actions already running are allowed to finish.
     // Stopping the queue by hand is a deliberate pause, so it carries no
     // reason and no later retry will lift it automatically.
     await writeControl(ctx, true);
-    // Each canceled work item reports itself through the pool's onComplete
-    // (processing.jobComplete), which writes its own terminal state. This used
-    // to walk processingJobs in 64-row self-rescheduling batches to do the same
-    // thing on a delay.
-    await processingPool.cancelAll(ctx);
-    await enrichmentPool.cancelAll(ctx);
+    const pending = await ctx.db
+      .query("processingJobs")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .take(500);
+    for (const job of pending) {
+      if (job.workId && job.workId !== "enqueuing") {
+        // Old rows can carry a workpool-era id the scheduler cannot parse.
+        try {
+          await ctx.scheduler.cancel(job.workId as Id<"_scheduled_functions">);
+        } catch {
+          // Nothing to cancel — the job row below is still marked canceled.
+        }
+      }
+      await cancelJob(ctx, job);
+    }
     return null;
   },
 });

@@ -3,12 +3,11 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
-import { processingEnqueueOptions, processingPool } from "./processingPool";
-import { renderEnqueueOptions, renderPool } from "./renderPool";
 import { authedMutation, authedQuery } from "./authz";
 import { PROVIDER_URL_SAFE_BYTES } from "./interfazeLimits";
 import { requireProject } from "./ownership";
 import { requireBudget } from "./budget";
+import { enqueueStage } from "./processing";
 
 export const generateUploadUrl = authedMutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
@@ -183,28 +182,10 @@ export const createDocument = authedMutation({
     }
 
     const isRecording = mediaType === "audio" || mediaType === "video";
-    const stage = isRecording ? "transcribe" : "parse";
-    const { paused } = await ctx.runQuery(internal.processingControl.getInternal, {});
-    const workId = await processingPool.enqueueAction(
-      ctx,
-      isRecording
-        ? internal.processingNode.runTranscribe
-        : internal.processingNode.runDocumentUnderstanding,
-      { documentId },
-      // Interfaze may have completed a request before a network failure is
-      // observed, so automatic retries could duplicate a billable call.
-      processingEnqueueOptions(paused, {
-        documentId,
-        stage: isRecording ? "transcribe" : "parse",
-      })
-    );
-    await ctx.db.insert("processingJobs", {
-      documentId,
-      stage,
-      status: "pending",
-      queuedAt: Date.now(),
-      workId,
-    });
+    // No automatic retries anywhere on this path: Interfaze may have
+    // completed a request before a network failure is observed, so a retry
+    // could duplicate a billable call.
+    await enqueueStage(ctx, documentId, isRecording ? "transcribe" : "parse");
 
     // Render page images independently for the viewer. Interfaze receives the
     // original whole PDF, so rendering is no longer on the analysis critical
@@ -217,12 +198,10 @@ export const createDocument = authedMutation({
         renderAttempts: 0,
         renderScheduledAt: Date.now(),
       });
-      await renderPool.enqueueAction(
-        ctx,
-        internal.renderPages.renderBatch,
-        { documentId, startPage: 0 },
-        renderEnqueueOptions(documentId)
-      );
+      await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
+        documentId,
+        startPage: 0,
+      });
     }
 
     return { documentId, duplicateOf: null };

@@ -33,4 +33,19 @@ crons.hourly(
   {}
 );
 
+/**
+ * Fail jobs whose action died without reaching its catch block.
+ *
+ * Stages run as plain scheduled actions; a platform kill (the action time
+ * limit, container eviction) leaves the job row on "running" and the document
+ * on "parsing" forever. This sweep is the only place that case is ever heard
+ * from — see processing.sweepStuckJobs for the threshold.
+ */
+crons.interval(
+  "sweep stuck jobs",
+  { minutes: 10 },
+  internal.processing.sweepStuckJobs,
+  {}
+);
+
 export default crons;
