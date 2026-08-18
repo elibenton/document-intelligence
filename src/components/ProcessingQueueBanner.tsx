@@ -8,7 +8,7 @@ export function ProcessingQueueBanner() {
   const control = useQuery(api.processingControl.get);
   // Everyone sees the banner, because a paused queue explains why their upload
   // is sitting still — that is the whole point of it. Only the operator gets
-  // the button: one workpool serves every account, so resuming is a decision
+  // the button: one pause flag serves every account, so resuming is a decision
   // about everyone's documents, not the reader's own.
   const isAdmin = useQuery(api.authz.isAdmin);
   const setPaused = useMutation(api.processingControl.setPaused);

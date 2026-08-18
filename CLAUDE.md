@@ -24,8 +24,8 @@ the idiomatic version *before* building, ship it, and name the trade-off it
 makes. Don't hand over the literal version and list its costs at the end.
 
 This is not only about search. Anything the platform already solves — indexes,
-components, `onComplete`, scheduled functions — makes a hand-rolled equivalent a
-finding to report, not a deliverable to write.
+search indexes, components, scheduled functions, crons — makes a hand-rolled
+equivalent a finding to report, not a deliverable to write.
 
 **YAGNI.** Build for what is needed now. Speculative generality — an operator
 nobody constructs, a vocabulary nothing renders, a table nothing writes — costs
@@ -144,19 +144,23 @@ bills for it. In order of preference:
 
 **Design for the cache.** Interfaze serves a repeated call from `vcache` for
 free, but only if the request is byte-identical — so anything feeding a prompt
-must be deterministically ordered (see the kind-list sort in `analyzePrompt.ts`).
-Streaming hardcodes `vcache: false`, which is why this codebase never streams.
-Cache-key composition is undocumented, so log the hit rate rather than assume it.
+must be deterministically ordered (the kind-list sort in `analyzePrompt.ts`,
+the planner-vocabulary sorts in `search.ts`). Streaming hardcodes `vcache:
+false`, which is why this codebase never streams. Cache-key composition is
+undocumented, so log the hit rate rather than assume it — and beware the
+semantic side of it: probes (2026-08-18) caught the cache matching "similar
+prompt, different URL-in-text" and serving *another document's* answer, one of
+two reasons URL-in-prompt-text is banned here.
 
-**Size ceilings are per transport, and this is the recurring trap.** URL in
-prompt *text* is 80MB; base64 and binary file objects are 20MB. This app sends a
-URL wrapped in a `file` part — the *file-object* transport — so 20MB applies even
-though no bytes are inlined here. URL-in-text lifts it but measured 11× the cost
-for identical results, so `fileUrlContent` sends a file part by default and falls
-back to text only above 19MB; both numbers live in `convex/interfazeLimits.ts`
-and the browser preflights import them, so the gate a user sees and the gate the
-pipeline enforces cannot drift. Nobody has ever measured what actually happens
-past 20MB — the old 18MB gate blocked those files before they were sent.
+**One transport, one measured ceiling.** Every call sends the document as a
+`file` content part carrying the storage URL. Never put a document URL in
+prompt text for a full-model call: measured 2026-08-18, the model silently
+analyzed the wrong document three times out of three that way (tasks tolerate
+it — `transcribe` still uses it deliberately). The ceiling is
+`PROVIDER_FILE_PART_SAFE_BYTES` = 34MB in `convex/interfazeLimits.ts` —
+measured, not documented: the docs claim 20MB, a 34MB part worked, a 62MB part
+died in an opaque 500. Browser preflights import the same constant, so the gate
+a user sees and the gate the pipeline enforces cannot drift.
 
 **Other constraints:** one task per call; precontext entries are per
 task-invocation, not per page; `total_pages` is undocumented, so assert rather
@@ -188,11 +192,12 @@ can only lose a completed response, never save money.
 
 ## Reliability and measurement
 
-Terminal state for queued work comes from the pool's `onComplete`
-(`processing.jobComplete`, `pageImages.renderJobComplete`), which fires on
-success, failure and cancellation — including the Convex 10-minute action kill,
-which a `catch` block cannot observe. New stages pass `{ documentId, stage }` to
-`processingEnqueueOptions` rather than arming their own timer.
+Terminal state for queued work does not come from a `catch`: the Convex action
+kill at 10 minutes never runs one, so `sweepStuckJobs` (`convex/crons.ts`)
+fails any job left `running` past a legal action lifetime, and a stage's own
+`catch` — which has a real message and a `FailureCode` — wins when it does run.
+New work goes through `processing.enqueueStage`; do not arm your own timer or
+per-stage watchdog.
 
 `chatCompletion` is the single Interfaze chokepoint and stamps `finishReason`,
 `promptHash`, `outputHash`, `errorCode` and `buildSha` onto the `apiLogs` row it
@@ -220,11 +225,15 @@ in `apiUsageTotals`, which is never pruned.
   baseline — measured drifting 2 → 4 → 3 within minutes. It makes the fence
   below fire at edit time; it does not replace `npm run lint`.
 
-## Cost shape (measured, 12-page born-digital English PDF)
+## Cost shape (measured 2026-08-18, 5-page PDF / 1-hour recording)
 
-Scan $0.0021 → Analyze $0.0308 → Rename $0.0062 → Extract $0.0271 = **$0.066/doc**.
-Analyze and Extract are ~88% of it. Each *additional* extraction template
-re-sends the whole document at +$0.027.
+One `understand` call per document: ~$0.21 for the PDF; the recording adds the
+diarization shim's `transcribe` task (~$0.11) for ~$0.34 total. That replaced
+the old Scan+Analyze+Rename+Extract chain (~$0.07–0.37/doc) — the PDF got more
+expensive and the recording broke even, bought deliberately for the one-call
+architecture (see the reinstatement note on `understandDocument`). An exact
+re-run is a free vcache hit. Re-measure from `apiLogs` (`operation:
+"understand"`), not from this paragraph.
 
 ## UI
 

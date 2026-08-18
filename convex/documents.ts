@@ -443,7 +443,7 @@ export async function beginDocumentTeardown(
     try {
       await ctx.scheduler.cancel(job.workId as Id<"_scheduled_functions">);
     } catch {
-      // Old rows can carry a workpool-era id the scheduler cannot parse.
+      // Pre-scheduler rows can carry an id the scheduler cannot parse.
     }
   }
 

@@ -5,7 +5,7 @@
 > Everything under "The finding that explains the failing document" was measured
 > when the parse stage sent the whole file to a model completion, which read the
 > embedded text layer and nothing else. The stage now calls Interfaze's dedicated
-> OCR task (`ocrDocument`, convex/processingNode.ts), and **scanned PDFs read
+> OCR task (`ocrDocument`, `convex/interfaze.ts`, called from `convex/processingStages.ts`), and **scanned PDFs read
 > correctly**.
 >
 > Re-measured against the live pipeline:
@@ -209,7 +209,7 @@ server-side (below), the harness was retired rather than carried indefinitely.
 The genuine fix is not client-side at all: the per-page image path already works
 (the failing document returns 17/17 clean pages when its pages are sent as PNGs).
 Routing image-only PDFs through that path is a server change in
-`convex/processingNode.ts`, which belongs to another session.
+the pipeline module (now `convex/processingStages.ts`), which belongs to another session.
 
 So preflight **detects and explains**, and does not re-encode. A user learns
 before paying that their scan will come back empty, and what to do about it.

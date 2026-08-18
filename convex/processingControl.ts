@@ -79,7 +79,7 @@ export const setPaused = adminMutation({
  * Stop the queue because the provider is refusing everything.
  *
  * Out of credits or a rejected key fails every document identically, and the
- * workpool has no idea — it keeps dequeuing, and each job inlines an entire
+ * scheduler has no idea — every queued stage still runs, and each one inlines an entire
  * document into a request that cannot succeed. One failure is information;
  * the next forty are just spend and noise in the log.
  *
@@ -136,7 +136,7 @@ export const cancelWaiting = adminMutation({
       .take(500);
     for (const job of pending) {
       if (job.workId && job.workId !== "enqueuing") {
-        // Old rows can carry a workpool-era id the scheduler cannot parse.
+        // Pre-scheduler rows can carry an id the scheduler cannot parse.
         try {
           await ctx.scheduler.cancel(job.workId as Id<"_scheduled_functions">);
         } catch {

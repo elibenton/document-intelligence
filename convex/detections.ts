@@ -24,8 +24,8 @@ import { requireDocument } from "./ownership";
 //     number, so page attribution would have to be inferred from stacked
 //     coordinates — the same guessing `ocrPrecontextToPages` already does, and
 //     the part of the OCR path with the worst regression history. There are no
-//     server-side page rasters to detect against per page; `pageImages` renders
-//     text geometry only.
+//     server-side page rasters to detect against per page — pixels never
+//     leave the browser.
 //   - The full-model completion that produced these rows measured $0.18/doc
 //     against $0.012 for the OCR task, which is why it was removed.
 //

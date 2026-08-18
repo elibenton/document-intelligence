@@ -1,6 +1,6 @@
 # Haystack
 
-Upload documents — PDFs, DOCX, images, CSVs, audio/video, web clips — and the app
+Upload documents — PDFs, images, CSVs, audio/video, web clips — and the app
 reads them: OCR + layout, a structured understanding pass, entity extraction,
 translation, and a hybrid (keyword + vector + entity-graph) search that answers
 questions with citations that deep-link back into the page they came from.
@@ -115,12 +115,10 @@ Three function flavors, and the difference matters:
 | `mutation` | Transactional | Read + write the DB |
 | `action` | Non-transactional | `fetch`, external APIs — **no direct DB access**, it calls queries/mutations |
 
-Anything touching an AI provider is therefore an `action`. Files ending in
-`Node.ts` (`processingNode.ts`, `metadataNode.ts`, `searchNode.ts`, …) carry
-`"use node"` at the top because the Interfaze SDK needs the Node runtime; their
-non-Node halves (the mutations that persist results) live in the sibling file
-without the suffix. That pairing is a deliberate, repeated pattern — not
-accidental duplication.
+Anything touching an AI provider is therefore an `action`. The Interfaze client
+is plain `fetch`, so pipeline actions run on the default runtime; the mutations
+that persist a stage's results live in the plain modules they always did
+(`ingest.ts`, `metadata.ts`). There is no `*Node.ts` naming split.
 
 **Interfaze is the document AI provider.** One call returns both a model answer
 *and* raw OCR (sections → lines → words, with bounding boxes and confidence).
@@ -137,8 +135,7 @@ OpenAI chat-completion envelope plus three Interfaze additions:
   "choices": [{ "finish_reason": "stop", "message": { "content": "…" } }],
   "usage": { "prompt_tokens": 1286, "completion_tokens": 47 },
   "vcache": false,      // true = served from the semantic cache, free
-  "precontext": [],     // specialist output (OCR / STT / search) on full-model calls
-  "reasoning": "…"      // only with reasoning_effort: "high" and no schema
+  "precontext": []      // specialist output (OCR / STT / …) on full-model calls
 }
 ```
 
@@ -159,10 +156,10 @@ never pruned.
 
 **Read the rules before touching AI code.** [CLAUDE.md](CLAUDE.md) lists
 verified Interfaze constraints (extra calls are a last resort; design for the
-cache; size ceilings are per *transport*, and ours is the 20MB one). [docs/pdf-edge-cases.md](docs/pdf-edge-cases.md)
-documents the big one: **Interfaze does not OCR images embedded inside a PDF —
-it reads the text layer and nothing else.** A scanned PDF comes back empty, and
-re-encoding won't save it. That single fact explains most of the preflight code.
+cache; one transport — a file part — with one measured 34 MB ceiling).
+[docs/pdf-edge-cases.md](docs/pdf-edge-cases.md) records the field history of
+PDF handling, including limits that were measured, encoded, and later
+re-measured away.
 
 ---
 
@@ -185,47 +182,40 @@ The overlay keeps holding the file after `createDocument`: it watches
 `completed` or `failed`. Until then the library filters that document out
 (`heldDocumentIds`), so a file is in exactly one place at a time.
 
-From there the pipeline is a chain of **stages**, each one a job row in
-`processingJobs` and a workpool task:
+From there the pipeline is **one action running one understanding call**
+(`processingStages.runPipeline`, scheduled through `processing.enqueueStage` as
+the single `parse` job in `processingJobs`). The call sends the original file
+as a file part; the structured response carries the metadata (kind, title,
+dates, table of contents, citation) *and* the entity graph, and `precontext`
+carries the specialist output — OCR geometry for documents, the transcript for
+recordings — which becomes `pages`, `blocks`, and `transcriptSegments`.
+Recordings, images, and CSVs take the same path; web clips (parsed client-side,
+no file to send) run the same schema over their stored text via the `analyze`
+job, which is also the editable-prompt retry (`analyzePrompt.ts`).
 
-| Stage | Where | What it does |
-|---|---|---|
-| `parse` | `processingNode.runDocumentUnderstanding` | One whole-file `task: "ocr"` call — deterministic and ~100x cheaper than the full-model completion it replaced. Its result becomes `pages` and `blocks`. |
-| `analyze` | `processingNode.runAnalyze` | Title, kind, category, date, table of contents, suggested extractions. Web clips take this path too. Prompt is user-editable — see `analyzePrompt.ts`. |
-| `rename` | *(recordings only)* `renameNode.runRenamePass` | Writes `displayName` from the transcript. Documents don't need it — Analyze returns `display_title` directly. |
-| `extract` | `processingNode.runExtract` | Pulls entities/answers per the suggested template → `extractions`, `entities`, `mentions`, `relationships`. Auto-runs once Analyze lands; there is no review gate. Re-run with edited roles from the extract dialog in `PipelineProgress`. |
-| `transcribe` | `processingNode.runTranscribe` | The audio/video branch, taken instead of `parse` → `transcriptSegments`. |
+While Interfaze's precontext bug is open (reported 2026-08-18: full-model calls
+can return it empty, and STT precontext arrives without speaker labels), a shim
+at one seam in `runPipeline` fetches the missing piece from the dedicated task
+call. Its `ocr`/`transcribe` rows in `apiLogs` are the signal for when the fix
+lands — delete the shim when they stop appearing.
 
-Two independent workpools (`convex/convex.config.ts`): `processingWorkpool` for
-AI stages, `renderWorkpool` for page derivatives. Keeping them apart means page
-rendering never queues behind an Interfaze backlog, and "pause processing" —
-which drives `maxParallelism` to 0 pool-wide — doesn't freeze the viewer too.
+**Terminal state comes from a sweep, not from a queue and not from a timer.** A
+Convex action killed at the 10-minute limit never runs its own `catch`, which
+would otherwise strand a document in `parsing`. `sweepStuckJobs`
+(`convex/crons.ts`) fails any job left `running` past a legal action lifetime;
+a stage's own `catch` still writes its own failure first — that path has a real
+message and a `FailureCode` — and the sweep never overwrites an
+already-terminal verdict. Pausing is cooperative: every pipeline action calls
+`processing.bailIfPaused` as it starts and cancels itself rather than spending
+against a provider that is refusing everything.
 
-Pool parallelism is threaded through each enqueue rather than set on the
-constructor. Workpool config is global and last-write-wins per enqueue, so an
-enqueue carrying a constructor default would silently resume a paused queue.
+### Rendering
 
-**Terminal state comes from the pool, not a timer.** A Convex action killed at
-the 10-minute limit never runs its own `catch`, which would otherwise strand a
-document in `parsing`. Both pools pass an `onComplete`
-(`processing.jobComplete`, `pageImages.renderJobComplete`), called on success,
-failure and cancellation. A stage's own `catch` still writes its own failure —
-that path has a real message and a `FailureCode` — and `onComplete` won't
-overwrite an already-terminal verdict. A new stage passes
-`{ documentId, stage }` to `processingEnqueueOptions`.
-
-### Rendering, separately
-
-`renderPages.ts` extracts **native PDF text geometry** server-side (~10ms/page).
-It deliberately does *not* rasterize — page images are drawn client-side by
-pdf.js (`PdfPageCanvas.tsx`) from the original file, because server-side canvas
-spiked memory ~380MB/page and got the action killed. Commits are versioned
-(`rendererConfig.RENDERER_VERSION`) so an upgrade is resumable and a retry skips
-already-done pages.
-
-DOCX takes the same path: `docxRender.ts` lays out pages to produce
-`nativeBlocks`, and needs the *layout*, not pixels. Nothing stores page images;
-render resumability comes from `pages.geometryVersion`.
+Pixels are drawn client-side by pdf.js (`PdfPageCanvas.tsx`) from the original
+file — nothing is rasterized or laid out server-side, and page dimensions and
+word boxes come from the OCR geometry on the understanding call. `.docx` is not
+supported (convert to PDF first); the server DOCX layout engine went with the
+rest of the render pipeline.
 
 ### Search
 
@@ -245,16 +235,15 @@ the viewer.
 convex/            backend: schema, queries, mutations, actions
   schema.ts        ← START HERE. 24 tables, heavily commented with the *why*
   interfaze.ts     the only Interfaze client (+ cost logging, error mapping)
-  processing.ts    stage orchestration, job rows, watchdogs (default runtime)
-  processingNode.ts  the stages themselves ("use node")
+  processing.ts    stage queueing (enqueueStage), job rows, pause gate, sweep
+  processingStages.ts  the pipeline itself: runPipeline + the text-in analyze
   ingest.ts        turning provider output into rows
-  search.ts        suggest + deep search; searchNode.ts does the LLM calls
-  renderPages.ts / pageImages.ts   page text geometry + derivatives
+  search.ts        suggest + deep search, including the LLM calls
   http.ts          public HTTP endpoints (the /clip webhook)
   _generated/      DO NOT EDIT — written by `npx convex dev`
     ai/guidelines.md  ← read this before writing Convex code
 src/
-  pages/           one file per route (see src/App.tsx)
+  pages/           one file per route (see src/routes.ts)
   components/
     documents/     upload, cards, pipeline progress, review dialog
     viewer/        the reader: canvas, overlays, highlights, TOC
@@ -275,7 +264,7 @@ AGENTS.md          → symlink to CLAUDE.md. One file, two names; edit CLAUDE.md
 .agents/skills/    the real files those symlinks point at
 ```
 
-Routes (`src/App.tsx`): `/` projects → `/p/:projectId` library → `/documents/:id`
+Routes (`src/routes.ts`): `/` projects → `/p/:projectId` library → `/documents/:id`
 viewer, plus `/entity/:slug`, `/search`, `/settings`.
 
 ### The data model in one paragraph
@@ -305,7 +294,7 @@ shapes, which is the part you can't infer from the fields.
 - **Nothing silently disappears.** Skipping the review queue is recorded and
   stays flagged in the library.
 - **Tests cover pure logic.** `npm test` runs vitest over things like
-  `pdfPreflight`, `pdfTextGeometry`, `docx`, and Interfaze response parsing —
+  `pdfPreflight`, `pdfTextGeometry`, and Interfaze response parsing —
   no live API calls. If you're writing something worth testing, make it a pure
   function in `src/lib/` or a non-Node Convex module.
 - **Always run `npx convex dev`** while working. Editing `convex/` without it

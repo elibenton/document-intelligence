@@ -9,8 +9,8 @@ import { requireBudget } from "./budget";
 import { documentIssueContext, recordIssue } from "./issues";
 import { recordStageTiming } from "./apiLogs";
 
-// Stages are plain scheduled actions (ctx.scheduler); there is no workpool.
-// The two guarantees the pool used to provide are covered by:
+// Each stage is a plain scheduled action (ctx.scheduler). Two things a queue
+// would normally provide are handled explicitly:
 //  - sweepStuckJobs (cron): an action killed at the platform limit never runs
 //    its catch, so a job left "running" past any legal action lifetime is
 //    marked failed there.
@@ -43,7 +43,7 @@ function stageAction(stage: string) {
  * The one way a stage gets queued: dedupe against a live job, schedule the
  * action, and write the job row carrying the scheduled-function id — all in
  * the caller's transaction, so there is no window where a job exists without
- * its handle (the workpool era needed an "enqueuing" placeholder for that).
+ * its handle.
  * Returns false when a live run already owns the stage.
  */
 export async function enqueueStage(

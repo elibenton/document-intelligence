@@ -96,7 +96,7 @@ export default function SettingsPage() {
           {/* Provider health — loud when a provider is down or out of credits */}
           <ProviderAlert />
 
-          {/* Operator-only: pausing and cancelling act on the one workpool
+          {/* Operator-only: pausing and cancelling act on the one deployment-wide queue
               every account's documents run through, so these are not the
               reader's controls to hold. The server refuses them either way. */}
           {isAdmin && (

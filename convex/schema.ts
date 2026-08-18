@@ -724,7 +724,7 @@ export default defineSchema({
     status: v.string(), // "pending" | "running" | "completed" | "failed"
     // Queue metadata is optional for rows created before it existed. workId
     // is the scheduled-function id ("enqueuing" until the enqueue records it;
-    // rows from the workpool era carry ids the scheduler cannot parse).
+    // pre-scheduler rows carry ids the scheduler cannot parse).
     queuedAt: v.optional(v.number()),
     workId: v.optional(v.string()),
     startedAt: v.optional(v.number()),

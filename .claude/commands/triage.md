@@ -59,8 +59,8 @@ problems. `listForTriage` already sorts this way — trust its order.
    |---|---|
    | `client` / `preflight` | `src/lib/pdfPreflight.ts`, `src/lib/audioPreflight.ts`, `src/lib/uploadTypes.ts` |
    | `client` / `upload` | `src/components/upload/UploadProvider.tsx` |
-   | `pipeline` | `convex/processingNode.ts`, `convex/processing.ts`, `convex/relationshipsNode.ts` |
-   | `render` | `convex/pageImages.ts`, `convex/renderPages.ts` |
+   | `pipeline` | `convex/processingStages.ts`, `convex/processing.ts`, `convex/relationships.ts` |
+   | `render` | legacy surface — the server render pipeline is deleted; recent rows indicate a stale build |
    | `provider` | `convex/interfaze.ts`, `convex/interfazeLimits.ts`, `convex/interfazeErrors.ts` |
    | `crash` | the stack in the sample, then the component it names |
 
