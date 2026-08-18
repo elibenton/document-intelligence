@@ -230,6 +230,7 @@ function EntityListRow({
   visibleProperties: string[];
 }) {
   const setStarred = useMutation(api.entities.setStarred);
+  const setTypes = useMutation(api.entities.setTypes);
   const starred = entity.starred === true;
 
   return (
@@ -259,6 +260,9 @@ function EntityListRow({
         row={entity}
         defs={ENTITY_PROPERTIES}
         visible={visibleProperties}
+        onEdit={(row, commit) =>
+          setTypes({ id: row._id, types: [commit.value] })
+        }
         className="relative z-10 ml-2 shrink-0"
       />
     </div>

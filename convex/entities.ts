@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
+import { STABLE_TO_LEGACY } from "./entityResolution";
 import {
   requireDocument,
   requireEntity,
@@ -39,6 +40,61 @@ export const listAll = authedQuery({
 // ---------------------------------------------------------------------------
 // Pin an entity in its type group
 // ---------------------------------------------------------------------------
+
+/**
+ * Human rename. The old name joins the aliases (deduped, case-insensitive)
+ * so search, merge matching, and mention text still resolve; the slug is
+ * deliberately untouched — every link in the app is minted from the stored
+ * slug, so freezing it means nothing breaks and only the URL cosmetically
+ * shows the old name. Rename is the one *sticky* editable field: an entity
+ * with no name is meaningless, so empty commits are rejected rather than
+ * treated as "hand it back to the AI".
+ */
+export const rename = authedMutation({
+  args: { id: v.id("entities"), name: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const entity = await requireEntity(ctx, args.id);
+    const name = args.name.trim().replace(/\s+/g, " ");
+    if (!name) throw new Error("An entity needs a name");
+    if (name === entity.name) return null;
+    const aliasSet = new Set(entity.aliases.map((a) => a.toLowerCase()));
+    const aliases =
+      aliasSet.has(entity.name.toLowerCase()) ||
+      entity.name.toLowerCase() === name.toLowerCase()
+        ? entity.aliases
+        : [...entity.aliases, entity.name];
+    await ctx.db.patch(args.id, {
+      name,
+      aliases,
+      nameSource: "human",
+    });
+    return null;
+  },
+});
+
+/**
+ * Human retype: writes the stable types[] and keeps the legacy single `type`
+ * in step with types[0] — the one write path that honors the schema's
+ * "kept in sync" comment. Extraction's type-union stands down once stamped.
+ */
+export const setTypes = authedMutation({
+  args: { id: v.id("entities"), types: v.array(v.string()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireEntity(ctx, args.id);
+    const types = [
+      ...new Set(args.types.map((t) => t.trim().toLowerCase()).filter(Boolean)),
+    ];
+    if (types.length === 0) throw new Error("An entity needs a type");
+    await ctx.db.patch(args.id, {
+      types,
+      type: STABLE_TO_LEGACY[types[0]] ?? types[0],
+      typesSource: "human",
+    });
+    return null;
+  },
+});
 
 export const setStarred = authedMutation({
   args: { id: v.id("entities"), starred: v.boolean() },

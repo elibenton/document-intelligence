@@ -82,6 +82,8 @@ export interface PropertyEditor<T> {
   staticOptions?: PropertyOption[];
   allowCustom?: boolean;
   searchable?: boolean;
+  /** False for fields where "no value" is meaningless (an entity's type). */
+  allowClear?: boolean;
 }
 
 export type FilterOperator =

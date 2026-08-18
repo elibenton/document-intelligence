@@ -83,6 +83,14 @@ export const ENTITY_PROPERTIES: PropertyDef<EntityRow>[] = [
         </span>
       );
     },
+    editor: {
+      control: "select",
+      field: "types",
+      allowClear: false,
+      staticOptions: Object.entries(ENTITY_TYPE_LABELS).map(
+        ([value, label]) => ({ value, label })
+      ),
+    },
   },
   {
     id: "mentionCount",

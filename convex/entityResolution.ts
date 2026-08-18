@@ -141,9 +141,13 @@ export async function resolveEntity(
 
   const existing = await findByNameOrAlias(ctx, clean, projectId);
   if (existing) {
-    // Accumulate the stable type if it's new for this entity
+    // Accumulate the stable type if it's new for this entity — unless a
+    // human has pinned the type list, which outranks anything a pass infers.
     const types = existing.types ?? [];
-    if (!types.includes(args.stableType)) {
+    if (
+      !types.includes(args.stableType) &&
+      existing.typesSource !== "human"
+    ) {
       await ctx.db.patch(existing._id, { types: [...types, args.stableType] });
     }
     if (projectId) await bumpDedupeCounter(ctx, projectId, "resolvedExisting");

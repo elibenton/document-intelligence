@@ -725,6 +725,12 @@ export default defineSchema({
     avgConfidence: v.number(),
     aliases: v.array(v.string()),
     isCustom: v.boolean(),
+    // Same provenance rule as the documents table's *Source fields: a human
+    // rename/retype stamps "human" and the extraction writers stand down.
+    // Rename never rewrites the slug — link stability is load-bearing (see
+    // the slug comment below); the old name joins aliases instead.
+    nameSource: v.optional(v.string()), // "ai" | "human"
+    typesSource: v.optional(v.string()),
     // User-curated entities stay visible beneath a closed type group.
     starred: v.optional(v.boolean()),
     // `slugify(name)`, stored so `/entity/:slug` is an index lookup rather

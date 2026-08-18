@@ -155,6 +155,7 @@ function EditableChip<T>({
           options={options ?? editor.staticOptions ?? []}
           label={label}
           placeholder={def.label}
+          allowClear={editor.allowClear ?? true}
           allowCustom={editor.allowCustom}
           searchable={editor.searchable}
           renderValue={shown && (() => shown())}
