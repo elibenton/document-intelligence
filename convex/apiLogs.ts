@@ -2,7 +2,8 @@
  * Mini API log: one row per external AI API call (Interfaze chat completions,
  * OpenAI embeddings) with token usage and estimated cost. Actions construct a
  * logger with `usageLogger(ctx, ...)` and hand it to the API client helpers;
- * the settings page reads `list` and `totals`.
+ * the document page reads `byDocument`, and the admin dashboard aggregates
+ * the rest.
  */
 
 import { internalMutation } from "./_generated/server";
@@ -207,37 +208,6 @@ export const record = internalMutation({
 });
 
 /**
- * Most recent API calls, newest first, with the document name joined in.
- *
- * The join is deduplicated by document id: one 20-page ingest writes ~28 log
- * rows that all point at the same document, so the naive per-row `get` did up
- * to 100 reads to answer a question with a handful of distinct answers.
- */
-export const list = authedQuery({
-  args: {},
-  handler: async (ctx) => {
-    // `by_owner`, not the bare table scan this used to do: the rows carry the
-    // provider's raw error text and join to document names, so an unscoped
-    // feed showed every account the titles of everyone else's documents.
-    // Unattributed rows (pre-auth, or orphaned) belong to nobody and so appear
-    // for nobody — the admin dashboard is where they are accounted for.
-    const logs = await ctx.db
-      .query("apiLogs")
-      .withIndex("by_owner", (q) => q.eq("ownerId", ctx.user._id))
-      .order("desc")
-      .take(100);
-    const names = new Map<Id<"documents">, string | undefined>();
-    for (const id of new Set(logs.flatMap((l) => (l.documentId ? [l.documentId] : [])))) {
-      names.set(id, (await ctx.db.get(id))?.name);
-    }
-    return logs.map((log) => ({
-      ...log,
-      documentName: log.documentId ? names.get(log.documentId) : undefined,
-    }));
-  },
-});
-
-/**
  * What one document cost, per pipeline operation.
  *
  * Aggregated here rather than shipping the raw rows: the document page only
@@ -340,6 +310,10 @@ export const pruneOldLogs = internalMutation({
  * per-user dimension would grow it to accounts × shards and make this silently
  * under-report, with no error anywhere — see docs/admin-usage-plan.md §4.5.
  */
+// Shared with convex/admin.ts. This is deliberately not exposed as a public
+// query: the shards have no owner dimension (see the comment above), so any
+// authed export of this sum shows every account the whole deployment's
+// lifetime spend — which is exactly the bug the old `totals` query was.
 export async function readLifetimeTotals(ctx: QueryCtx) {
   const shards = await ctx.db.query("apiUsageTotals").take(TOTALS_SHARDS + 1);
   return shards.reduce(
@@ -363,7 +337,3 @@ export async function readLifetimeTotals(ctx: QueryCtx) {
     );
 }
 
-export const totals = authedQuery({
-  args: {},
-  handler: async (ctx) => readLifetimeTotals(ctx),
-});

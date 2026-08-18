@@ -7,6 +7,7 @@ import type { Route } from "./+types/AdminPage";
 import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { StatCard } from "@/components/settings/StatCard";
 import { AccountLimitCell } from "@/components/settings/AccountLimitCell";
+import { ProcessingQueueControls } from "@/components/settings/ProcessingQueueControls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Info } from "lucide-react";
@@ -103,6 +104,14 @@ export default function AdminPage() {
         </div>
       }
     >
+      {/* Queue controls sit above the data branch: they have their own
+          loading state and act on the deployment-wide queue this page is
+          already the home for. Moved here from /settings, where an
+          admin-only block on a page every reader sees was a boundary leak. */}
+      <div className="mb-8">
+        <SectionHeading>Processing</SectionHeading>
+        <ProcessingQueueControls />
+      </div>
       {data === undefined ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {Array.from({ length: 6 }, (_, i) => (
