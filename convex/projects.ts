@@ -270,7 +270,8 @@ export const PROJECT_PHASE = {
   searches: 2,
   views: 3,
   taxonomy: 4,
-  done: 5,
+  mergeLog: 5,
+  done: 6,
 } as const;
 
 /**
@@ -355,6 +356,16 @@ export const drainProjectDeletion = internalMutation({
         categories.length === PROJECT_ROW_BATCH ||
         kinds.length === PROJECT_ROW_BATCH ||
         entityTypes.length === PROJECT_ROW_BATCH;
+    } else if (args.phase === PROJECT_PHASE.mergeLog) {
+      // Merge history carries verbatim document quotes in its relationship
+      // snapshots, so it must not outlive the project the way the (text-free)
+      // dedupeCounters ledger deliberately does.
+      const logs = await ctx.db
+        .query("mergeLog")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .take(PROJECT_ROW_BATCH);
+      for (const row of logs) await ctx.db.delete(row._id);
+      more = logs.length === PROJECT_ROW_BATCH;
     } else {
       return null;
     }

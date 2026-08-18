@@ -606,8 +606,11 @@ export async function beginDocumentTeardown(
   }
 
   await ctx.db.delete(documentId);
+  // The cascade needs the project after the row is gone: the searches and
+  // mergeLog phases can only find their rows through a by_project index.
   await ctx.scheduler.runAfter(0, internal.documents.drainDeletion, {
     documentId,
+    projectId: doc.projectId,
     phase: 0,
     orphanCandidates: [],
   });
@@ -635,13 +638,21 @@ export const remove = authedMutation({
 export const drainDeletion = internalMutation({
   args: {
     documentId: v.id("documents"),
+    // Optional twice over: pre-project documents have none, and cascades
+    // scheduled before this argument existed arrive without it. Either way the
+    // searches and mergeLog phases are skipped — they can only reach their
+    // rows through a project index.
+    projectId: v.optional(v.id("projects")),
     phase: v.number(),
     orphanCandidates: v.array(v.id("entities")),
+    // Pagination state for the searches phase, opaque to everything else.
+    searchCursor: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
     const { documentId, phase } = args;
     let orphanCandidates = args.orphanCandidates;
+    let searchCursor: string | undefined;
     let more = false;
 
     if (phase < DOCUMENT_SCOPED_TABLES.length) {
@@ -655,20 +666,99 @@ export const drainDeletion = internalMutation({
     } else if (phase === DOCUMENT_SCOPED_TABLES.length + 2) {
       orphanCandidates = await sweepOrphanEntities(ctx, orphanCandidates);
       more = orphanCandidates.length > 0;
+    } else if (phase === DOCUMENT_SCOPED_TABLES.length + 3) {
+      if (args.projectId) {
+        const result = await drainDocumentSearches(
+          ctx,
+          args.projectId,
+          documentId,
+          args.searchCursor
+        );
+        more = result.more;
+        searchCursor = result.cursor;
+      }
+    } else if (phase === DOCUMENT_SCOPED_TABLES.length + 4) {
+      if (args.projectId) {
+        await scrubMergeLogQuotes(ctx, args.projectId, documentId);
+      }
     } else {
       return null;
     }
 
     const next = more ? phase : phase + 1;
-    if (next > DOCUMENT_SCOPED_TABLES.length + 2) return null;
+    if (next > DOCUMENT_SCOPED_TABLES.length + 4) return null;
     await ctx.scheduler.runAfter(0, internal.documents.drainDeletion, {
       documentId,
+      projectId: args.projectId,
       phase: next,
       orphanCandidates,
+      searchCursor,
     });
     return null;
   },
 });
+
+/**
+ * Delete the project's search rows that cite this document.
+ *
+ * The whole row, not a scrubbed entry: `answer` is a synthesis that quotes the
+ * snippets, so a search whose cited document is gone cannot be surgically
+ * cleaned — and its evidence chain is broken anyway. A search citing several
+ * documents disappears when any one of them is deleted; that is the price of
+ * "deleting a document deletes what was derived from it".
+ *
+ * Paginated rather than cursor-by-createdAt because search rows accumulate one
+ * per query, unboundedly; the opaque cursor rides in drainDeletion's args.
+ */
+const SEARCH_SCAN_BATCH = 64;
+
+async function drainDocumentSearches(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  documentId: Id<"documents">,
+  cursor: string | undefined
+): Promise<{ more: boolean; cursor: string | undefined }> {
+  const page = await ctx.db
+    .query("searches")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .paginate({ numItems: SEARCH_SCAN_BATCH, cursor: cursor ?? null });
+  for (const row of page.page) {
+    if (row.results?.some((r) => r.documentId === documentId)) {
+      await ctx.db.delete(row._id);
+    }
+  }
+  return { more: !page.isDone, cursor: page.continueCursor };
+}
+
+/**
+ * Strip this document's verbatim quotes out of the project's merge history.
+ *
+ * The entry itself stays — it is what unmerge restores, and the relationship
+ * shape (type, direction, confidence) is the merge's own record — but the
+ * quote is the document's text and must not outlive it. One pass, not batched:
+ * mergeLog rows exist one per human merge action, which bounds them the way
+ * nothing bounds searches.
+ */
+async function scrubMergeLogQuotes(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  documentId: Id<"documents">
+): Promise<void> {
+  const rows = await ctx.db
+    .query("mergeLog")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  for (const row of rows) {
+    if (!row.deletedRelationships.some((r) => r.documentId === documentId)) {
+      continue;
+    }
+    await ctx.db.patch(row._id, {
+      deletedRelationships: row.deletedRelationships.map((r) =>
+        r.documentId === documentId ? { ...r, quote: undefined } : r
+      ),
+    });
+  }
+}
 
 /**
  * Merge suggestions raised by this document.
