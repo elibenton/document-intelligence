@@ -20,28 +20,32 @@
       margin-top: 20px; padding: 8px 20px; border: 0; border-radius: 6px;
       background: light-dark(#000, #fff); color: light-dark(#fff, #000); font: inherit; font-weight: 600; cursor: pointer;
     }
-    #saved { color: #16a34a; margin-left: 10px; }
+    button.secondary {
+      background: transparent; color: inherit; border: 1px solid #ccc; font-weight: 400;
+      margin-left: 10px;
+    }
+    #status { margin-top: 20px; }
+    #status.ok { color: #16a34a; }
+    #status .detail { color: #888; font-size: 12px; }
   </style>
 </head>
 <body>
   <h1>Haystack Clipper</h1>
+  <p class="hint">
+    Connecting opens Haystack in a new tab. Sign in there if you aren't
+    already; the extension is set up automatically — nothing to paste.
+  </p>
 
-  <label for="endpoint">Convex endpoint URL
-    <span class="hint">— your deployment's .convex.site origin, e.g. https://happy-otter-123.convex.site</span>
+  <label for="appUrl">Haystack URL
+    <span class="hint">— only change this if you run the app somewhere else (e.g. http://localhost:5173 in development)</span>
   </label>
-  <input id="endpoint" type="url" placeholder="https://your-deployment.convex.site" />
+  <input id="appUrl" type="url" />
 
-  <label for="apiKey">Personal clipper token
-    <span class="hint">— generate it in the app under Settings → Web clipper; it also picks which project clips land in</span>
-  </label>
-  <input id="apiKey" type="password" />
+  <button id="connect">Sign in &amp; connect</button>
+  <button id="disconnect" class="secondary" hidden>Disconnect</button>
 
-  <label for="appBaseUrl">App URL
-    <span class="hint">— where the web app runs, used for "Open in app" links</span>
-  </label>
-  <input id="appBaseUrl" type="url" placeholder="http://localhost:5173" />
+  <div id="status"></div>
 
-  <button id="save">Save</button><span id="saved" hidden>Saved ✓</span>
   <script src="options.js"></script>
 </body>
 </html>

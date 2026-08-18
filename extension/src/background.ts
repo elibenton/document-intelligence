@@ -76,7 +76,7 @@ async function runClip(
   if (!settings.endpoint || !settings.apiKey) {
     await setStatus({
       state: "error",
-      message: "Set the endpoint URL and API key in the extension options first.",
+      message: "Not connected — open the extension options and sign in first.",
       tabId,
     });
     return;
@@ -113,7 +113,7 @@ async function runClip(
       const detail = await res.text().catch(() => "");
       const hint =
         res.status === 401
-          ? " (check the API key in extension options)"
+          ? " (token revoked? Reconnect from the extension options)"
           : res.status === 404
             ? " (check the endpoint URL — it should be your .convex.site URL)"
             : "";
@@ -127,6 +127,40 @@ async function runClip(
     await setStatus({ state: "error", message, tabId });
   }
 }
+
+/**
+ * Connect handshake: the app's /clipper/connect page (an origin listed in
+ * externally_connectable) sends the endpoint + personal token here after the
+ * user signs in. Only honored while a connect the user started from the
+ * options page is pending, and only from the exact origin they started it
+ * against — a stray page on a matched origin can't re-point the clipper.
+ */
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== "haystack-clipper-connect") return false;
+  void (async () => {
+    const { connectOrigin } = await chrome.storage.session.get(["connectOrigin"]);
+    const senderOrigin = sender.url ? new URL(sender.url).origin : "";
+    if (!connectOrigin || senderOrigin !== connectOrigin) {
+      sendResponse({
+        ok: false,
+        error: "No connection in progress — start from the extension options.",
+      });
+      return;
+    }
+    const endpoint =
+      typeof msg.endpoint === "string" ? msg.endpoint.replace(/\/+$/, "") : "";
+    const token = typeof msg.token === "string" ? msg.token : "";
+    if (!/^https:\/\/[a-z0-9-]+\.convex\.site$/.test(endpoint) || !token) {
+      sendResponse({ ok: false, error: "Malformed connect message." });
+      return;
+    }
+    await chrome.storage.session.remove("connectOrigin");
+    await chrome.storage.sync.set({ endpoint, appBaseUrl: senderOrigin });
+    await chrome.storage.local.set({ apiKey: token });
+    sendResponse({ ok: true });
+  })();
+  return true; // keep the channel open for the async sendResponse
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "clip" && typeof msg.tabId === "number") {

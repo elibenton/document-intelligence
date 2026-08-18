@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Haystack Clipper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Archive and parse the current page into your Haystack project.",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["https://*.convex.site/*"],
+  "externally_connectable": {
+    "matches": [
+      "https://glorious-warbler-976.convex.site/*",
+      "http://localhost/*"
+    ]
+  },
   "background": { "service_worker": "background.js" },
   "action": {
     "default_popup": "popup.html",

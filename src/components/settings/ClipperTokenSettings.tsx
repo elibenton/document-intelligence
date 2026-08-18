@@ -4,15 +4,15 @@ import { Scissors } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
- * The personal web-clipper token: mint it, reveal it, revoke it, and pick
- * which owned project clips land in. The project choice lives on the token
- * server-side (convex/clipperTokens.ts), so the extension itself only ever
- * holds the token — regenerating always rotates the secret, which is also how
- * a leaked one is retired.
+ * The personal web-clipper connection: which owned project clips land in, and
+ * the kill switch. The extension gets its token by opening /clipper/connect
+ * from its own options page — nothing is displayed or pasted here. The project
+ * choice lives on the token server-side (convex/clipperTokens.ts); changing it
+ * or revoking rotates/retires the secret, which disconnects any connected
+ * extension until it reconnects.
  */
 export default function ClipperTokenSettings() {
   const token = useQuery(api.clipperTokens.mine);
@@ -21,7 +21,6 @@ export default function ClipperTokenSettings() {
   const revoke = useMutation(api.clipperTokens.revoke);
   const [projectDraft, setProjectDraft] = useState<Id<"projects"> | null>(null);
   const [working, setWorking] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   if (token === undefined || projects === undefined) {
     return <Skeleton className="h-24 w-full" />;
@@ -30,21 +29,14 @@ export default function ClipperTokenSettings() {
   const selectedProject =
     projectDraft ?? token?.projectId ?? projects[0]?._id ?? null;
 
-  async function generate() {
-    if (!selectedProject || working) return;
+  async function run(action: () => Promise<unknown>) {
+    if (working) return;
     setWorking(true);
     try {
-      await mint({ projectId: selectedProject });
+      await action();
     } finally {
       setWorking(false);
     }
-  }
-
-  async function copyToken() {
-    if (!token) return;
-    await navigator.clipboard.writeText(token.token);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -53,12 +45,14 @@ export default function ClipperTokenSettings() {
         <Scissors className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <label htmlFor="clipper-project" className="text-sm font-medium">
-            Personal clipper token
+            Browser extension
           </label>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Paste this token into the browser extension&rsquo;s settings. Clips
-            land in the project chosen here, and their processing bills to your
-            account. Regenerating invalidates the old token.
+            Connect from the extension&rsquo;s options page — it signs you in
+            here and picks up its token automatically. Clips land in the
+            project chosen below, and their processing bills to your account.
+            Changing the project or revoking disconnects the extension until
+            you reconnect it.
           </p>
           {projects.length === 0 ? (
             <p className="mt-3 text-xs text-muted-foreground">
@@ -81,32 +75,33 @@ export default function ClipperTokenSettings() {
                     </option>
                   ))}
                 </select>
-                <Button size="sm" disabled={working} onClick={() => void generate()}>
-                  {working ? "Working…" : token ? "Regenerate" : "Generate token"}
-                </Button>
-              </div>
-              {token && (
-                <div className="mt-2 flex max-w-md items-center gap-2">
-                  <Input
-                    readOnly
-                    aria-label="Clipper token"
-                    value={token.token}
-                    onFocus={(event) => event.target.select()}
-                    className="h-9 flex-1 font-mono text-xs md:text-xs"
-                  />
-                  <Button size="sm" variant="outline" onClick={() => void copyToken()}>
-                    {copied ? "Copied ✓" : "Copy"}
+                {token && (
+                  <Button
+                    size="sm"
+                    disabled={working || selectedProject === token.projectId}
+                    onClick={() =>
+                      void run(() => mint({ projectId: selectedProject! }))
+                    }
+                  >
+                    Move clips here
                   </Button>
+                )}
+                {token && (
                   <Button
                     size="sm"
                     variant="ghost"
                     disabled={working}
-                    onClick={() => void revoke()}
+                    onClick={() => void run(() => revoke())}
                   >
                     Revoke
                   </Button>
-                </div>
-              )}
+                )}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {token
+                  ? `Connected since ${new Date(token.createdAt).toLocaleDateString()}.`
+                  : "Not connected yet."}
+              </p>
             </>
           )}
         </div>
