@@ -955,6 +955,8 @@ export default defineSchema({
     retryCount: v.optional(v.number()), // retries absorbed into durationMs
     // Stage rows (provider "pipeline") only: time spent queued before running.
     queuedMs: v.optional(v.number()),
+    // Schema calls only: whether the billed content parsed as JSON.
+    outputShapeValid: v.optional(v.boolean()),
 
     // Zero-ground-truth quality check on the call's output (convex/ocrChecks.ts):
     // violations/checked is a per-call accuracy rate that needs no paid corpus.

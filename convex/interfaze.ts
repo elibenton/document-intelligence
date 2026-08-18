@@ -411,12 +411,14 @@ export async function chatCompletion(
     finishReason?: string;
     outputHash?: string;
     errorCode?: string;
+    outputShapeValid?: boolean;
     quality?: { checked: number; violations: number; byKind: Record<string, number> };
   }) => {
     if (!options.usage) return;
     const promptTokens = report.promptTokens ?? 0;
     const completionTokens = report.completionTokens ?? 0;
     await options.usage.log({
+      outputShapeValid: report.outputShapeValid,
       qualityChecked: report.quality?.checked,
       qualityViolations: report.quality?.violations,
       qualityByKind: report.quality?.byKind,
@@ -505,9 +507,21 @@ export async function chatCompletion(
         console.error("Quality check threw; logging the call without it:", e);
       }
     }
+    // A structured call whose content does not parse is a billed response the
+    // caller cannot use; recorded per call so the rate is queryable.
+    let outputShapeValid: boolean | undefined;
+    if (options.responseSchema || options.task) {
+      try {
+        JSON.parse(content);
+        outputShapeValid = true;
+      } catch {
+        outputShapeValid = false;
+      }
+    }
     await reportUsage({
       status: "ok",
       quality,
+      outputShapeValid,
       promptTokens: res.usage?.prompt_tokens,
       completionTokens: res.usage?.completion_tokens,
       cacheHit: res.vcache ?? false,

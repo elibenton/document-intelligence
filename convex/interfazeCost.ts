@@ -46,6 +46,14 @@ export interface ApiUsage {
    */
   retryCount?: number;
 
+  /**
+   * For calls made with a response schema: did the returned content parse as
+   * JSON. False is a billed response the caller could not use — distinct from
+   * finishReason "length" (truncation), which is one cause of it but not the
+   * only one.
+   */
+  outputShapeValid?: boolean;
+
   // --- Quality fields: zero-ground-truth arithmetic checks on the output ---
   // (see convex/ocrChecks.ts). `violations / checked` is a per-call accuracy
   // rate that needs no reference corpus — wrong by arithmetic or not wrong.
