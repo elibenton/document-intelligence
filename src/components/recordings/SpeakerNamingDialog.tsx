@@ -60,6 +60,12 @@ export function SpeakerNamingDialog({
 }) {
   const confirm = useMutation(api.documentSpeakers.confirm);
   const library = useQuery(api.speakers.list, open ? {} : "skip");
+  // Derived, zero-cost suggestions from the mention↔turn evidence the
+  // extraction pipeline already produced; stored ai rows (if any) win.
+  const computed = useQuery(
+    api.documentSpeakers.suggestions,
+    open ? { documentId: doc._id } : "skip"
+  );
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -156,11 +162,13 @@ export function SpeakerNamingDialog({
         </DialogDescription>
         <div className="mt-3 flex max-h-[60vh] flex-col gap-4 overflow-y-auto pr-1">
           {rows.map((row) => {
-            const suggestion = savedByLabel.get(row.label);
+            const stored = savedByLabel.get(row.label);
+            const suggestion =
+              stored?.source === "ai"
+                ? { name: stored.name, evidence: stored.evidence }
+                : computed?.find((s) => s.label === row.label);
             const showSuggestion =
-              suggestion?.source === "ai" &&
-              suggestion.name &&
-              draftFor(row.label) !== suggestion.name;
+              suggestion?.name && draftFor(row.label) !== suggestion.name;
             return (
               <div key={row.label} className="flex flex-col gap-1.5">
                 <div className="flex items-center gap-2">
