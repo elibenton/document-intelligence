@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
-import { ArrowDownToLine, Loader2, RefreshCw } from "lucide-react";
+import { ArrowDownToLine, Loader2, RefreshCw, Users } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import { buildSpeakerColorMap } from "./speakerColors";
 import { findActive } from "./transcriptAnchors";
 import { TranscriptTurn } from "./TranscriptTurn";
 import { TransportBar } from "./TransportBar";
+import { SpeakerNamingDialog } from "./SpeakerNamingDialog";
+import { transcriptSignature } from "../../../convex/speakerSignature";
 
 export function RecordingView({
   document: doc,
@@ -47,6 +49,36 @@ export function RecordingView({
     () => buildSpeakerColorMap(segments ?? []),
     [segments],
   );
+
+  // Speaker naming: human names render over the diarizer labels (which stay
+  // the machine key — colors and joins never re-key); unconfirmed ai
+  // suggestions live only in the dialog. The dialog auto-opens once per
+  // mount when the transcript's signature differs from the one the user
+  // last answered — first visit, or a re-transcription that changed the
+  // diarization.
+  const speakerRows = useQuery(api.documentSpeakers.byDocument, {
+    documentId: doc._id,
+  });
+  const nameByLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of speakerRows ?? []) {
+      if (row.source === "human") map.set(row.label, row.name);
+    }
+    return map;
+  }, [speakerRows]);
+  const [namingOpen, setNamingOpen] = useState(false);
+  const currentSignature =
+    segments && segments.length > 0 ? transcriptSignature(segments) : null;
+  const needsNaming =
+    currentSignature !== null &&
+    doc.speakerNamingSignature !== currentSignature &&
+    speakerColor.size >= 2;
+  // Compare-during-render, not an effect: open once per signature change.
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (needsNaming && openedFor !== currentSignature) {
+    setOpenedFor(currentSignature);
+    setNamingOpen(true);
+  }
 
   const active = useMemo(
     () => (segments ? findActive(segments, currentTime) : { segment: -1, word: -1 }),
@@ -198,17 +230,27 @@ export function RecordingView({
               : "Original transcript"}
           </h2>
           {segments && segments.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={retrying}
-              onClick={() => void startTranscription()}
-            >
-              <RefreshCw
-                className={cn("size-3.5 mr-1", retrying && "animate-spin")}
-              />
-              Re-transcribe
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setNamingOpen(true)}
+              >
+                <Users className="size-3.5 mr-1" />
+                Name speakers
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={retrying}
+                onClick={() => void startTranscription()}
+              >
+                <RefreshCw
+                  className={cn("size-3.5 mr-1", retrying && "animate-spin")}
+                />
+                Re-transcribe
+              </Button>
+            </div>
           )}
         </div>
 
@@ -251,7 +293,7 @@ export function RecordingView({
                 key={seg._id}
                 segment={seg}
                 index={si}
-                speakerName={seg.speaker}
+                speakerName={nameByLabel.get(seg.speaker) ?? seg.speaker}
                 colorClass={speakerColor.get(seg.speaker)}
                 isActive={active.segment === si}
                 activeWordIndex={active.segment === si ? active.word : -1}
@@ -285,6 +327,17 @@ export function RecordingView({
           </div>
         )}
       </div>
+
+      {segments && segments.length > 0 && (
+        <SpeakerNamingDialog
+          document={doc}
+          segments={segments}
+          speakerColor={speakerColor}
+          speakerRows={speakerRows}
+          open={namingOpen}
+          onOpenChange={setNamingOpen}
+        />
+      )}
     </div>
   );
 }

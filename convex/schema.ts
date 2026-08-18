@@ -255,6 +255,14 @@ export default defineSchema({
     sourceLanguageCode: v.optional(v.string()),
     sourceLanguageIsMixed: v.optional(v.boolean()),
     translationLanguageCode: v.optional(v.string()),
+    // A signature of the transcript the user last answered (or skipped) the
+    // speaker-naming prompt for: "labelCount:segmentCount" from
+    // speakerSignature.ts. The naming dialog opens when segments exist and
+    // this differs — one mechanism covers first-open, skip, and re-confirm
+    // after a re-transcription changed the diarization. Known blind spot,
+    // accepted: a re-diarization that swaps labels while preserving both
+    // counts is invisible; the manual "Name speakers" button is the escape.
+    speakerNamingSignature: v.optional(v.string()),
     translationStatus: v.optional(
       v.union(
         v.literal("queued"),
@@ -755,6 +763,45 @@ export default defineSchema({
   // pipeline walks *to* this from a document (settings.languageForDocument).
   //
   // An absent row means the defaults, so a new account needs no backfill.
+  // Who each diarized "Speaker N" actually is, per recording — keyed by the
+  // label because ingestTranscript deletes and re-inserts every segment on
+  // re-transcribe: names written onto segment rows would die with them, and
+  // the label is deterministic first-appearance order. Whether the mapping
+  // is still trustworthy after a re-transcription is the signature's job
+  // (documents.speakerNamingSignature); rows are never silently re-applied
+  // across a diarization change without a human re-confirm.
+  documentSpeakers: defineTable({
+    documentId: v.id("documents"),
+    label: v.string(), // "Speaker 1" — machine join key, never rewritten
+    name: v.string(),
+    source: v.union(v.literal("human"), v.literal("ai")),
+    /** Verbatim quote the name was read from — ai rows only. */
+    evidence: v.optional(v.string()),
+    speakerId: v.optional(v.id("speakers")),
+    /** The project entity this speaker resolved to on confirm. */
+    entityId: v.optional(v.id("entities")),
+    confirmedAt: v.optional(v.number()), // human rows only
+  }).index("by_document", ["documentId", "label"]),
+
+  // The user-wide speaker library — the first genuinely user-scoped content
+  // table (userSettings/userUsage are the precedent; entities are
+  // deliberately per-project, so this is a new scope, not a shortcut).
+  // userId is a Better Auth id: v.string(), never v.id. Maintained
+  // implicitly by every naming confirm; consumed only through the naming
+  // dialog's autocomplete, recency-ranked. An empty library is a valid
+  // library — no backfill, no management screen until pollution is
+  // observed rather than predicted.
+  speakers: defineTable({
+    userId: v.string(),
+    name: v.string(), // display form, as last confirmed
+    normalizedName: v.string(), // trim/lowercase/collapse — the dedupe key
+    aliases: v.optional(v.array(v.string())), // observed spellings
+    useCount: v.number(),
+    lastUsedAt: v.number(),
+  })
+    .index("by_user", ["userId", "lastUsedAt"])
+    .index("by_user_and_name", ["userId", "normalizedName"]),
+
   userSettings: defineTable({
     userId: v.string(),
     defaultLanguageCode: v.string(),
