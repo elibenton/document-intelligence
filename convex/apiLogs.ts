@@ -94,6 +94,60 @@ export async function recordStageTiming(
   }
 }
 
+/**
+ * One row per human override of an AI-written field, written by the edit
+ * mutations at commit time — only when the commit displaces a value the AI
+ * wrote (authoring into an empty field is authorship, not rejection, and
+ * would poison the rate).
+ *
+ * A direct insert for the same reason recordStageTiming is: an override is
+ * not an API call, so it must not touch the usage shards or the spend
+ * ledger. The load-bearing field is `promptHash`, copied from the document's
+ * most recent successful analyze row at write time — that snapshot is what
+ * lets "which prompt shape gets overridden most, per field" be answered
+ * after the analyze row itself is pruned.
+ */
+export async function recordOverride(
+  ctx: MutationCtx,
+  args: { documentId: Id<"documents">; field: string }
+) {
+  try {
+    const projectId = (await ctx.db.get(args.documentId))?.projectId;
+    const ownerId = projectId
+      ? (await ctx.db.get(projectId))?.ownerId
+      : undefined;
+    // The document's own log rows, newest first — a bounded read (a document
+    // writes a few dozen rows over its life), filtered in JS for the last
+    // successful analyze call.
+    const recent = await ctx.db
+      .query("apiLogs")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .order("desc")
+      .take(50);
+    const lastAnalyze = recent.find(
+      (row) => row.operation === "analyze" && row.status === "ok"
+    );
+    await ctx.db.insert("apiLogs", {
+      provider: "human",
+      operation: `override:${args.field}`,
+      model: "-",
+      status: "ok",
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      durationMs: 0,
+      documentId: args.documentId,
+      ownerId,
+      promptHash: lastAnalyze?.promptHash,
+      buildSha: process.env.BUILD_SHA?.slice(0, 7),
+    });
+  } catch (e) {
+    // Same contract as usageLogger: measurement must never break the edit.
+    console.error("Failed to record override:", e);
+  }
+}
+
 export const record = internalMutation({
   args: {
     provider: v.string(),

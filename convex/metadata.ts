@@ -5,6 +5,7 @@ import { OTHER_CATEGORY } from "./analyzePrompt";
 import { applyDisplayName, normalizeTitle } from "./rename";
 import { authedMutation } from "./authz";
 import { requireDocument } from "./ownership";
+import { recordOverride } from "./apiLogs";
 
 // ---------------------------------------------------------------------------
 // Metadata pass — default-runtime half.
@@ -90,6 +91,12 @@ export const saveMetadataResult = internalMutation({
       if (typeof t === "string" && t.trim()) tagSet.add(t.trim().toLowerCase());
     }
 
+    // Every field below honors its human stamp the way kinds always have:
+    // a value a person committed survives any number of re-runs, including
+    // the deliberate clear-on-rerun fields — a human date must outlive a
+    // re-run that found nothing. The stamps are written "ai" alongside each
+    // AI value so a later human edit can tell displacement from authorship.
+    const human = (source: string | undefined) => source === "human";
     await ctx.db.patch(args.documentId, {
       ...(document.kindSource === "human" || !kindName
         ? {}
@@ -99,27 +106,53 @@ export const saveMetadataResult = internalMutation({
       // "Analyze ran and found no sections", and the Contents tab treats it
       // the same as absent by falling back to SectionHeader blocks.
       tableOfContents: toc,
-      primaryCategory,
+      ...(human(document.primaryCategorySource)
+        ? {}
+        : {
+            primaryCategory,
+            primaryCategorySource:
+              primaryCategory === OTHER_CATEGORY ? undefined : "ai",
+          }),
       // Cleared rather than left stale when a re-run can no longer date the
       // document: the previous run's answer is not evidence for this one.
-      documentDate: documentDate?.documentDate,
-      documentDatePrecision: documentDate?.documentDatePrecision,
-      documentPlace: documentPlace?.documentPlace,
-      documentPlaceEvidence: documentPlace?.documentPlaceEvidence,
+      ...(human(document.documentDateSource)
+        ? {}
+        : {
+            documentDate: documentDate?.documentDate,
+            documentDatePrecision: documentDate?.documentDatePrecision,
+            documentDateSource: documentDate ? "ai" : undefined,
+          }),
+      ...(human(document.documentPlaceSource)
+        ? {}
+        : {
+            documentPlace: documentPlace?.documentPlace,
+            documentPlaceEvidence: documentPlace?.documentPlaceEvidence,
+            documentPlaceSource: documentPlace ? "ai" : undefined,
+          }),
       // Cleared rather than left stale on a re-run, the same as the date and
       // place above: the previous run's bibliography is not evidence for this
       // one, and a citation that survives the analysis it came from is exactly
       // the kind of stale claim a reader would reprint.
-      citation: sanitizeCitation(parsed.citation),
-      metadata: JSON.stringify({
-        title: parsed.title,
-        summary: parsed.summary,
-        date: parsed.date,
-        author: parsed.author,
-        language: parsed.language,
-        additional: parsed.additional ?? [],
-      }),
-      ...(/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(
+      ...(human(document.citationSource)
+        ? {}
+        : (() => {
+            const citation = sanitizeCitation(parsed.citation);
+            return { citation, citationSource: citation ? "ai" : undefined };
+          })()),
+      ...(human(document.metadataSource)
+        ? {}
+        : {
+            metadata: JSON.stringify({
+              title: parsed.title,
+              summary: parsed.summary,
+              date: parsed.date,
+              author: parsed.author,
+              language: parsed.language,
+              additional: parsed.additional ?? [],
+            }),
+          }),
+      ...(!human(document.sourceLanguageSource) &&
+      /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(
         (parsed.source_language_code ?? "").trim().toLowerCase().replaceAll("_", "-")
       )
         ? {
@@ -127,6 +160,7 @@ export const saveMetadataResult = internalMutation({
               .trim()
               .toLowerCase()
               .replaceAll("_", "-"),
+            sourceLanguageSource: "ai",
           }
         : {}),
       ...(typeof parsed.is_multilingual === "boolean"
@@ -203,7 +237,7 @@ export function sanitizeDocumentDate(
 const NOT_A_PLACE = /^(unknown|unspecified|none|n\/?a|not stated|undisclosed)$/i;
 
 /** A place name, not a sentence — anything longer is the model narrating. */
-const MAX_PLACE_LENGTH = 120;
+export const MAX_PLACE_LENGTH = 120;
 
 /**
  * The place the document situates itself in, or nothing.
@@ -421,25 +455,28 @@ export function sanitizeTableOfContents(
 export const updateDocumentMeta = authedMutation({
   args: {
     documentId: v.id("documents"),
-    primaryKind: v.optional(v.string()),
     tags: v.optional(v.array(v.string())),
     metadata: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireDocument(ctx, args.documentId);
-    // The Info tab still edits a single kind; write the array alongside it so
-    // the two never drift (documents.addKinds keeps both in step as well).
-    const kind = args.primaryKind?.trim().toLowerCase();
+    const document = await requireDocument(ctx, args.documentId);
+    // Kind editing goes through documents.updateIdentity, which owns the
+    // multi-kind model; the single-kind arg this used to take wrote a
+    // one-element array over it and the two paths disagreed.
+    if (args.metadata !== undefined && document.metadataSource !== "human") {
+      await recordOverride(ctx, {
+        documentId: args.documentId,
+        field: "metadata",
+      });
+    }
     await ctx.db.patch(args.documentId, {
-      ...(args.primaryKind !== undefined
-        ? {
-            kinds: kind ? [kind] : [],
-            primaryKind: kind || undefined,
-            kindSource: "human",
-          }
-        : {}),
       ...(args.tags !== undefined ? { tags: args.tags } : {}),
-      ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+      // A human edit to the blob freezes it: saveMetadataResult rewrites it
+      // wholesale, so the stamp is what keeps the edit alive — at the
+      // documented cost of no fresh AI summary on re-analysis.
+      ...(args.metadata !== undefined
+        ? { metadata: args.metadata, metadataSource: "human" }
+        : {}),
     });
   },
 });

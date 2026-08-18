@@ -4,6 +4,8 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
+import { recordOverride } from "./apiLogs";
+import { MAX_PLACE_LENGTH, sanitizeDocumentDate } from "./metadata";
 import {
   filterOwnedDocuments,
   keepOwned,
@@ -261,6 +263,25 @@ export const updateIdentity = authedMutation({
   handler: async (ctx, args) => {
     const doc = await requireDocument(ctx, args.id);
 
+    // A commit that displaces an AI-written value is a rejection worth
+    // measuring; authoring into an empty field is not. Absent source with a
+    // value present counts as AI — rows from before the stamps existed.
+    if (
+      args.displayName !== undefined &&
+      doc.displayName &&
+      doc.displayNameSource !== "human" &&
+      args.displayName.trim() !== doc.displayName
+    ) {
+      await recordOverride(ctx, { documentId: args.id, field: "displayName" });
+    }
+    if (
+      args.kinds !== undefined &&
+      (doc.kinds?.length ?? 0) > 0 &&
+      doc.kindSource !== "human"
+    ) {
+      await recordOverride(ctx, { documentId: args.id, field: "kind" });
+    }
+
     const patch: {
       displayName?: string;
       displayNameSource?: string;
@@ -288,7 +309,9 @@ export const updateIdentity = authedMutation({
       // Keep the legacy single field in step — the extraction template and
       // the pipeline progress bar both read it.
       patch.primaryKind = kinds[0];
-      patch.kindSource = "human";
+      // Same rule as the title above: a committed value stamps "human", an
+      // emptied one clears the stamp and re-opens the field to Analyze.
+      patch.kindSource = kinds.length > 0 ? "human" : undefined;
 
       // Register anything new so it becomes a pill for every other document
       // in the same project.
@@ -314,6 +337,131 @@ export const updateIdentity = authedMutation({
  * selection rarely share a kind list, and replacing would flatten them all to
  * the same one.
  */
+/**
+ * Human edit of one scalar Analyze field, for the inline editors. One
+ * mutation with a closed field union rather than four micro-mutations: the
+ * provenance rule, the override recording, and the ownership walk are the
+ * same for all of them, and only the validation differs.
+ *
+ * The rule (documented on the schema's *Source fields): a non-empty commit
+ * stamps `"human"` and re-analysis skips the field; an empty commit clears
+ * value and stamp both, re-opening the field to AI. Clearing still records
+ * the override, so the rejection isn't lost with the stamp.
+ */
+export const setField = authedMutation({
+  args: {
+    id: v.id("documents"),
+    field: v.union(
+      v.literal("primaryCategory"),
+      v.literal("documentDate"),
+      v.literal("documentPlace"),
+      v.literal("sourceLanguageCode")
+    ),
+    value: v.optional(v.string()),
+    /** documentDate only: "day" | "month" | "year". Inferred client-side
+     *  from the value's shape; validated here against it. */
+    precision: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const doc = await requireDocument(ctx, args.id);
+    const value = (args.value ?? "").trim();
+
+    const sourceField = (
+      {
+        primaryCategory: "primaryCategorySource",
+        documentDate: "documentDateSource",
+        documentPlace: "documentPlaceSource",
+        sourceLanguageCode: "sourceLanguageSource",
+      } as const
+    )[args.field];
+
+    if (doc[args.field] && doc[sourceField] !== "human") {
+      await recordOverride(ctx, { documentId: args.id, field: args.field });
+    }
+
+    const stamp = value ? "human" : undefined;
+
+    switch (args.field) {
+      case "primaryCategory": {
+        if (value) {
+          const key = value.toLowerCase();
+          const projectId = doc.projectId;
+          const known =
+            projectId !== undefined &&
+            (await ctx.db
+              .query("documentCategories")
+              .withIndex("by_project_and_key", (q) =>
+                q.eq("projectId", projectId).eq("key", key)
+              )
+              .first()) !== null;
+          if (!known) throw new Error(`Not a category in this project: ${key}`);
+          await ctx.db.patch(args.id, {
+            primaryCategory: key,
+            primaryCategorySource: stamp,
+          });
+        } else {
+          await ctx.db.patch(args.id, {
+            primaryCategory: undefined,
+            primaryCategorySource: undefined,
+          });
+        }
+        return;
+      }
+      case "documentDate": {
+        if (value) {
+          // Same shape/impossible-date validation Analyze output gets, minus
+          // the future-date rejection: that guard exists for hallucinations,
+          // and a human typing a date is asserting a fact.
+          const sanitized = sanitizeDocumentDate(
+            { value, precision: args.precision },
+            Infinity
+          );
+          if (!sanitized) {
+            throw new Error(
+              "Not a valid date: use YYYY, YYYY-MM, or YYYY-MM-DD"
+            );
+          }
+          await ctx.db.patch(args.id, {
+            ...sanitized,
+            documentDateSource: "human",
+          });
+        } else {
+          await ctx.db.patch(args.id, {
+            documentDate: undefined,
+            documentDatePrecision: undefined,
+            documentDateSource: undefined,
+          });
+        }
+        return;
+      }
+      case "documentPlace": {
+        const place = value.replace(/\s+/g, " ").slice(0, MAX_PLACE_LENGTH);
+        // No NOT_A_PLACE screen here: that regex catches the model writing
+        // "unknown" into a field it should have left empty; a human typing
+        // it means it. Evidence is cleared either way — a quote supporting a
+        // value that no longer exists is stale.
+        await ctx.db.patch(args.id, {
+          documentPlace: place || undefined,
+          documentPlaceEvidence: undefined,
+          documentPlaceSource: place ? stamp : undefined,
+        });
+        return;
+      }
+      case "sourceLanguageCode": {
+        const code = value.toLowerCase().replaceAll("_", "-");
+        if (code && !/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(code)) {
+          throw new Error(`Not a BCP-47 language code: ${code}`);
+        }
+        await ctx.db.patch(args.id, {
+          sourceLanguageCode: code || undefined,
+          sourceLanguageSource: code ? stamp : undefined,
+        });
+        return;
+      }
+    }
+  },
+});
+
 export const addKinds = authedMutation({
   args: { id: v.id("documents"), kinds: v.array(v.string()) },
   handler: async (ctx, args) => {

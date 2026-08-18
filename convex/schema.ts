@@ -132,6 +132,25 @@ export default defineSchema({
     // inferred from content; see the dating rule in convex/analyzePrompt.ts.
     documentDate: v.optional(v.string()),
     documentDatePrecision: v.optional(v.string()), // "day" | "month" | "year"
+    // Provenance stamps, one per human-editable Analyze field, all following
+    // displayNameSource's rule (the one kindSource used to diverge from):
+    // a committed non-empty value stamps "human" and re-analysis skips the
+    // field; committing empty clears the value AND the stamp, re-opening the
+    // field to AI. The rejection itself isn't lost by clearing — the edit
+    // mutations record it into apiLogs (`override:<field>`) at commit time.
+    documentDateSource: v.optional(v.string()), // "ai" | "human"
+    primaryCategorySource: v.optional(v.string()),
+    documentPlaceSource: v.optional(v.string()),
+    sourceLanguageSource: v.optional(v.string()),
+    // One stamp for the whole citation object, not 17 per-field stamps:
+    // saveMetadataResult rewrites the citation wholesale on re-run, so the
+    // symmetric guard is wholesale too. Editing any sub-field freezes the
+    // object; clearing every sub-field re-opens it.
+    citationSource: v.optional(v.string()),
+    // Stamps a human edit to the metadata JSON blob (summary/author/…).
+    // Trade-off, accepted: a human-touched blob also stops receiving a fresh
+    // AI summary on re-analysis, because the blob is written wholesale.
+    metadataSource: v.optional(v.string()),
     // Where the document situates itself — written, issued, filed, or about.
     // As the document names it ("Geneva, Switzerland"), not resolved to an
     // entity or coordinates: this is the free "where" that rides along on the
