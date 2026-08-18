@@ -73,8 +73,6 @@ export default function DocumentPage({ id }: { id: string }) {
   const translatedPages = useQuery(api.translations.pagesByDocument, {
     documentId,
   });
-  const ensureRendered = useMutation(api.render.ensureRendered);
-  const retryRender = useMutation(api.render.retryRender);
   const retryTranslation = useMutation(api.translations.retry);
   const rotateDocument = useMutation(api.documents.rotateDocument);
 
@@ -185,17 +183,12 @@ export default function DocumentPage({ id }: { id: string }) {
    * How many pages the viewer lays out.
    *
    * `document.pageCount` is written by the parse pass, so a document whose
-   * Scan or Analyze failed carries none — and the viewer was then drawing
-   * exactly one page of a 20-page PDF while the file itself was fine. Page
-   * layout is not the parse pass's to decide: the renderer already counted the
-   * pages with pdf.js (`renderExpectedPages`) and committed a `pages` row for
-   * each, so fall through to those. All three agree whenever more than one
-   * exists.
+   * parse failed carries none — and the viewer was then drawing exactly one
+   * page of a 20-page PDF while the file itself was fine. Fall through to the
+   * committed `pages` rows; the client's own pdf.js load supplies the truth
+   * once the file opens either way.
    */
-  const totalPages =
-    document?.pageCount ??
-    document?.renderExpectedPages ??
-    (pages?.length || undefined);
+  const totalPages = document?.pageCount ?? (pages?.length || undefined);
   const isRecording = Boolean(
     document &&
       (document.mediaType === "audio" ||
@@ -224,12 +217,6 @@ export default function DocumentPage({ id }: { id: string }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showContentsTab]);
-
-  useEffect(() => {
-    if (isPdfDocument) {
-      void ensureRendered({ documentId });
-    }
-  }, [isPdfDocument, ensureRendered, documentId]);
 
   /**
    * The sidebar's entity groups, read from the entities table.
@@ -550,20 +537,6 @@ export default function DocumentPage({ id }: { id: string }) {
                 Original
               </button>
             </div>
-          )}
-          {/* Pages render in the browser, so text-geometry extraction never
-              blocks the viewer. It only affects selectable text and overlays,
-              which is what this reports. */}
-          {isPdfDocument && document.renderStatus === "failed" && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-full shadow-md"
-              onClick={() => void retryRender({ documentId })}
-              title={document.renderLastError ?? undefined}
-            >
-              Retry text layer
-            </Button>
           )}
         </div>
       </header>

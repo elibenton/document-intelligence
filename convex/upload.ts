@@ -1,8 +1,6 @@
 import { type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
-import { RENDERER_VERSION } from "./rendererConfig";
 import { authedMutation, authedQuery } from "./authz";
 import { PROVIDER_FILE_PART_SAFE_BYTES } from "./interfazeLimits";
 import { requireProject } from "./ownership";
@@ -29,15 +27,9 @@ export function detectMediaType(mimeType: string, name = ""): string {
   if (mime === "text/csv" || mime === "application/csv" || ext === "csv") {
     return "csv";
   }
-  if (
-    mime ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    ext === "docx"
-  ) {
-    // Interfaze reads .docx natively; page images come from convex/docxRender.
-    // Legacy binary .doc is a different format and stays unsupported.
-    return "docx";
-  }
+  // .docx is deliberately unsupported (2026-08-18): faithful in-browser DOCX
+  // display needs an external conversion service, and the user base does not
+  // justify one. Convert to PDF and re-upload.
   if (mime === "text/html") return "webScrape";
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("audio/")) return "audio";
@@ -165,7 +157,7 @@ export const createDocument = authedMutation({
         status: "failed",
         errorMessage: `Unsupported file type${
           args.mimeType ? ` (${args.mimeType})` : ""
-        } — upload a PDF, DOCX, CSV, image, audio, or video file.`,
+        } — upload a PDF, CSV, image, audio, or video file. (.docx is not supported: convert it to PDF first.)`,
       });
       return { documentId, duplicateOf: null };
     }
@@ -185,23 +177,6 @@ export const createDocument = authedMutation({
     // completed a request before a network failure is observed, so a retry
     // could duplicate a billable call.
     await enqueueStage(ctx, documentId, "parse");
-
-    // Render page images independently for the viewer. Interfaze receives the
-    // original whole PDF, so rendering is no longer on the analysis critical
-    // path.
-    if (mediaType === "pdf" || mediaType === "docx") {
-      await ctx.db.patch(documentId, {
-        renderStatus: "queued",
-        renderedPageCount: 0,
-        rendererVersion: RENDERER_VERSION,
-        renderAttempts: 0,
-        renderScheduledAt: Date.now(),
-      });
-      await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
-        documentId,
-        startPage: 0,
-      });
-    }
 
     return { documentId, duplicateOf: null };
   },

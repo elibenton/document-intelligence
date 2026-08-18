@@ -25,8 +25,7 @@ const PAGE_BLEED = 0.01; // 1% — rounding at page edges is normal
 const WORD_SLACK = 0.02; // 2% — word boxes can poke slightly past their line
 // A purely relative slack is useless on small boxes: a 26px-tall line gets
 // 0.5px of tolerance, and real OCR word boxes routinely overhang their line by
-// a pixel or two on descenders. Mirror production's own tolerance floor
-// (convex/renderPages.ts uses `Math.max(2, …)`).
+// a pixel or two on descenders.
 const MIN_SLACK_PX = 2;
 
 const slack = (dimension: number, fraction: number) =>

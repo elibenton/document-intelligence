@@ -17,7 +17,7 @@ const ACCEPTED_MIME_TYPES = [
 
 /** Extensions for the file picker's `accept` attribute. */
 export const ACCEPT_ATTR =
-  ".pdf,.docx,.csv,.png,.jpg,.jpeg,.webp,.gif,.tif,.tiff,.mp3,.m4a,.wav,.aac,.ogg,.flac,.mp4,.mov,.webm,.mkv";
+  ".pdf,.csv,.png,.jpg,.jpeg,.webp,.gif,.tif,.tiff,.mp3,.m4a,.wav,.aac,.ogg,.flac,.mp4,.mov,.webm,.mkv";
 
 /** Fallback for browsers/OSes that hand over an empty `file.type`. */
 const ACCEPTED_EXTENSIONS = new Set(

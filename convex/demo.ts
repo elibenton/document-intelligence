@@ -7,7 +7,6 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { RENDERER_VERSION } from "./rendererConfig";
 import { requireBudget } from "./budget";
 import { clientReportArgs, recordIssue } from "./issues";
 import { requireDocument, requireProject } from "./ownership";
@@ -384,23 +383,6 @@ export const createDocument = demoMutation({
     await ctx.db.patch(ctx.session._id, { documentId });
 
     await enqueueStage(ctx, documentId, "parse");
-
-    // Page images are rendered for the same reason they are on a real upload:
-    // nothing here depends on them (the landing page draws pages from the
-    // visitor's own local file with pdf.js), but leaving the document without
-    // them would make it the odd one out if a visitor later signs up and the
-    // document is carried across.
-    await ctx.db.patch(documentId, {
-      renderStatus: "queued",
-      renderedPageCount: 0,
-      rendererVersion: RENDERER_VERSION,
-      renderAttempts: 0,
-      renderScheduledAt: Date.now(),
-    });
-    await ctx.scheduler.runAfter(0, internal.renderPages.renderBatch, {
-      documentId,
-      startPage: 0,
-    });
 
     return { documentId };
   },

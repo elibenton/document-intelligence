@@ -221,11 +221,13 @@ export default defineSchema({
     reviewSkippedAt: v.optional(v.number()),
     uploadedAt: v.number(),
     completedAt: v.optional(v.number()),
-    // Debounce for page-geometry rendering (render.ensureRendered)
+    // DEAD (2026-08-18): the server geometry-extraction lifecycle these
+    // tracked is deleted — geometry comes from OCR precontext on the
+    // understanding call, pixels from client pdf.js. Nothing writes or reads
+    // them; they validate rows in the wild until migrations.stripRenderFields
+    // has run everywhere, after which they can be removed (widen → migrate →
+    // narrow).
     renderScheduledAt: v.optional(v.number()),
-    // Page-derivative lifecycle is deliberately separate from document AI
-    // processing. A document can be parsed while its viewer derivatives are
-    // still rendering (or vice versa).
     renderStatus: v.optional(
       v.union(
         v.literal("queued"),
