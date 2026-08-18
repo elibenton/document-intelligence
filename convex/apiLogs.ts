@@ -8,6 +8,7 @@
 import { internalMutation } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -39,6 +40,57 @@ export function usageLogger(
       console.error("Failed to record API usage:", e);
     }
   };
+}
+
+/**
+ * One measurement row for a pipeline stage reaching terminal state, written by
+ * the stage-lifecycle mutations in convex/processing.ts.
+ *
+ * Deliberately a direct insert rather than a call through `record`: a stage is
+ * not an API call, so it must not increment `apiUsageTotals.calls`, charge the
+ * spend ledger, or file a provider issue (processing.ts files its own pipeline
+ * issues). What it shares with API rows is the table, so per-document cost and
+ * per-stage latency can be read side by side.
+ */
+export async function recordStageTiming(
+  ctx: MutationCtx,
+  job: {
+    _creationTime: number;
+    documentId: Id<"documents">;
+    stage: string;
+    // Optional on legacy rows; row creation time is the honest fallback.
+    queuedAt?: number;
+    startedAt?: number;
+  },
+  outcome: "ok" | "error"
+) {
+  try {
+    const now = Date.now();
+    const queuedAt = job.queuedAt ?? job._creationTime;
+    const projectId = (await ctx.db.get(job.documentId))?.projectId;
+    const ownerId = projectId
+      ? (await ctx.db.get(projectId))?.ownerId
+      : undefined;
+    await ctx.db.insert("apiLogs", {
+      provider: "pipeline",
+      operation: `stage:${job.stage}`,
+      model: "-",
+      status: outcome,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      durationMs: now - (job.startedAt ?? queuedAt),
+      queuedMs: job.startedAt ? job.startedAt - queuedAt : undefined,
+      documentId: job.documentId,
+      ownerId,
+      buildSha: process.env.BUILD_SHA?.slice(0, 7),
+    });
+  } catch (e) {
+    // Same contract as usageLogger: measurement must never break the
+    // lifecycle transition it describes.
+    console.error("Failed to record stage timing:", e);
+  }
 }
 
 export const record = internalMutation({

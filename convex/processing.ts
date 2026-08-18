@@ -7,6 +7,7 @@ import { authedMutation } from "./authz";
 import { keepOwned, requireDocument } from "./ownership";
 import { requireBudget } from "./budget";
 import { documentIssueContext, recordIssue } from "./issues";
+import { recordStageTiming } from "./apiLogs";
 
 // Stages are plain scheduled actions (ctx.scheduler); there is no workpool.
 // The two guarantees the pool used to provide are covered by:
@@ -371,6 +372,13 @@ export const updateJobStatus = internalMutation({
         ...(args.status === "running" ? { startedAt: Date.now() } : {}),
         ...(args.status === "completed" ? { completedAt: Date.now() } : {}),
       });
+      if (args.status === "completed" || args.status === "failed") {
+        await recordStageTiming(
+          ctx,
+          job,
+          args.status === "completed" ? "ok" : "error"
+        );
+      }
     } else if ((await ctx.db.get(args.documentId)) !== null) {
       // Only insert for a document that still exists. A stage still running
       // when its document was deleted would otherwise re-create the job row the
@@ -452,6 +460,7 @@ export const sweepStuckJobs = internalMutation({
       if ((job.startedAt ?? job._creationTime) >= cutoff) continue;
       const errorMessage = `${job.stage} stopped before it could finish — the processing action was terminated (document may be too large)`;
       await ctx.db.patch(job._id, { status: "failed", errorMessage });
+      await recordStageTiming(ctx, job, "error");
       await recordIssue(ctx, {
         surface: "pipeline",
         stage: job.stage,
@@ -526,6 +535,7 @@ async function failDocument(
         status: "failed",
         errorMessage,
       });
+      await recordStageTiming(ctx, job, "error");
     }
   }
 }
@@ -574,6 +584,7 @@ export const markStageFailed = internalMutation({
         status: "failed",
         errorMessage: args.errorMessage,
       });
+      await recordStageTiming(ctx, job, "error");
     }
     // Counted even though the document survives. A stage that fails without
     // failing the document is the easiest kind of problem to never notice:
