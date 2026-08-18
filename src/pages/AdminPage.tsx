@@ -187,6 +187,31 @@ export default function AdminPage() {
             </div>
           </section>
 
+          {data.overrides.byField.length > 0 && (
+            <section>
+              <SectionHeading>Human overrides</SectionHeading>
+              <p className="mb-3 text-sm text-muted-foreground">
+                Fields where a person replaced what analysis wrote, in this
+                window — the per-field rejection rate against{" "}
+                {data.overrides.analyzeCalls.toLocaleString()} analyze call
+                {data.overrides.analyzeCalls !== 1 && "s"}. A hot field here is
+                a prompt worth improving.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {data.overrides.byField.map((o) => (
+                  <span
+                    key={o.field}
+                    className="rounded-full border bg-card px-3 py-1 text-sm tabular-nums"
+                  >
+                    <span className="font-medium">{o.field}</span> · {o.count}
+                    {data.overrides.analyzeCalls > 0 &&
+                      ` (${Math.round((o.count / data.overrides.analyzeCalls) * 100)}%)`}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
           <section>
             <SectionHeading>By operation</SectionHeading>
             <div className="overflow-x-auto">

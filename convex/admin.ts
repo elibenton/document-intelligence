@@ -80,6 +80,14 @@ export const usage = adminQuery({
     byDay: v.array(
       v.object({ day: v.string(), calls: v.number(), costUsd: v.number() })
     ),
+    // The override harvest: human edits that displaced an AI value, per
+    // field, against the window's analyze-call count — the rejection rate
+    // the *Source stamps exist to measure. Rows are `override:<field>`
+    // inserts from recordOverride.
+    overrides: v.object({
+      analyzeCalls: v.number(),
+      byField: v.array(v.object({ field: v.string(), count: v.number() })),
+    }),
     byAccount: v.array(
       v.object({
         account: v.string(),
@@ -209,9 +217,27 @@ export const usage = adminQuery({
 
     window.documentsTouched = documentIds.size;
 
+    // The override harvest, from the same window scan: `override:<field>`
+    // rows are zero-cost human-rejection markers (see apiLogs.recordOverride).
+    const overrideCounts = new Map<string, number>();
+    let analyzeCalls = 0;
+    for (const row of rows) {
+      if (row.operation === "analyze" && row.status === "ok") analyzeCalls++;
+      else if (row.operation.startsWith("override:")) {
+        const field = row.operation.slice("override:".length);
+        overrideCounts.set(field, (overrideCounts.get(field) ?? 0) + 1);
+      }
+    }
+
     return {
       lifetime,
       window,
+      overrides: {
+        analyzeCalls,
+        byField: [...overrideCounts.entries()]
+          .map(([field, count]) => ({ field, count }))
+          .sort((a, b) => b.count - a.count),
+      },
       byOperation: [...ops.entries()]
         .map(([operation, o]) => {
           const sorted = [...o.durations].sort((a, b) => a - b);

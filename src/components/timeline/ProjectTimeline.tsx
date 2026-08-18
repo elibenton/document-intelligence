@@ -1,6 +1,9 @@
 import { Link } from "react-router";
+import { useMutation } from "convex/react";
+import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { DocTypePills } from "@/components/documents/DocTypePills";
+import { EditableDate } from "@/components/ui/editable";
 import { EmptyState } from "@/components/ui/empty-state";
 import { entitySlug } from "@/lib/entitySlug";
 import {
@@ -146,14 +149,30 @@ function entryName(entry: Entry): string {
 }
 
 function TimelineDocumentRow({ doc }: { doc: TimelineDocument }) {
+  const setField = useMutation(api.documents.setField);
   const title = doc.displayName?.trim() || doc.name;
   return (
     <Link
       to={`/documents/${doc._id}`}
       className="group flex items-baseline gap-3 rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
     >
+      {/* The date edits in place — which turns the undated section below
+          into a fix-up worklist, not just a count. Human dates survive
+          re-analysis; clearing one is itself a stamped human answer. */}
       <span className="w-24 shrink-0 text-xs tabular-nums text-muted-foreground">
-        {formatDocumentDate(doc)}
+        <EditableDate
+          value={doc.documentDate ?? documentDateSortKey(doc)}
+          display={formatDocumentDate(doc)}
+          label={`Edit date of ${title}`}
+          onCommit={({ value, precision }) =>
+            setField({
+              id: doc._id,
+              field: "documentDate",
+              value: value || undefined,
+              precision: precision ?? undefined,
+            })
+          }
+        />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm font-medium group-hover:underline">
         {title}
