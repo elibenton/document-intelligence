@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Link } from "react-router";
 import { Languages } from "lucide-react";
 import { api } from "../../convex/_generated/api";
+import ClipperTokenSettings from "@/components/settings/ClipperTokenSettings";
 import ProviderAlert from "@/components/settings/ProviderAlert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -101,6 +102,9 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        <SectionHeading>Web clipper</SectionHeading>
+        <ClipperTokenSettings />
 
         {/* Tidiness only — the server is the gate. A non-admin who types
             /admin gets a thrown error either way. */}

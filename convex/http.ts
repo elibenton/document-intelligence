@@ -16,8 +16,15 @@ authComponent.registerRoutes(http, createAuth, { cors: true });
 // ---------------------------------------------------------------------------
 // POST /clip — web clipper ingestion endpoint.
 // The Chrome extension sends a self-contained HTML archive plus the parsed
-// article (markdown + metadata). Auth is a shared secret (CLIPPER_API_KEY).
+// article (markdown + metadata). Auth is a personal bearer token minted in
+// Settings (convex/clipperTokens.ts), which also names the project clips
+// land in and the account the Analyze spend bills to.
 // ---------------------------------------------------------------------------
+
+// Per-string ceiling on the two large clip payloads. Well under what a page
+// realistically produces, and keeps a hostile caller from parking arbitrary
+// bytes in storage on someone's token.
+const MAX_CLIP_PART_CHARS = 5_000_000;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -48,13 +55,18 @@ http.route({
   path: "/clip",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
-    const expectedKey = process.env.CLIPPER_API_KEY;
-    if (!expectedKey) {
-      return jsonResponse(500, { error: "CLIPPER_API_KEY not configured" });
-    }
     const auth = req.headers.get("Authorization") ?? "";
-    if (auth !== `Bearer ${expectedKey}`) {
-      return jsonResponse(401, { error: "Invalid or missing API key" });
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    const resolved = await ctx.runQuery(internal.clipperTokens.resolve, {
+      token,
+    });
+    if (!resolved) {
+      return jsonResponse(401, { error: "Invalid or missing clipper token" });
+    }
+    if (resolved.exhausted) {
+      return jsonResponse(402, {
+        error: "This account is out of processing budget",
+      });
     }
 
     let body: unknown;
@@ -80,6 +92,14 @@ http.route({
     if (typeof b.articleMarkdown !== "string" || !b.articleMarkdown.trim()) {
       return jsonResponse(400, { error: "'articleMarkdown' must be a non-empty string" });
     }
+    if (
+      b.archiveHtml.length > MAX_CLIP_PART_CHARS ||
+      b.articleMarkdown.length > MAX_CLIP_PART_CHARS
+    ) {
+      return jsonResponse(413, {
+        error: `'archiveHtml' and 'articleMarkdown' must each be under ${MAX_CLIP_PART_CHARS} characters`,
+      });
+    }
     const rawMeta =
       typeof b.metadata === "object" && b.metadata !== null
         ? (b.metadata as Record<string, unknown>)
@@ -99,6 +119,8 @@ http.route({
     );
 
     const documentId = await ctx.runMutation(internal.clips.createFromClip, {
+      projectId: resolved.projectId,
+      ownerId: resolved.ownerId,
       title: b.title.trim(),
       url: b.url,
       storageId,

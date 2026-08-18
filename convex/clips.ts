@@ -1,5 +1,5 @@
 import { internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +36,11 @@ function chunkIntoPages(markdown: string): string[] {
 
 export const createFromClip = internalMutation({
   args: {
+    // Resolved from the caller's clipper token by http.ts /clip. Both are
+    // re-verified against the live project row below: a token can outlive the
+    // project it points at, and a stale one must not file into someone else's.
+    projectId: v.id("projects"),
+    ownerId: v.string(),
     title: v.string(),
     url: v.string(),
     storageId: v.id("_storage"),
@@ -51,19 +56,17 @@ export const createFromClip = internalMutation({
     lang: v.optional(v.string()),
     ogImage: v.optional(v.string()),
   },
+  returns: v.id("documents"),
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.ownerId !== args.ownerId) {
+      throw new ConvexError("Clipper token no longer matches its project");
+    }
+
     const pageTexts = chunkIntoPages(args.articleMarkdown);
 
-    // The clipper extension is not project-aware yet — clips land in the
-    // oldest project (the default/test project) so they stay visible.
-    const defaultProject = await ctx.db
-      .query("projects")
-      .withIndex("by_createdAt")
-      .order("asc")
-      .first();
-
     const documentId = await ctx.db.insert("documents", {
-      projectId: defaultProject?._id,
+      projectId: args.projectId,
       name: args.title,
       storageId: args.storageId,
       textStorageId: args.textStorageId,
@@ -93,7 +96,7 @@ export const createFromClip = internalMutation({
     for (let pageNum = 0; pageNum < pageTexts.length; pageNum++) {
       const pageId = await ctx.db.insert("pages", {
         documentId,
-        projectId: defaultProject?._id,
+        projectId: args.projectId,
         pageNumber: pageNum,
         text: pageTexts[pageNum].trim(),
       });

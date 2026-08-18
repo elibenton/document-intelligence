@@ -49,7 +49,6 @@ npx convex env set INTERFAZE_API_KEY sk-...
 |---|---|---|
 | `INTERFAZE_API_KEY` | **Yes** | All document AI: OCR, analyze, extract, transcribe, search synthesis |
 | `GEMINI_API_KEY` | No | Semantic search leg is skipped; search still runs on full-text + entity graph |
-| `CLIPPER_API_KEY` | No | The browser extension's `/clip` HTTP endpoint (`convex/http.ts`) |
 
 Frontend-visible values (`VITE_*`) go in `.env.local` and are baked into the
 bundle — never put a provider key there.
