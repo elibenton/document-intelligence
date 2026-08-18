@@ -109,6 +109,12 @@ export function PipelineProgress({
     dialog === "analyze" ? { documentId } : "skip"
   );
   const jobs = useQuery(api.processingJobs.byDocument, { documentId });
+  // Only the collapsed "Processing complete" row shows the usage summary, so
+  // the query is skipped everywhere else.
+  const usage = useQuery(
+    api.apiLogs.byDocument,
+    collapseWhenDone ? { documentId } : "skip"
+  );
   const control = useQuery(api.processingControl.get);
   const pages = useQuery(
     api.pages.byDocument,

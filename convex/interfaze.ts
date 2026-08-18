@@ -36,6 +36,8 @@ import { interfazeCostUsd } from "./interfazeCost";
 import type { UsageLogger } from "./interfazeCost";
 import { ocrPrecontextToPages } from "./interfazeOcr";
 import type { OcrPageResult, Precontext } from "./interfazeOcr";
+import { chunksToSegments } from "./interfazeStt";
+import type { SttTaskResult, TranscriptResult } from "./interfazeStt";
 
 // Re-exported so every existing `from "./interfaze"` import keeps working —
 // callers should not have to know which of these modules a symbol lives in.
@@ -70,8 +72,8 @@ export type ChatCompletionMessageParam = {
   content: string | ChatCompletionContentPart[];
 };
 
-/** The one built-in Interfaze task this app runs. */
-export type TaskName = "ocr";
+/** The built-in Interfaze tasks this app runs. */
+export type TaskName = "ocr" | "speech_to_text";
 
 interface WireError {
   error?: { code?: string; message?: string };

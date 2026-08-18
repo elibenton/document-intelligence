@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ocrPrecontextToPages } from "./interfazeOcr";
+import { chunksToSegments } from "./interfazeStt";
 import type { Precontext } from "./interfazeOcr";
 
 /**

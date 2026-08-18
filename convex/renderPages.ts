@@ -346,7 +346,7 @@ export const renderBatch = internalAction({
       // platform logs keep the original stack. A platform kill skips this
       // catch entirely — ensureRendered's stale-heartbeat re-kick covers it.
       try {
-        await ctx.runMutation(internal.pageImages.failRender, {
+        await ctx.runMutation(internal.render.failRender, {
           documentId: args.documentId,
           rendererVersion: RENDERER_VERSION,
           error: error instanceof Error ? error.message : String(error),
