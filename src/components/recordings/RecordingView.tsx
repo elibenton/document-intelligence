@@ -1,31 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { ArrowDownToLine, Loader2, RefreshCw } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { languageDirection, languageName } from "@/lib/languages";
-
-// Deterministic per-speaker accent colors
-const SPEAKER_COLORS = [
-  "text-blue-600 dark:text-blue-400",
-  "text-emerald-600 dark:text-emerald-400",
-  "text-purple-600 dark:text-purple-400",
-  "text-rose-600 dark:text-rose-400",
-  "text-amber-600 dark:text-amber-400",
-  "text-cyan-600 dark:text-cyan-400",
-];
-
-function formatTime(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const mm = h > 0 ? String(m % 60).padStart(2, "0") : String(m);
-  const ss = String(s % 60).padStart(2, "0");
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
+import { languageName } from "@/lib/languages";
+import { buildSpeakerColorMap } from "./speakerColors";
+import { findActive } from "./transcriptAnchors";
+import { TranscriptTurn } from "./TranscriptTurn";
+import { TransportBar } from "./TransportBar";
 
 export function RecordingView({
   document: doc,
@@ -45,129 +30,186 @@ export function RecordingView({
     doc.mediaType === "video" || doc.mimeType.startsWith("video/");
 
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const activeWordRef = useRef<HTMLSpanElement | null>(null);
+  // Brackets our own scrollIntoView so the scroll listener can tell the
+  // user's hand from ours. A counter, not a boolean: smooth scrolling fires
+  // several scroll events after the call returns.
+  const programmaticScrollUntil = useRef(0);
   const [currentTime, setCurrentTime] = useState(0);
-  const [autoScroll, setAutoScroll] = useState(true);
+  const [duration, setDuration] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [following, setFollowing] = useState(true);
   const [retrying, setRetrying] = useState(false);
 
-  const speakerColor = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const seg of segments ?? []) {
-      if (!map.has(seg.speaker)) {
-        map.set(seg.speaker, SPEAKER_COLORS[map.size % SPEAKER_COLORS.length]);
-      }
-    }
-    return map;
-  }, [segments]);
+  const speakerColor = useMemo(
+    () => buildSpeakerColorMap(segments ?? []),
+    [segments],
+  );
 
-  // Active segment/word for the current playback position
-  const active = useMemo(() => {
-    if (!segments) return { segment: -1, word: -1 };
-    for (let si = 0; si < segments.length; si++) {
-      const seg = segments[si];
-      const nextStart = segments[si + 1]?.startTime ?? Infinity;
-      if (currentTime >= seg.startTime && currentTime < Math.max(seg.endTime, nextStart)) {
-        let wi = -1;
-        for (let w = 0; w < seg.words.length; w++) {
-          if (currentTime >= seg.words[w].start) wi = w;
-          else break;
-        }
-        return { segment: si, word: wi };
-      }
-    }
-    return { segment: -1, word: -1 };
-  }, [segments, currentTime]);
+  const active = useMemo(
+    () => (segments ? findActive(segments, currentTime) : { segment: -1, word: -1 }),
+    [segments, currentTime],
+  );
 
-  // Keep the active word in view during playback
+  // Keep the active word in view during playback — unless the user has
+  // scrolled away, in which case following pauses until they ask for it back
+  // or make an explicit seek (which declares a new focus point).
   useEffect(() => {
-    if (autoScroll && activeWordRef.current) {
-      activeWordRef.current.scrollIntoView({
-        block: "center",
-        behavior: "smooth",
-      });
+    if (following && playing && activeWordRef.current) {
+      programmaticScrollUntil.current = Date.now() + 600;
+      activeWordRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
     }
-  }, [active.segment, active.word, autoScroll]);
+  }, [active.segment, active.word, following, playing]);
 
-  function seekTo(time: number) {
+  const onUserScroll = useCallback(() => {
+    if (Date.now() > programmaticScrollUntil.current) setFollowing(false);
+  }, []);
+
+  const seekTo = useCallback((time: number) => {
     const media = mediaRef.current;
     if (!media) return;
     media.currentTime = time;
     setCurrentTime(time);
+    setFollowing(true);
     if (media.paused) void media.play();
-  }
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    const media = mediaRef.current;
+    if (!media) return;
+    if (media.paused) void media.play();
+    else media.pause();
+  }, []);
+
+  const changeSpeed = useCallback((next: number) => {
+    setSpeed(next);
+    if (mediaRef.current) mediaRef.current.playbackRate = next;
+  }, []);
+
+  // Space / arrows drive playback anywhere in the document view, except while
+  // typing or inside an open dialog — the classic space-scrolls-the-page and
+  // space-in-a-comment-box bugs are the guards here.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable ||
+          target.closest("[role=dialog]"))
+      ) {
+        return;
+      }
+      const media = mediaRef.current;
+      if (!media) return;
+      if (e.key === " ") {
+        e.preventDefault();
+        if (media.paused) void media.play();
+        else media.pause();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        media.currentTime = Math.max(0, media.currentTime - 5);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        media.currentTime = Math.min(media.duration || Infinity, media.currentTime + 5);
+      }
+    }
+    window.document.addEventListener("keydown", onKeyDown);
+    return () => window.document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const mediaEvents = {
+    onTimeUpdate: (e: React.SyntheticEvent<HTMLMediaElement>) =>
+      setCurrentTime(e.currentTarget.currentTime),
+    onLoadedMetadata: (e: React.SyntheticEvent<HTMLMediaElement>) =>
+      setDuration(e.currentTarget.duration),
+    onPlay: () => setPlaying(true),
+    onPause: () => setPlaying(false),
+  };
 
   const isProcessing = doc.status === "uploaded" || doc.status === "parsing";
   const failed = doc.status === "failed";
 
+  async function startTranscription() {
+    setRetrying(true);
+    try {
+      await retranscribe({ documentId: doc._id });
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Player */}
-      <div className="border-b p-4 shrink-0 bg-card">
+      <div className="border-b p-4 shrink-0 bg-card flex flex-col gap-2">
         {url === undefined ? (
           <Skeleton className="h-12 w-full" />
         ) : url === null ? (
           <p className="text-sm text-muted-foreground">Media file not found.</p>
-        ) : isVideo ? (
-          <video
-            ref={(el) => {
-              mediaRef.current = el;
-            }}
-            src={url}
-            controls
-            className="w-full max-h-72 rounded-lg bg-black"
-            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-          />
         ) : (
-          <audio
-            ref={(el) => {
-              mediaRef.current = el;
-            }}
-            src={url}
-            controls
-            className="w-full"
-            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-          />
+          <>
+            {isVideo ? (
+              <video
+                ref={(el) => {
+                  mediaRef.current = el;
+                }}
+                src={url}
+                controls
+                className="w-full max-h-72 rounded-lg bg-black"
+                {...mediaEvents}
+              />
+            ) : (
+              <audio
+                ref={(el) => {
+                  mediaRef.current = el;
+                }}
+                src={url}
+                {...mediaEvents}
+              />
+            )}
+            <TransportBar
+              playing={playing}
+              currentTime={currentTime}
+              duration={duration}
+              speed={speed}
+              onTogglePlay={togglePlay}
+              onSeek={seekTo}
+              onSpeedChange={changeSpeed}
+              seekOnly={isVideo}
+            />
+          </>
         )}
       </div>
 
       {/* Transcript */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div
+        ref={scrollRef}
+        onScroll={onUserScroll}
+        className="relative flex-1 overflow-y-auto p-6"
+      >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             {showTranslation && doc.translationLanguageCode
               ? `${languageName(doc.translationLanguageCode)} transcript`
               : "Original transcript"}
           </h2>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoScroll}
-                onChange={(e) => setAutoScroll(e.target.checked)}
+          {segments && segments.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={retrying}
+              onClick={() => void startTranscription()}
+            >
+              <RefreshCw
+                className={cn("size-3.5 mr-1", retrying && "animate-spin")}
               />
-              Follow playback
-            </label>
-            {segments && segments.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={retrying}
-                onClick={async () => {
-                  setRetrying(true);
-                  try {
-                    await retranscribe({ documentId: doc._id });
-                  } finally {
-                    setRetrying(false);
-                  }
-                }}
-              >
-                <RefreshCw
-                  className={cn("size-3.5 mr-1", retrying && "animate-spin")}
-                />
-                Re-transcribe
-              </Button>
-            )}
-          </div>
+              Re-transcribe
+            </Button>
+          )}
         </div>
 
         {segments === undefined ? (
@@ -195,14 +237,7 @@ export function RecordingView({
                 <Button
                   size="sm"
                   disabled={retrying}
-                  onClick={async () => {
-                    setRetrying(true);
-                    try {
-                      await retranscribe({ documentId: doc._id });
-                    } finally {
-                      setRetrying(false);
-                    }
-                  }}
+                  onClick={() => void startTranscription()}
                 >
                   {retrying ? "Starting…" : "Transcribe"}
                 </Button>
@@ -212,60 +247,41 @@ export function RecordingView({
         ) : (
           <div className="flex flex-col gap-5 max-w-3xl">
             {segments.map((seg, si) => (
-              <div key={seg._id}>
-                <div className="flex items-baseline gap-2 mb-1">
-                  <span
-                    className={cn(
-                      "text-sm font-semibold",
-                      speakerColor.get(seg.speaker)
-                    )}
-                  >
-                    {seg.speaker}
-                  </span>
-                  <button
-                    onClick={() => seekTo(seg.startTime)}
-                    className="text-xs text-muted-foreground tabular-nums hover:text-foreground hover:underline"
-                    title="Jump to this segment"
-                  >
-                    {formatTime(seg.startTime)}
-                  </button>
-                </div>
-                <p
-                  dir={
-                    showTranslation
-                      ? languageDirection(seg.translatedLanguageCode)
-                      : "ltr"
-                  }
-                  className={cn(
-                    "text-sm leading-7",
-                    active.segment === si && "bg-accent/40 rounded px-1 -mx-1"
-                  )}
-                >
-                  {showTranslation && seg.translatedText
-                    ? seg.translatedText
-                    : seg.words.length > 0
-                    ? seg.words.map((w, wi) => {
-                        const isActive =
-                          active.segment === si && active.word === wi;
-                        return (
-                          <span
-                            key={wi}
-                            ref={isActive ? activeWordRef : undefined}
-                            onClick={() => seekTo(w.start)}
-                            className={cn(
-                              "cursor-pointer rounded px-0.5 hover:bg-primary/15",
-                              isActive && "bg-primary/25"
-                            )}
-                            title={formatTime(w.start)}
-                          >
-                            {w.word}{" "}
-                          </span>
-                        );
-                      })
-                    : seg.text}
-                </p>
-              </div>
+              <TranscriptTurn
+                key={seg._id}
+                segment={seg}
+                index={si}
+                speakerName={seg.speaker}
+                colorClass={speakerColor.get(seg.speaker)}
+                isActive={active.segment === si}
+                activeWordIndex={active.segment === si ? active.word : -1}
+                showTranslation={showTranslation}
+                onSeek={seekTo}
+                activeWordRef={(el) => {
+                  if (el) activeWordRef.current = el;
+                }}
+              />
             ))}
+          </div>
+        )}
+
+        {!following && playing && (
+          <div className="sticky bottom-4 flex justify-center">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setFollowing(true);
+                programmaticScrollUntil.current = Date.now() + 600;
+                activeWordRef.current?.scrollIntoView({
+                  block: "center",
+                  behavior: "smooth",
+                });
+              }}
+            >
+              <ArrowDownToLine className="size-3.5 mr-1" />
+              Resume following
+            </Button>
           </div>
         )}
       </div>
