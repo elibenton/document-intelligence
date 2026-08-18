@@ -2,8 +2,8 @@ import { useQuery } from "convex/react";
 import { Link } from "react-router";
 import type { Route } from "./+types/ProjectSettingsPage";
 import { api } from "../../convex/_generated/api";
-import { CitationStyleSettings } from "@/components/settings/CitationStyleSettings";
 import { DocumentCategoriesSettings } from "@/components/settings/DocumentCategoriesSettings";
+import { ProjectDetailsSettings } from "@/components/settings/ProjectDetailsSettings";
 import { ProjectEntityTypesSettings } from "@/components/settings/ProjectEntityTypesSettings";
 import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -49,6 +49,9 @@ export default function ProjectSettingsPage({ params }: Route.ComponentProps) {
       subtitle="What this project looks for, and how it files what it finds."
       back={{ to: `/p/${project.slug}`, label: `Back to ${project.name}` }}
     >
+      <SectionHeading>Project details</SectionHeading>
+      <ProjectDetailsSettings project={project} />
+
       <SectionHeading>Document types</SectionHeading>
       <p className="mb-3 text-sm text-muted-foreground">
         The types Analyze sorts every document in this project into. Add your
@@ -62,15 +65,6 @@ export default function ProjectSettingsPage({ params }: Route.ComponentProps) {
         What this project looks for besides people and organizations.
       </p>
       <ProjectEntityTypesSettings projectId={project._id} />
-
-      <SectionHeading>Citation style</SectionHeading>
-      <p className="mb-3 text-sm text-muted-foreground">
-        How search answers cite the documents they quote.
-      </p>
-      <CitationStyleSettings
-        projectId={project._id}
-        citationStyle={project.citationStyle}
-      />
     </PageShell>
   );
 }

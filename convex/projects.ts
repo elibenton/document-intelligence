@@ -241,6 +241,9 @@ export const update = authedMutation({
     }
     if (args.description !== undefined) patch.description = args.description;
     await ctx.db.patch(args.id, patch);
+    // A rename mints a new slug, and the caller is standing on a URL built
+    // from the old one — return it so the settings page can follow the move.
+    return { slug: patch.slug ?? null };
   },
 });
 

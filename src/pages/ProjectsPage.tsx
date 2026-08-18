@@ -1,165 +1,41 @@
 import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { Link } from "react-router";
-import { FolderOpen, MoreVertical, Trash2 } from "lucide-react";
+import { FolderOpen, Settings2 } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageShell, SectionHeading } from "@/components/ui/page-shell";
 import { SearchField } from "@/components/ui/search-field";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Button } from "@/components/ui/button";
-import { useConfirm } from "@/components/ui/use-confirm";
 import { NewProjectDialog } from "@/components/projects/NewProjectDialog";
-import { counted, plural } from "@/lib/plural";
+import { plural } from "@/lib/plural";
 
 type ProjectListItem = Doc<"projects"> & { documentCount: number };
 
 /**
- * A project in the picker grid. The folder icon turns into a ⋮ on hover (and
- * on keyboard focus), and clicking it edits the title and description in
- * place — no menu, no AI, just the two text fields the card already shows.
+ * A project in the picker grid — pure navigation. The folder icon turns into
+ * a settings glyph on hover (and on keyboard focus) and links to the
+ * project's settings, which is where its name, description and deletion
+ * live; the card stopped hosting its own editor when that page took them
+ * over, so one row of the projects table has one editing home.
  */
 function ProjectCard({ project }: { project: ProjectListItem }) {
-  const updateProject = useMutation(api.projects.update);
-  const removeProject = useMutation(api.projects.remove);
-  const confirm = useConfirm();
-
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(project.name);
-  const [description, setDescription] = useState(project.description ?? "");
-  const [saving, setSaving] = useState(false);
-
-  function startEditing() {
-    // Re-seed from the document: the card may have been re-rendered with a
-    // newer name since these drafts were initialized.
-    setName(project.name);
-    setDescription(project.description ?? "");
-    setEditing(true);
-  }
-
-  async function save() {
-    const trimmed = name.trim();
-    // The mutation rejects an empty name, and an empty card would be
-    // unrecognizable anyway — treat it as "not done typing yet".
-    if (!trimmed || saving) return;
-    setSaving(true);
-    try {
-      await updateProject({
-        id: project._id,
-        name: trimmed,
-        description: description.trim(),
-      });
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  /**
-   * Deleting a project takes every document, entity and search in it — by far
-   * the most destructive thing in the app — so the prompt names the project and
-   * says how much goes with it rather than asking a generic "are you sure".
-   */
-  async function handleDelete() {
-    const documents =
-      project.documentCount >= 500
-        ? "500+ documents"
-        : counted(project.documentCount, "document");
-    const ok = await confirm({
-      title: `Permanently delete “${project.name}”?`,
-      body: `This deletes the project and its ${documents}, along with every page, entity, extraction and saved search inside it. It cannot be undone.`,
-      confirmLabel: "Delete project",
-      tone: "destructive",
-    });
-    if (!ok) return;
-    await removeProject({ id: project._id });
-  }
-
-  if (editing) {
-    return (
-      <div className="rounded-lg border bg-card p-4">
-        <div className="flex items-center gap-2">
-          <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
-          <input
-            value={name}
-            autoFocus
-            aria-label="Project name"
-            placeholder="Project name"
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void save();
-              if (e.key === "Escape") setEditing(false);
-            }}
-            className="w-full min-w-0 rounded border bg-background px-2 py-1 text-sm font-medium outline-none focus:ring-2 focus:ring-ring/30"
-          />
-        </div>
-        <textarea
-          value={description}
-          rows={2}
-          aria-label="Project description"
-          placeholder="Description (optional)"
-          onChange={(e) => setDescription(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter saves, Shift+Enter starts a new line — same convention as
-            // the document identity menu.
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void save();
-            }
-            if (e.key === "Escape") setEditing(false);
-          }}
-          className="mt-2 w-full resize-none rounded border bg-background px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-ring/30 placeholder:text-muted-foreground"
-        />
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mr-auto gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={saving}
-            onClick={() => void handleDelete()}
-          >
-            <Trash2 className="size-3.5" />
-            Delete project
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setEditing(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={!name.trim() || saving}
-            onClick={() => void save()}
-          >
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    // The whole card navigates, but the icon inside it is its own button —
+    // The whole card navigates, but the icon inside it is its own link —
     // so the title link carries a stretched hit area (::after) and the icon
-    // sits above it on z-10, rather than nesting a button inside the link.
+    // sits above it on z-10, rather than nesting a link inside the link.
     <div className="relative rounded-lg border bg-card p-4 hover:bg-accent/50 transition-colors">
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={startEditing}
-          title="Rename project"
-          aria-label="Rename project"
+        <Link
+          to={`/p/${project.slug}/settings`}
+          title="Project settings"
+          aria-label={`Settings for ${project.name}`}
           className="group/identity relative z-10 grid size-5 shrink-0 place-items-center rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
         >
           <FolderOpen className="col-start-1 row-start-1 size-4 text-muted-foreground transition-opacity group-hover/identity:opacity-0 group-focus-visible/identity:opacity-0" />
-          <MoreVertical className="col-start-1 row-start-1 size-3.5 opacity-0 transition-opacity group-hover/identity:opacity-100 group-focus-visible/identity:opacity-100" />
-        </button>
+          <Settings2 className="col-start-1 row-start-1 size-3.5 opacity-0 transition-opacity group-hover/identity:opacity-100 group-focus-visible/identity:opacity-100" />
+        </Link>
         <Link
           to={`/p/${project.slug}`}
           className="min-w-0 truncate text-left text-sm font-medium after:absolute after:inset-0 after:content-['']"
