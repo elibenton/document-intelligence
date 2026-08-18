@@ -1,14 +1,14 @@
 import { v } from "convex/values";
 import { recountEntity } from "./entityResolution";
+import { bumpDedupeCounter } from "./dedupeStats";
 import { authedMutation, authedQuery } from "./authz";
 import { requireMergeSuggestion, requireProject } from "./ownership";
 
 /**
  * Pending merge suggestions for one project, with both entities hydrated for
- * the review UI. Suggestion rows carry no projectId of their own, so the
- * project is taken from the entities they reference — over-fetch, then keep
- * this project's pairs. Without this every project's homepage listed every
- * other project's merges.
+ * the review UI. One indexed read on the project's own rows — rows written
+ * before projectId existed become visible after
+ * migrations:backfillMergeSuggestionProjects runs.
  */
 export const listPending = authedQuery({
   args: { projectId: v.id("projects") },
@@ -16,26 +16,21 @@ export const listPending = authedQuery({
     await requireProject(ctx, args.projectId);
     const pending = await ctx.db
       .query("mergeSuggestions")
-      .withIndex("by_status", (q) => q.eq("status", "pending"))
-      .take(200);
+      .withIndex("by_project_and_status", (q) =>
+        q.eq("projectId", args.projectId).eq("status", "pending")
+      )
+      .take(50);
 
     const results = [];
     for (const s of pending) {
-      if (results.length >= 50) break;
       const source = await ctx.db.get(s.sourceEntityId);
       const target = await ctx.db.get(s.targetEntityId);
       if (!source || !target) continue;
-      // Both endpoints must live in the project being viewed.
-      if (
-        source.projectId !== args.projectId ||
-        target.projectId !== args.projectId
-      ) {
-        continue;
-      }
       const doc = s.documentId ? await ctx.db.get(s.documentId) : null;
       results.push({
         _id: s._id,
         reason: s.reason,
+        confidence: s.confidence ?? null,
         source: { _id: source._id, name: source.name, mentionCount: source.mentionCount },
         target: { _id: target._id, name: target.name, mentionCount: target.mentionCount },
         documentName: doc?.name ?? null,
@@ -59,13 +54,13 @@ export const accept = authedMutation({
     const source = await ctx.db.get(suggestion.sourceEntityId);
     const target = await ctx.db.get(suggestion.targetEntityId);
     if (!source || !target) {
-      await ctx.db.patch(args.id, { status: "rejected" });
+      await ctx.db.patch(args.id, { status: "rejected", resolvedAt: Date.now() });
       return;
     }
     // Entities are per-project; folding one project's entity into another's
     // would drag its mentions and relationships across the boundary.
     if (source.projectId !== target.projectId) {
-      await ctx.db.patch(args.id, { status: "rejected" });
+      await ctx.db.patch(args.id, { status: "rejected", resolvedAt: Date.now() });
       return;
     }
 
@@ -134,20 +129,35 @@ export const accept = authedMutation({
       ...(source.starred || target.starred ? { starred: true } : {}),
     });
 
-    // Retire any other pending suggestions touching the source entity
-    const pending = await ctx.db
-      .query("mergeSuggestions")
-      .withIndex("by_status", (q) => q.eq("status", "pending"))
-      .collect();
-    for (const s of pending) {
-      if (s._id === args.id) continue;
-      if (s.sourceEntityId === source._id || s.targetEntityId === source._id) {
-        await ctx.db.delete(s._id);
-      }
+    // Retire any other pending suggestions touching the source entity —
+    // superseded rather than deleted, so accept/reject rates stay measurable.
+    // Bounded by the entity's own suggestions instead of the old
+    // deployment-wide pending scan.
+    const touching = [
+      ...(await ctx.db
+        .query("mergeSuggestions")
+        .withIndex("by_source_and_target", (q) =>
+          q.eq("sourceEntityId", source._id)
+        )
+        .collect()),
+      ...(await ctx.db
+        .query("mergeSuggestions")
+        .withIndex("by_target", (q) => q.eq("targetEntityId", source._id))
+        .collect()),
+    ];
+    for (const s of touching) {
+      if (s._id === args.id || s.status !== "pending") continue;
+      await ctx.db.patch(s._id, {
+        status: "superseded",
+        resolvedAt: Date.now(),
+      });
     }
 
     await ctx.db.delete(source._id);
-    await ctx.db.patch(args.id, { status: "accepted" });
+    await ctx.db.patch(args.id, { status: "accepted", resolvedAt: Date.now() });
+    if (target.projectId) {
+      await bumpDedupeCounter(ctx, target.projectId, "accepted");
+    }
     await recountEntity(ctx, target._id);
   },
 });
@@ -159,6 +169,9 @@ export const reject = authedMutation({
     await requireMergeSuggestion(ctx, args.id);
     const suggestion = await ctx.db.get(args.id);
     if (!suggestion || suggestion.status !== "pending") return;
-    await ctx.db.patch(args.id, { status: "rejected" });
+    await ctx.db.patch(args.id, { status: "rejected", resolvedAt: Date.now() });
+    if (suggestion.projectId) {
+      await bumpDedupeCounter(ctx, suggestion.projectId, "rejected");
+    }
   },
 });

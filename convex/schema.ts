@@ -375,14 +375,51 @@ export default defineSchema({
   mergeSuggestions: defineTable({
     sourceEntityId: v.id("entities"), // newer / smaller entity to fold in
     targetEntityId: v.id("entities"), // existing entity to keep
+    // Denormalized from the endpoints, so listing a project's suggestions is
+    // one index read instead of a deployment-wide scan filtered after the
+    // fetch (which starved busy projects past 200 pending rows). Optional
+    // only until backfillMergeSuggestionProjects lands; new rows always
+    // carry it.
+    projectId: v.optional(v.id("projects")),
     documentId: v.optional(v.id("documents")), // where the candidate surfaced
     reason: v.string(), // human-readable evidence for the match
-    status: v.string(), // "pending" | "accepted" | "rejected"
+    // "superseded": retired because another merge consumed one of its
+    // endpoints — kept rather than deleted so accept/reject rates stay
+    // measurable.
+    status: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("rejected"),
+      v.literal("superseded")
+    ),
+    // 0..1 from the suggestion scorer; absent on rows written before it.
+    confidence: v.optional(v.number()),
+    resolvedAt: v.optional(v.number()), // accept/reject/supersede time
   })
-    .index("by_status", ["status"])
+    .index("by_project_and_status", ["projectId", "status"])
     .index("by_source_and_target", ["sourceEntityId", "targetEntityId"])
     .index("by_target", ["targetEntityId"])
     .index("by_document", ["documentId"]),
+
+  // Durable per-project dedupe counters. The suggestion rows themselves erode
+  // under deletion pressure (document/entity/project deletes drain them), so
+  // rates over time are only answerable from a ledger nothing prunes. One row
+  // per project, bumped by convex/dedupeStats.ts.
+  dedupeCounters: defineTable({
+    projectId: v.id("projects"),
+    suggested: v.number(),
+    accepted: v.number(),
+    rejected: v.number(),
+    manualMerges: v.number(),
+    // Undone merges — the precision alarm for the suggestion heuristics.
+    unmerges: v.number(),
+    // resolveEntity outcomes: matched an existing entity vs inserted a new
+    // one. Their ratio is the datum the deferred known-entity prompt
+    // injection decision needs.
+    resolvedExisting: v.number(),
+    createdNew: v.number(),
+    updatedAt: v.number(),
+  }).index("by_project", ["projectId"]),
 
   // One row per page — the page's plain text from Interfaze OCR.
   pages: defineTable({

@@ -1,6 +1,7 @@
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { slugify } from "./slug";
+import { bumpDedupeCounter } from "./dedupeStats";
 
 /**
  * Shared entity resolver — the single path every extraction stage uses to turn
@@ -145,6 +146,7 @@ export async function resolveEntity(
     if (!types.includes(args.stableType)) {
       await ctx.db.patch(existing._id, { types: [...types, args.stableType] });
     }
+    if (projectId) await bumpDedupeCounter(ctx, projectId, "resolvedExisting");
     return { entityId: existing._id, created: false };
   }
 
@@ -183,13 +185,16 @@ export async function resolveEntity(
       await ctx.db.insert("mergeSuggestions", {
         sourceEntityId: entityId,
         targetEntityId: candidate._id,
+        projectId,
         documentId: args.documentId,
         reason: `"${clean}" resembles existing entity "${candidate.name}"`,
         status: "pending",
       });
+      if (projectId) await bumpDedupeCounter(ctx, projectId, "suggested");
     }
   }
 
+  if (projectId) await bumpDedupeCounter(ctx, projectId, "createdNew");
   return { entityId, created: true };
 }
 

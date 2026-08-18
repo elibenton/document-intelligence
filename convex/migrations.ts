@@ -283,3 +283,53 @@ export const dropSpeakerPlaceholderEntities = internalMutation({
     return null;
   },
 });
+
+/**
+ * Stamp `projectId` onto merge-suggestion rows written before the field
+ * existed, so `listPending`'s project-scoped index sees them. Rows whose
+ * target entity is gone are deleted: an orphan suggestion can never be
+ * accepted (accept already rejects it on sight), so keeping it only hides it
+ * forever.
+ *
+ * Run once, after the schema push:
+ *   npx convex run migrations:backfillMergeSuggestionProjects
+ *
+ * Same shape as the other backfills — paginated, self-rescheduling, skips
+ * rows already stamped — so it is safe to re-run and safe to run while
+ * extraction is writing new suggestions (which stamp themselves).
+ */
+export const backfillMergeSuggestionProjects = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("mergeSuggestions")
+      .paginate({ cursor: args.cursor ?? null, numItems: 200 });
+
+    const projectByEntity = new Map<Id<"entities">, Id<"projects"> | undefined>();
+    for (const row of page.page) {
+      if (row.projectId !== undefined) continue;
+      if (!projectByEntity.has(row.targetEntityId)) {
+        projectByEntity.set(
+          row.targetEntityId,
+          (await ctx.db.get(row.targetEntityId))?.projectId
+        );
+      }
+      const projectId = projectByEntity.get(row.targetEntityId);
+      if (projectId === undefined) {
+        await ctx.db.delete(row._id);
+        continue;
+      }
+      await ctx.db.patch(row._id, { projectId });
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.migrations.backfillMergeSuggestionProjects,
+        { cursor: page.continueCursor }
+      );
+    }
+    return null;
+  },
+});
