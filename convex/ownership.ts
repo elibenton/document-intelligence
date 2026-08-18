@@ -134,6 +134,17 @@ export async function requireProjectEntityType(
   return row;
 }
 
+/** A merge-log row, gated by the project it belongs to. */
+export async function requireMergeLog(
+  ctx: OwnedCtx,
+  logId: Id<"mergeLog">
+): Promise<Doc<"mergeLog">> {
+  const row = await ctx.db.get(logId);
+  if (!row) throw new ConvexError(DENIED);
+  await requireProject(ctx, row.projectId);
+  return row;
+}
+
 export async function requireMergeSuggestion(
   ctx: OwnedCtx,
   suggestionId: Id<"mergeSuggestions">

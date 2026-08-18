@@ -96,6 +96,40 @@ export const setTypes = authedMutation({
   },
 });
 
+/** Teach an alias by hand — the direct way to make "IRS" find "Internal
+ *  Revenue Service", no merge required. */
+export const addAlias = authedMutation({
+  args: { id: v.id("entities"), alias: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const entity = await requireEntity(ctx, args.id);
+    const alias = args.alias.trim().replace(/\s+/g, " ");
+    if (!alias) throw new Error("An alias needs text");
+    const lower = alias.toLowerCase();
+    if (
+      lower === entity.name.toLowerCase() ||
+      entity.aliases.some((a) => a.toLowerCase() === lower)
+    ) {
+      return null;
+    }
+    await ctx.db.patch(args.id, { aliases: [...entity.aliases, alias] });
+    return null;
+  },
+});
+
+export const removeAlias = authedMutation({
+  args: { id: v.id("entities"), alias: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const entity = await requireEntity(ctx, args.id);
+    const lower = args.alias.trim().toLowerCase();
+    await ctx.db.patch(args.id, {
+      aliases: entity.aliases.filter((a) => a.toLowerCase() !== lower),
+    });
+    return null;
+  },
+});
+
 export const setStarred = authedMutation({
   args: { id: v.id("entities"), starred: v.boolean() },
   returns: v.null(),

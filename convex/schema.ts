@@ -405,6 +405,59 @@ export default defineSchema({
     .index("by_target", ["targetEntityId"])
     .index("by_document", ["documentId"]),
 
+  // One row per merge, recording enough to reverse it. The alternative — a
+  // tombstoned source entity with a mergedInto pointer — would force every
+  // reader and both search indexes to learn "not merged"; this costs one
+  // table nothing else touches, and an unmerge that is best-effort by
+  // declaration (rows the deletion cascades have since taken are skipped).
+  // Pruned after 30 days by crons.ts; the UI says so.
+  mergeLog: defineTable({
+    projectId: v.id("projects"),
+    targetEntityId: v.id("entities"),
+    /** The deleted source row, minus system fields — what unmerge restores. */
+    sourceSnapshot: v.object({
+      projectId: v.optional(v.id("projects")),
+      name: v.string(),
+      type: v.string(),
+      types: v.optional(v.array(v.string())),
+      mentionCount: v.number(),
+      documentCount: v.number(),
+      avgConfidence: v.number(),
+      aliases: v.array(v.string()),
+      isCustom: v.boolean(),
+      nameSource: v.optional(v.string()),
+      typesSource: v.optional(v.string()),
+      starred: v.optional(v.boolean()),
+      slug: v.optional(v.string()),
+    }),
+    movedMentionIds: v.array(v.id("mentions")),
+    movedRoleIds: v.array(v.id("entityRoles")),
+    movedRelSourceIds: v.array(v.id("relationships")),
+    movedRelTargetIds: v.array(v.id("relationships")),
+    /** Relationships between the pair, deleted as self-loops — restorable. */
+    deletedRelationships: v.array(
+      v.object({
+        outgoing: v.boolean(), // source→target when true
+        relationType: v.string(),
+        confidence: v.number(),
+        projectId: v.optional(v.id("projects")),
+        documentId: v.optional(v.id("documents")),
+        quote: v.optional(v.string()),
+        pageNumber: v.optional(v.number()),
+        eventDate: v.optional(v.string()),
+        place: v.optional(v.string()),
+      })
+    ),
+    aliasesAdded: v.array(v.string()),
+    typesAdded: v.array(v.string()),
+    starredWasSetByMerge: v.boolean(),
+    suggestionId: v.optional(v.id("mergeSuggestions")),
+    undoneAt: v.optional(v.number()),
+    /** Set when an id array hit its cap — the log refuses to unmerge rather
+     *  than silently restoring half an entity. */
+    partial: v.optional(v.boolean()),
+  }).index("by_project", ["projectId"]),
+
   // Durable per-project dedupe counters. The suggestion rows themselves erode
   // under deletion pressure (document/entity/project deletes drain them), so
   // rates over time are only answerable from a ledger nothing prunes. One row

@@ -1,8 +1,15 @@
 import { v } from "convex/values";
+import { internalMutation } from "./_generated/server";
 import { recountEntity } from "./entityResolution";
 import { bumpDedupeCounter } from "./dedupeStats";
+import { mergeEntities, pickSurvivor } from "./entityMerge";
 import { authedMutation, authedQuery } from "./authz";
-import { requireMergeSuggestion, requireProject } from "./ownership";
+import {
+  requireEntity,
+  requireMergeLog,
+  requireMergeSuggestion,
+  requireProject,
+} from "./ownership";
 
 /**
  * Pending merge suggestions for one project, with both entities hydrated for
@@ -41,124 +48,202 @@ export const listPending = authedQuery({
 });
 
 /**
- * Accept: fold the source entity into the target — move mentions, roles, and
- * relationships; teach the source name (and its aliases) as target aliases;
- * merge stable types; delete the source.
+ * Accept: fold one of the pair into the other. `keepEntityId` — set by the
+ * confirm dialog's survivor picker — decides which name survives; without
+ * it, pickSurvivor prefers the entity with more evidence, then the fuller
+ * name (the old behavior always kept the *older* row, which folded "Eli
+ * Cohen" into "E. Cohen" whenever the abbreviation arrived first). Returns
+ * the mergeLog id so the UI can offer undo.
  */
 export const accept = authedMutation({
-  args: { id: v.id("mergeSuggestions") },
+  args: {
+    id: v.id("mergeSuggestions"),
+    keepEntityId: v.optional(v.id("entities")),
+  },
   handler: async (ctx, args) => {
     await requireMergeSuggestion(ctx, args.id);
     const suggestion = await ctx.db.get(args.id);
-    if (!suggestion || suggestion.status !== "pending") return;
-    const source = await ctx.db.get(suggestion.sourceEntityId);
-    const target = await ctx.db.get(suggestion.targetEntityId);
-    if (!source || !target) {
+    if (!suggestion || suggestion.status !== "pending") return null;
+    const a = await ctx.db.get(suggestion.sourceEntityId);
+    const b = await ctx.db.get(suggestion.targetEntityId);
+    if (!a || !b) {
       await ctx.db.patch(args.id, { status: "rejected", resolvedAt: Date.now() });
-      return;
+      return null;
     }
     // Entities are per-project; folding one project's entity into another's
     // would drag its mentions and relationships across the boundary.
-    if (source.projectId !== target.projectId) {
+    if (a.projectId !== b.projectId) {
       await ctx.db.patch(args.id, { status: "rejected", resolvedAt: Date.now() });
-      return;
+      return null;
     }
 
-    // Move mentions
-    const mentions = await ctx.db
-      .query("mentions")
-      .withIndex("by_entity", (q) => q.eq("entityId", source._id))
-      .collect();
-    for (const m of mentions) {
-      await ctx.db.patch(m._id, { entityId: target._id });
-    }
-
-    // Move roles, skipping duplicates already on the target
-    const roles = await ctx.db
-      .query("entityRoles")
-      .withIndex("by_entity", (q) => q.eq("entityId", source._id))
-      .collect();
-    for (const r of roles) {
-      const dup = await ctx.db
-        .query("entityRoles")
-        .withIndex("by_entity_and_document", (q) =>
-          q.eq("entityId", target._id).eq("documentId", r.documentId)
-        )
-        .collect();
-      if (dup.some((d) => d.role === r.role)) {
-        await ctx.db.delete(r._id);
-      } else {
-        await ctx.db.patch(r._id, { entityId: target._id });
+    let target: typeof a;
+    let source: typeof a;
+    if (args.keepEntityId !== undefined) {
+      if (args.keepEntityId !== a._id && args.keepEntityId !== b._id) {
+        throw new Error("keepEntityId must be one of the suggested pair");
       }
+      target = args.keepEntityId === a._id ? a : b;
+      source = args.keepEntityId === a._id ? b : a;
+    } else {
+      target = pickSurvivor(a, b) === "a" ? a : b;
+      source = target === a ? b : a;
     }
 
-    // Move relationships (both directions); drop any that become self-loops
-    const asSource = await ctx.db
-      .query("relationships")
-      .withIndex("by_source", (q) => q.eq("sourceEntityId", source._id))
-      .collect();
-    for (const rel of asSource) {
-      if (rel.targetEntityId === target._id) await ctx.db.delete(rel._id);
-      else await ctx.db.patch(rel._id, { sourceEntityId: target._id });
-    }
-    const asTarget = await ctx.db
-      .query("relationships")
-      .withIndex("by_target", (q) => q.eq("targetEntityId", source._id))
-      .collect();
-    for (const rel of asTarget) {
-      if (rel.sourceEntityId === target._id) await ctx.db.delete(rel._id);
-      else await ctx.db.patch(rel._id, { targetEntityId: target._id });
-    }
-
-    // Teach aliases + merge stable types
-    const aliasSet = new Set(target.aliases.map((a) => a.toLowerCase()));
-    aliasSet.add(target.name.toLowerCase());
-    const newAliases = [...target.aliases];
-    for (const candidate of [source.name, ...source.aliases]) {
-      if (!aliasSet.has(candidate.toLowerCase())) {
-        aliasSet.add(candidate.toLowerCase());
-        newAliases.push(candidate);
-      }
-    }
-    const typeSet = new Set([...(target.types ?? []), ...(source.types ?? [])]);
-    await ctx.db.patch(target._id, {
-      aliases: newAliases,
-      ...(typeSet.size > 0 ? { types: [...typeSet] } : {}),
-      // A user's pin belongs to the real-world entity, not whichever duplicate
-      // record happens to survive the merge.
-      ...(source.starred || target.starred ? { starred: true } : {}),
+    const logId = await mergeEntities(ctx, {
+      source,
+      target,
+      suggestionId: args.id,
     });
-
-    // Retire any other pending suggestions touching the source entity —
-    // superseded rather than deleted, so accept/reject rates stay measurable.
-    // Bounded by the entity's own suggestions instead of the old
-    // deployment-wide pending scan.
-    const touching = [
-      ...(await ctx.db
-        .query("mergeSuggestions")
-        .withIndex("by_source_and_target", (q) =>
-          q.eq("sourceEntityId", source._id)
-        )
-        .collect()),
-      ...(await ctx.db
-        .query("mergeSuggestions")
-        .withIndex("by_target", (q) => q.eq("targetEntityId", source._id))
-        .collect()),
-    ];
-    for (const s of touching) {
-      if (s._id === args.id || s.status !== "pending") continue;
-      await ctx.db.patch(s._id, {
-        status: "superseded",
-        resolvedAt: Date.now(),
-      });
-    }
-
-    await ctx.db.delete(source._id);
     await ctx.db.patch(args.id, { status: "accepted", resolvedAt: Date.now() });
     if (target.projectId) {
       await bumpDedupeCounter(ctx, target.projectId, "accepted");
     }
-    await recountEntity(ctx, target._id);
+    return { mergeLogId: logId, survivorId: target._id };
+  },
+});
+
+/**
+ * Merge two entities the heuristic never suggested — the only fix for the
+ * pairs no string similarity reaches ("Smith, John", "IRS"). Records itself
+ * as an accepted suggestion so the pair is never re-suggested and the
+ * measurement sees it.
+ */
+export const mergeManual = authedMutation({
+  args: {
+    sourceId: v.id("entities"),
+    targetId: v.id("entities"),
+  },
+  handler: async (ctx, args) => {
+    const source = await requireEntity(ctx, args.sourceId);
+    const target = await requireEntity(ctx, args.targetId);
+    if (source._id === target._id) throw new Error("Pick two different entities");
+    if (source.projectId !== target.projectId) {
+      throw new Error("Entities live in different projects");
+    }
+    const suggestionId = await ctx.db.insert("mergeSuggestions", {
+      sourceEntityId: source._id,
+      targetEntityId: target._id,
+      projectId: target.projectId,
+      reason: "Merged by hand",
+      status: "accepted",
+      confidence: 1,
+      resolvedAt: Date.now(),
+    });
+    const logId = await mergeEntities(ctx, { source, target, suggestionId });
+    if (target.projectId) {
+      await bumpDedupeCounter(ctx, target.projectId, "manualMerges");
+    }
+    return { mergeLogId: logId, survivorId: target._id };
+  },
+});
+
+/**
+ * Undo a merge from its log row — best-effort by declaration: rows the
+ * deletion cascades have since taken are skipped, mentions attributed to
+ * the target *after* the merge stay with it (there is no record they were
+ * ever the source's), and a `partial` log refuses outright.
+ */
+export const unmerge = authedMutation({
+  args: { logId: v.id("mergeLog") },
+  handler: async (ctx, args) => {
+    const log = await requireMergeLog(ctx, args.logId);
+    if (log.undoneAt !== undefined) return null;
+    if (log.partial) {
+      throw new Error(
+        "This merge moved too many rows to record fully and can't be undone"
+      );
+    }
+    const target = await ctx.db.get(log.targetEntityId);
+    if (!target) throw new Error("The merged entity no longer exists");
+
+    // Restore the source with a fresh id; slug and name come back, so old
+    // /entity/:slug links resolve again.
+    const restoredId = await ctx.db.insert("entities", log.sourceSnapshot);
+
+    for (const id of log.movedMentionIds) {
+      const row = await ctx.db.get(id);
+      if (row && row.entityId === log.targetEntityId) {
+        await ctx.db.patch(id, { entityId: restoredId });
+      }
+    }
+    for (const id of log.movedRoleIds) {
+      const row = await ctx.db.get(id);
+      if (row && row.entityId === log.targetEntityId) {
+        await ctx.db.patch(id, { entityId: restoredId });
+      }
+    }
+    for (const id of log.movedRelSourceIds) {
+      const row = await ctx.db.get(id);
+      if (row && row.sourceEntityId === log.targetEntityId) {
+        await ctx.db.patch(id, { sourceEntityId: restoredId });
+      }
+    }
+    for (const id of log.movedRelTargetIds) {
+      const row = await ctx.db.get(id);
+      if (row && row.targetEntityId === log.targetEntityId) {
+        await ctx.db.patch(id, { targetEntityId: restoredId });
+      }
+    }
+    for (const rel of log.deletedRelationships) {
+      const { outgoing, ...fields } = rel;
+      await ctx.db.insert("relationships", {
+        ...fields,
+        sourceEntityId: outgoing ? restoredId : log.targetEntityId,
+        targetEntityId: outgoing ? log.targetEntityId : restoredId,
+      });
+    }
+
+    // Strip what the merge taught the target.
+    const removeAliases = new Set(log.aliasesAdded.map((s) => s.toLowerCase()));
+    const removeTypes = new Set(log.typesAdded);
+    await ctx.db.patch(log.targetEntityId, {
+      aliases: target.aliases.filter(
+        (alias) => !removeAliases.has(alias.toLowerCase())
+      ),
+      ...(target.types
+        ? { types: target.types.filter((t) => !removeTypes.has(t)) }
+        : {}),
+      ...(log.starredWasSetByMerge ? { starred: undefined } : {}),
+    });
+
+    // The pair can be re-decided; a rejected flip would silence it forever.
+    if (log.suggestionId) {
+      const suggestion = await ctx.db.get(log.suggestionId);
+      if (suggestion) {
+        await ctx.db.patch(log.suggestionId, {
+          status: "pending",
+          resolvedAt: undefined,
+        });
+      }
+    }
+
+    await ctx.db.patch(args.logId, { undoneAt: Date.now() });
+    await bumpDedupeCounter(ctx, log.projectId, "unmerges");
+    await recountEntity(ctx, restoredId);
+    await recountEntity(ctx, log.targetEntityId);
+    return { restoredId };
+  },
+});
+
+/**
+ * Age out merge-undo detail: an undo window, not an archive. 30 days matches
+ * apiLogs' retention and the UI's "undo available for 30 days" promise;
+ * the durable record of how many merges happened is dedupeCounters.
+ */
+export const pruneOldMergeLogs = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    // Oldest-first by creation time, bounded: the table only ever holds a
+    // month of merges, and expired rows sit at the front of the default
+    // order, so one daily page clears the backlog.
+    const old = await ctx.db.query("mergeLog").order("asc").take(500);
+    for (const row of old) {
+      if (row._creationTime < cutoff) await ctx.db.delete(row._id);
+    }
+    return null;
   },
 });
 

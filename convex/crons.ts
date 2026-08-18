@@ -48,4 +48,15 @@ crons.interval(
   {}
 );
 
+/**
+ * Age out merge-undo logs — same bargain as the API log prune above: the
+ * detail is an undo window, the durable counts live in dedupeCounters.
+ */
+crons.daily(
+  "prune merge logs",
+  { hourUTC: 8, minuteUTC: 30 },
+  internal.mergeSuggestions.pruneOldMergeLogs,
+  {}
+);
+
 export default crons;
