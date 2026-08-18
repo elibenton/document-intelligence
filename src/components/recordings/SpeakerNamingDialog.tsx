@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Sparkles } from "lucide-react";
+import { Play, Sparkles } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
@@ -19,7 +19,7 @@ interface SpeakerRowData {
   colorClass: string | undefined;
   turnCount: number;
   totalSeconds: number;
-  samples: string[];
+  samples: { text: string; startTime: number; endTime: number }[];
 }
 
 /**
@@ -40,6 +40,7 @@ export function SpeakerNamingDialog({
   speakerRows,
   open,
   onOpenChange,
+  onPlayClip,
 }: {
   document: Doc<"documents">;
   segments: {
@@ -52,6 +53,10 @@ export function SpeakerNamingDialog({
   speakerRows: Doc<"documentSpeakers">[] | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Play one bounded clip of this speaker — hearing the voice beats
+   *  reading its transcript. The audio element lives with the viewer and
+   *  plays under the dialog; playback stops at the clip's end. */
+  onPlayClip?: (startTime: number, endTime: number) => void;
 }) {
   const confirm = useMutation(api.documentSpeakers.confirm);
   const library = useQuery(api.speakers.list, open ? {} : "skip");
@@ -82,7 +87,11 @@ export function SpeakerNamingDialog({
         .filter((seg) => seg.speaker === row.label)
         .sort((a, b) => b.text.length - a.text.length)
         .slice(0, 2)
-        .map((seg) => seg.text);
+        .map((seg) => ({
+          text: seg.text,
+          startTime: seg.startTime,
+          endTime: seg.endTime,
+        }));
     }
     return [...byLabel.values()];
   }, [segments, speakerColor]);
@@ -154,7 +163,7 @@ export function SpeakerNamingDialog({
               draftFor(row.label) !== suggestion.name;
             return (
               <div key={row.label} className="flex flex-col gap-1.5">
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-center gap-2">
                   <span className={cn("text-sm font-semibold", row.colorClass)}>
                     {row.label}
                   </span>
@@ -162,13 +171,29 @@ export function SpeakerNamingDialog({
                     {formatTime(row.totalSeconds)} · {row.turnCount} turn
                     {row.turnCount !== 1 && "s"}
                   </span>
+                  {onPlayClip && row.samples[0] && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onPlayClip(
+                          row.samples[0].startTime,
+                          row.samples[0].endTime,
+                        )
+                      }
+                      aria-label={`Play a clip of ${row.label}`}
+                      title="Play a clip to confirm the voice"
+                      className="grid size-5 place-items-center rounded-full border text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <Play className="size-3" />
+                    </button>
+                  )}
                 </div>
                 {row.samples.map((sample, i) => (
                   <p
                     key={i}
                     className="line-clamp-2 text-xs text-muted-foreground"
                   >
-                    “{sample}”
+                    “{sample.text}”
                   </p>
                 ))}
                 <Autocomplete

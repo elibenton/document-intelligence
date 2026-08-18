@@ -102,10 +102,25 @@ export function RecordingView({
   const seekTo = useCallback((time: number) => {
     const media = mediaRef.current;
     if (!media) return;
+    clipEndRef.current = null;
     media.currentTime = time;
     setCurrentTime(time);
     setFollowing(true);
     if (media.paused) void media.play();
+  }, []);
+
+  // A bounded clip: seek, play, and stop at the end — the naming dialog's
+  // "confirm the voice" button. The end time rides a ref checked on each
+  // timeupdate tick; any manual seek or play clears it so the clip never
+  // pauses playback the user started themselves.
+  const clipEndRef = useRef<number | null>(null);
+  const playClip = useCallback((start: number, end: number) => {
+    const media = mediaRef.current;
+    if (!media) return;
+    clipEndRef.current = end;
+    media.currentTime = start;
+    setCurrentTime(start);
+    void media.play();
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -154,8 +169,14 @@ export function RecordingView({
   }, []);
 
   const mediaEvents = {
-    onTimeUpdate: (e: React.SyntheticEvent<HTMLMediaElement>) =>
-      setCurrentTime(e.currentTarget.currentTime),
+    onTimeUpdate: (e: React.SyntheticEvent<HTMLMediaElement>) => {
+      const media = e.currentTarget;
+      if (clipEndRef.current !== null && media.currentTime >= clipEndRef.current) {
+        clipEndRef.current = null;
+        media.pause();
+      }
+      setCurrentTime(media.currentTime);
+    },
     onLoadedMetadata: (e: React.SyntheticEvent<HTMLMediaElement>) =>
       setDuration(e.currentTarget.duration),
     onPlay: () => setPlaying(true),
@@ -336,6 +357,7 @@ export function RecordingView({
           speakerRows={speakerRows}
           open={namingOpen}
           onOpenChange={setNamingOpen}
+          onPlayClip={playClip}
         />
       )}
     </div>
