@@ -16,3 +16,21 @@ export function fnv1a(input: string): string {
   }
   return hash.toString(16).padStart(8, "0");
 }
+
+/**
+ * A demo owner id is `demo:<64-hex session token>`, and that token is the
+ * session's whole credential (convex/demo.ts). It is correct as the ownership
+ * key on live rows, but it must not be copied verbatim into the log/sample
+ * columns an operator or triage agent reads — `apiLogs.ownerId` and
+ * `issues.ownerSample` — where it would sit for the row's lifetime as a working
+ * bearer token. Replace the token with its FNV hash: still one stable value per
+ * session, so distinct-account counts are unchanged, but no longer a usable
+ * credential and not invertible back to one. Real Better Auth ids carry no
+ * colon and pass through untouched, so the admin name/email join still works.
+ */
+export function redactOwnerForLog(
+  ownerId: string | undefined
+): string | undefined {
+  if (!ownerId?.startsWith("demo:")) return ownerId;
+  return `demo:${fnv1a(ownerId.slice("demo:".length))}`;
+}

@@ -197,7 +197,14 @@ function classifyHttpError(status: number, body: WireError): InterfazeFailure {
       { code: "rate_limited", status }
     );
   }
-  const detail = message.slice(0, 300);
+  // The provider sometimes echoes the request back in its error prose, and the
+  // request contains the document's storage URL — which Convex never expires,
+  // so a copy in `apiLogs.error` or `issues.samples[].raw` would be a working
+  // document link sitting in a table row. Strip it before the message is
+  // stored anywhere.
+  const detail = message
+    .replace(/https?:\/\/\S*\/api\/storage\/\S+/g, "[storage-url]")
+    .slice(0, 300);
   return new InterfazeFailure(
     `Interfaze API error (${status})${detail ? `: ${detail}` : ""}`,
     { status }

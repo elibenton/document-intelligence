@@ -16,6 +16,7 @@ import type { Id } from "./_generated/dataModel";
 import type { ApiUsage, UsageLogger } from "./interfazeCost";
 import { authedQuery } from "./authz";
 import { chargeUsage } from "./budget";
+import { redactOwnerForLog } from "./hash";
 import { recordIssue } from "./issues";
 import { requireDocument } from "./ownership";
 
@@ -197,7 +198,10 @@ export const record = internalMutation({
     await ctx.db.insert("apiLogs", {
       ...row,
       error: args.error?.slice(0, 500),
-      ownerId,
+      // Stored redacted so a demo session's bearer token is not persisted in a
+      // column the admin surface reads; `chargeUsage` below still bills the
+      // real owner.
+      ownerId: redactOwnerForLog(ownerId),
     });
 
     // The provider's own verdict, counted separately from the document's.

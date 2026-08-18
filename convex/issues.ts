@@ -23,6 +23,7 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { adminQuery, authedMutation } from "./authz";
+import { redactOwnerForLog } from "./hash";
 import {
   issueFingerprint,
   normalizeMessage,
@@ -92,6 +93,10 @@ export async function recordIssue(
 }
 
 async function recordIssueUnguarded(ctx: MutationCtx, input: IssueInput) {
+  // A demo caller's ownerId is its live session token; redact before it lands
+  // in ownerSample, which the operator/triage surface reads. Distinct-owner
+  // counts are unaffected — see redactOwnerForLog.
+  const ownerId = redactOwnerForLog(input.ownerId);
   const title = normalizeMessage(input.message);
   const fingerprint = issueFingerprint({
     surface: input.surface,
@@ -131,7 +136,7 @@ async function recordIssueUnguarded(ctx: MutationCtx, input: IssueInput) {
       lastSeenAt: now,
       firstBuildSha: buildSha,
       lastBuildSha: buildSha,
-      ownerSample: input.ownerId ? [input.ownerId] : [],
+      ownerSample: ownerId ? [ownerId] : [],
       ownersTruncated: false,
       samples: [sample],
       state: "open",
@@ -139,8 +144,7 @@ async function recordIssueUnguarded(ctx: MutationCtx, input: IssueInput) {
     return;
   }
 
-  const knowsOwner =
-    !input.ownerId || existing.ownerSample.includes(input.ownerId);
+  const knowsOwner = !ownerId || existing.ownerSample.includes(ownerId);
   const roomForOwner = existing.ownerSample.length < OWNER_CAP;
 
   await ctx.db.patch(existing._id, {
@@ -150,7 +154,7 @@ async function recordIssueUnguarded(ctx: MutationCtx, input: IssueInput) {
     ownerSample:
       knowsOwner || !roomForOwner
         ? existing.ownerSample
-        : [...existing.ownerSample, input.ownerId!],
+        : [...existing.ownerSample, ownerId!],
     ownersTruncated: existing.ownersTruncated || (!knowsOwner && !roomForOwner),
     samples: [sample, ...existing.samples].slice(0, SAMPLE_CAP),
     ...reopening(existing, now),
