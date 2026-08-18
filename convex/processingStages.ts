@@ -469,7 +469,6 @@ export const runPipeline = internalAction({
         },
         log,
         bypassCache: args.bypassCache,
-        sizeBytes: document.sizeBytes,
       });
 
       // --- Text + geometry: precontext, or the task-call shim --------------
@@ -519,7 +518,6 @@ export const runPipeline = internalAction({
                 await ocrDocument(fileUrl, document.name, apiKey, {
                   log,
                   bypassCache: args.bypassCache,
-                  sizeBytes: document.sizeBytes,
                 })
               ).pages;
       }

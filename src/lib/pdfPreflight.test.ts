@@ -85,14 +85,18 @@ describe("preflightPdf byte-level gates", () => {
   });
 
   it("rejects a file over the provider's transfer ceiling", async () => {
-    // The size is spoofed rather than allocated: the ceiling is now the 80 MB
-    // URL limit, and a real buffer that big is an absurd price for one assert.
+    // The size is spoofed rather than allocated: a real buffer that big is an
+    // absurd price for one assert. The ceiling itself is the measured
+    // file-part limit (convex/interfazeLimits.ts), asserted via the constant
+    // rather than a literal so a re-measured limit does not break this test.
     const oversize = file(PDF_HEADER);
     Object.defineProperty(oversize, "size", {
       value: PDF_INTERFAZE_SAFE_BYTES + 1,
     });
     const result = await preflightPdf(oversize);
     expect(result.ok === false && result.code).toBe("provider_size_limit");
-    expect(result.ok === false && result.message).toContain("70 MB");
+    expect(result.ok === false && result.message).toContain(
+      `${Math.round(PDF_INTERFAZE_SAFE_BYTES / 1_000_000)} MB`
+    );
   });
 });

@@ -195,60 +195,6 @@ export const backfillPageProjectIds = internalMutation({
 });
 
 
-/**
- * Delete the phantom `parse` job rows that recordings were given.
- *
- * `runFullPipeline` and `retryBlocked` created a `transcribe` job row for a
- * recording and then handed the workpool `{ stage: "parse" }` as its
- * `onComplete` context, so the pool resolved a `parse` row for a stage that
- * never runs on audio or video. `PipelineProgress` reads
- * `get("parse") ?? get("transcribe")`, so every recording processed before that
- * was fixed shows a Scan step stuck at pending, for ever.
- *
- * Run once, after the fix is deployed:
- *   npx convex run migrations:dropRecordingParseJobs
- *
- * A `parse` row on a recording is meaningless by construction, which is what
- * makes this safe to delete rather than repair. Paginated and self-rescheduling
- * like its neighbours, and idempotent — a second run finds nothing.
- */
-export const dropRecordingParseJobs = internalMutation({
-  args: { cursor: v.optional(v.union(v.string(), v.null())) },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("processingJobs")
-      .paginate({ cursor: args.cursor ?? null, numItems: 200 });
-
-    let dropped = 0;
-    for (const job of page.page) {
-      if (job.stage !== "parse") continue;
-      const doc = await ctx.db.get(job.documentId);
-      // A job whose document is gone is not this migration's problem.
-      if (!doc) continue;
-      const isRecording =
-        doc.mediaType === "audio" ||
-        doc.mediaType === "video" ||
-        doc.mimeType.startsWith("audio/") ||
-        doc.mimeType.startsWith("video/");
-      if (!isRecording) continue;
-      await ctx.db.delete(job._id);
-      dropped++;
-    }
-    if (dropped > 0) {
-      console.log(`dropRecordingParseJobs: removed ${dropped} phantom row(s)`);
-    }
-
-    if (!page.isDone) {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.migrations.dropRecordingParseJobs,
-        { cursor: page.continueCursor }
-      );
-    }
-    return null;
-  },
-});
 
 /**
  * Delete orphaned "Speaker N" entities.

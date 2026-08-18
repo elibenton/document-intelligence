@@ -1,7 +1,4 @@
-import {
-  PROVIDER_FILE_OBJECT_SAFE_BYTES,
-  PROVIDER_URL_SAFE_BYTES,
-} from "../../convex/interfazeLimits";
+import { PROVIDER_FILE_PART_SAFE_BYTES } from "../../convex/interfazeLimits";
 import { formatBytes } from "./formatBytes";
 
 const AUDIO_EXTENSIONS = new Set([
@@ -15,9 +12,15 @@ const AUDIO_EXTENSIONS = new Set([
   "webm",
 ]);
 
-/** Both ceilings are the provider's, shared with the pipeline that enforces them. */
-export const AUDIO_LARGE_TRANSFER_BYTES = PROVIDER_FILE_OBJECT_SAFE_BYTES;
-export const AUDIO_URL_SAFE_BYTES = PROVIDER_URL_SAFE_BYTES;
+/**
+ * Recordings ride the same single file-part transport as documents now, so
+ * they share its one measured ceiling. Above it, the conversion path has to
+ * bring the file under the limit or the upload is refused — the URL-in-text
+ * transport that used to lift audio to 70 MB was removed after it was measured
+ * reading the wrong document (see convex/interfazeLimits.ts).
+ */
+export const AUDIO_LARGE_TRANSFER_BYTES = PROVIDER_FILE_PART_SAFE_BYTES;
+export const AUDIO_URL_SAFE_BYTES = PROVIDER_FILE_PART_SAFE_BYTES;
 
 export type AudioContainer =
   | "aac"

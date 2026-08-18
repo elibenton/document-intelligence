@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { RENDERER_VERSION } from "./rendererConfig";
 import { authedMutation, authedQuery } from "./authz";
-import { PROVIDER_URL_SAFE_BYTES } from "./interfazeLimits";
+import { PROVIDER_FILE_PART_SAFE_BYTES } from "./interfazeLimits";
 import { requireProject } from "./ownership";
 import { requireBudget } from "./budget";
 import { enqueueStage } from "./processing";
@@ -173,7 +173,7 @@ export const createDocument = authedMutation({
     // Keep oversized recordings out of a provider request that cannot
     // succeed. The original remains in storage so a future normalization job
     // can create a compressed derivative without requiring another upload.
-    if (mediaType === "audio" && storedFile.size > PROVIDER_URL_SAFE_BYTES) {
+    if (mediaType === "audio" && storedFile.size > PROVIDER_FILE_PART_SAFE_BYTES) {
       await ctx.db.patch(documentId, {
         status: "failed",
         errorMessage: `${Math.round(storedFile.size / 1_000_000)} MB audio needs optimization before Interfaze can transcribe it. Automatic audio optimization is not connected yet.`,

@@ -24,14 +24,14 @@
  * second, text-in call (`analyzeDocumentText`) over that stored text.
  *
  * This module keeps a small set of app-facing helpers (`chatCompletion`,
- * `ocrDocument`, `analyzeDocumentText`, `extract`, and `transcribe`) so the
- * cross-cutting concerns the app owns — usage/cost logging and mapping HTTP
- * failures onto the UI's FailureCodes — live in one place.
+ * `understandDocument`, `ocrDocument`, `analyzeDocumentText`, and
+ * `transcribe`) so the cross-cutting concerns the app owns — usage/cost
+ * logging and mapping HTTP failures onto the UI's FailureCodes — live in one
+ * place.
  */
 
 import { fnv1a } from "./hash";
 import { InterfazeFailure } from "./interfazeErrors";
-import { PROVIDER_FILE_OBJECT_SAFE_BYTES } from "./interfazeLimits";
 import { interfazeCostUsd } from "./interfazeCost";
 import type { UsageLogger } from "./interfazeCost";
 import { ocrPrecontextToPages } from "./interfazeOcr";
@@ -140,10 +140,6 @@ function mimeFromFilename(name: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 
-export interface ExtractResult {
-  extraction_schema_json: string; // JSON string of extracted data
-}
-
 export interface ChatResult {
   content: string;
   precontext: Precontext[];
@@ -217,10 +213,12 @@ function timeoutFailure(): InterfazeFailure {
   );
 }
 
-// Statuses worth an automatic retry — transient by definition. Mirrors what
-// the SDK retried, except timeouts: retrying a 9-minute timeout inside one
-// action would blow past the Convex action limit, so a timeout fails fast and
-// the job-level retry policy decides.
+// Statuses worth an automatic retry — the provider answered with a transient
+// failure, so no completion was produced or billed. Timeouts and *network*
+// errors are deliberately not retried: Interfaze may have completed (and
+// billed) a request before the failure was observed, so a retry could
+// duplicate a billable call — the same invariant upload.ts states for its
+// path. A retried 5-minute timeout would also blow the Convex action limit.
 const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
 const MAX_RETRIES = 2;
 
@@ -258,10 +256,6 @@ async function postChatCompletion(
       });
     } catch (e) {
       if (controller.signal.aborted) throw timeoutFailure();
-      if (attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-        continue;
-      }
       throw new InterfazeFailure(
         `Interfaze request failed: ${e instanceof Error ? e.message : String(e)}`
       );
@@ -290,27 +284,22 @@ async function postChatCompletion(
  * inference time; a stable URL (same bytes → same URL) is also the cache key,
  * so repeat calls against the same file hit the cache.
  *
- * Pass documents/images through the `file` part (not as a bare URL in text): a
- * URL in text gets the OCR text into context but loses visual grounding —
- * A/B tested, the visual-evidence pass confabulated logos/seals with text URLs
- * and was clean with file objects. It also measured 11x the cost for identical
- * OCR results, so the file part stays the default for everything that fits.
+ * Always a file part, never a bare URL in prompt text. Two independent
+ * measurements both point the same way: the visual-evidence A/B (text URLs
+ * confabulated logos/seals; file parts were clean), and the 2026-08-18 probes,
+ * where the full model given a URL in prompt text silently analyzed the wrong
+ * document three times out of three while the file part read the right one
+ * every time. The old URL-in-text fallback for oversized files traded that
+ * correctness risk for acceptance; the upload gate now rejects what the file
+ * part cannot carry (PROVIDER_FILE_PART_SAFE_BYTES), so the fallback is gone.
  *
- * A file part is capped at 20 MB and prompt text at 80 MB, so above the smaller
- * ceiling there is no choice: send the URL as text and accept both costs. That
- * is strictly better than the alternative it replaced, which was refusing the
- * document at upload. `sizeBytes` is optional because rows predating
- * `documents.sizeBytes` have none — and every one of those passed the old
- * 18 MB gate, so defaulting them to the file part is correct.
+ * The size gate lives at upload, once (PROVIDER_FILE_PART_SAFE_BYTES in
+ * interfazeLimits.ts), not per call.
  */
 export function fileUrlContent(
   url: string,
-  filename = "document.pdf",
-  sizeBytes?: number
+  filename = "document.pdf"
 ): ChatCompletionContentPart {
-  if (sizeBytes !== undefined && sizeBytes > PROVIDER_FILE_OBJECT_SAFE_BYTES) {
-    return { type: "text", text: `The document to work on is at this URL: ${url}` };
-  }
   const format = mimeFromFilename(filename);
   return {
     type: "file",
@@ -675,13 +664,13 @@ export async function ocrDocument(
   fileUrl: string,
   filename: string,
   apiKey: string,
-  options?: { log?: UsageLogger; bypassCache?: boolean; sizeBytes?: number }
+  options?: { log?: UsageLogger; bypassCache?: boolean }
 ): Promise<{ pages: OcrPageResult[]; precontext: Precontext[]; vcache: boolean }> {
   const result = await chatCompletion(apiKey, {
     task: "ocr",
     content: [
       { type: "text", text: "Extract all text and data." },
-      fileUrlContent(fileUrl, filename, options?.sizeBytes),
+      fileUrlContent(fileUrl, filename),
     ],
     bypassCache: options?.bypassCache,
     usage: options?.log
@@ -791,14 +780,13 @@ export async function understandDocument(
     responseSchema: { name: string; schema: Record<string, unknown> };
     log?: UsageLogger;
     bypassCache?: boolean;
-    sizeBytes?: number;
   }
 ): Promise<ChatResult> {
   return chatCompletion(apiKey, {
     systemPrompt: options.systemPrompt,
     content: [
       { type: "text", text: options.prompt },
-      fileUrlContent(fileUrl, filename, options.sizeBytes),
+      fileUrlContent(fileUrl, filename),
     ],
     responseSchema: options.responseSchema,
     bypassCache: options.bypassCache,
@@ -847,11 +835,11 @@ export async function transcribe(
     content: [
       {
         type: "text",
-        // A URL in prompt text has Interfaze's 80 MB limit. A URL wrapped in a
-        // file object has the much smaller 20 MB limit even though no bytes are
-        // inlined by this app — and upload.ts gates audio against the larger
-        // number precisely because this call sends text. Switching this to
-        // `fileUrlContent` would silently drop the accepted ceiling to 20 MB.
+        // URL in prompt text, unlike everything else. Tasks read a text URL
+        // reliably (measured "identical across base64, file-URL, and
+        // URL-in-text" for ocr; the wrong-document misfetch of 2026-08-18 was
+        // the full model, not a task), and the upload gate already holds every
+        // recording under the shared file-part ceiling either way.
         text: `Transcribe the recording at this URL verbatim with speaker diarization and word-level timestamps: ${fileUrl}`,
       },
     ],
@@ -901,35 +889,3 @@ export async function transcribe(
   return { segments: [] };
 }
 
-// ---------------------------------------------------------------------------
-// Extract — structured data extraction via JSON schema.
-// ---------------------------------------------------------------------------
-
-export async function extract(
-  source: string | { inlineText: string },
-  apiKey: string,
-  pageSchema: Record<string, unknown>,
-  options?: { pageRange?: string; log?: UsageLogger }
-): Promise<ExtractResult> {
-  const rangeClause = options?.pageRange
-    ? ` Only consider pages ${options.pageRange} of the document.`
-    : "";
-
-  const { content } = await chatCompletion(apiKey, {
-    usage: options?.log
-      ? { log: options.log, operation: "extract" }
-      : undefined,
-    content: [
-      typeof source === "string"
-        ? fileUrlContent(source)
-        : inlineTextContent(source.inlineText),
-      {
-        type: "text",
-        text: `Extract structured data from this document according to the response schema. Only include values actually present in the document.${rangeClause}`,
-      },
-    ],
-    responseSchema: { name: "extraction", schema: pageSchema },
-  });
-
-  return { extraction_schema_json: content || "{}" };
-}

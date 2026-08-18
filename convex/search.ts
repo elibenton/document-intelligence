@@ -391,11 +391,16 @@ export const plannerContext = internalQuery({
       .query("documentKinds")
       .withIndex("by_project_and_name", (q) => q.eq("projectId", args.projectId))
       .take(50);
+    // Sorted, because these strings go into the planner prompt and the prompt
+    // is the Interfaze cache key: index/insertion order changes on any ingest,
+    // which re-billed every repeated question. Same rule as the kind list in
+    // analyzePrompt.ts — order carries no meaning to the model. The caps are
+    // applied before sorting so the vocabulary itself is unchanged.
     return {
-      entityNames: entities.map((e) => `${e.name} (${e.type})`),
-      roles: [...roles].slice(0, PLANNER_VOCAB_CAP),
-      relationTypes: [...relationTypes].slice(0, PLANNER_VOCAB_CAP),
-      kinds: kinds.map((k) => k.name),
+      entityNames: entities.map((e) => `${e.name} (${e.type})`).sort(),
+      roles: [...roles].slice(0, PLANNER_VOCAB_CAP).sort(),
+      relationTypes: [...relationTypes].slice(0, PLANNER_VOCAB_CAP).sort(),
+      kinds: kinds.map((k) => k.name).sort(),
     };
   },
 });

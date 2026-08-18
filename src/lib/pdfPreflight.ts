@@ -1,5 +1,5 @@
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { PROVIDER_URL_SAFE_BYTES } from "../../convex/interfazeLimits";
+import { PROVIDER_FILE_PART_SAFE_BYTES } from "../../convex/interfazeLimits";
 import { formatBytes } from "./formatBytes";
 
 /**
@@ -33,12 +33,13 @@ import { formatBytes } from "./formatBytes";
  */
 
 /**
- * The ceiling is the provider's 80 MB URL limit, not the 20 MB file-object one.
- * Between the two, the pipeline switches transport rather than refusing the
- * document (convex/interfaze.ts:fileUrlContent) — an oversized PDF now costs
- * more to read instead of being rejected at upload.
+ * One transport, one ceiling: everything goes to Interfaze as a file part, and
+ * 34 MB is the largest file part measured to work (2026-08-18 — a 62 MB part
+ * died in an opaque 500). The URL-in-text fallback that used to lift this to
+ * 80 MB was removed after it was measured reading the wrong document; see
+ * convex/interfazeLimits.ts for both measurements.
  */
-export const PDF_INTERFAZE_SAFE_BYTES = PROVIDER_URL_SAFE_BYTES;
+export const PDF_INTERFAZE_SAFE_BYTES = PROVIDER_FILE_PART_SAFE_BYTES;
 
 /**
  * The 50-page truncation warning was removed here for the same reason as the
