@@ -1,7 +1,8 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { authedQuery } from "./authz";
+import { authedMutation, authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
+import { transcriptSignature } from "./speakerSignature";
 
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
@@ -33,6 +34,38 @@ export const byDocument = authedQuery({
       .query("transcriptSegments")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
       .collect();
+  },
+});
+
+/**
+ * Hand these segments to another diarizer label — the "delete this speaker
+ * label" gesture, which merges a turn into the speaker above it. Text,
+ * timings, and highlights are untouched; only the label moves. The naming
+ * signature is re-stamped afterwards so changing the diarization by hand
+ * doesn't re-open the "who's speaking" dialog.
+ */
+export const reassignSpeaker = authedMutation({
+  args: {
+    documentId: v.id("documents"),
+    segmentIds: v.array(v.id("transcriptSegments")),
+    speaker: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
+    for (const id of args.segmentIds) {
+      const row = await ctx.db.get(id);
+      if (!row || row.documentId !== args.documentId) continue;
+      await ctx.db.patch(id, { speaker: args.speaker });
+    }
+    const segments = await ctx.db
+      .query("transcriptSegments")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    await ctx.db.patch(args.documentId, {
+      speakerNamingSignature: transcriptSignature(segments),
+    });
+    return null;
   },
 });
 

@@ -176,6 +176,29 @@ export const RecordingView = forwardRef<
     [renameSpeaker, getNameOptions, armNameOptions]
   );
 
+  // The header's × : this turn was the diarizer over-splitting, so hand its
+  // whole run of segments (consecutive turns sharing this display name) to
+  // the speaker above. Text and timings stay; only the label moves.
+  const reassignSpeaker = useMutation(api.transcripts.reassignSpeaker);
+  const mergeTurnUp = useCallback(
+    (si: number) => {
+      if (!segments || si <= 0) return;
+      const displayOf = (i: number) =>
+        nameByLabel.get(segments[i].speaker) ?? segments[i].speaker;
+      const runName = displayOf(si);
+      const ids = [];
+      for (let i = si; i < segments.length && displayOf(i) === runName; i++) {
+        ids.push(segments[i]._id);
+      }
+      void reassignSpeaker({
+        documentId: doc._id,
+        segmentIds: ids,
+        speaker: segments[si - 1].speaker,
+      });
+    },
+    [segments, nameByLabel, reassignSpeaker, doc._id]
+  );
+
   // Two diarizer labels given the same human name are the same person:
   // they combine — one color (the first-appearing label's), and consecutive
   // turns merge under a single header (see the render below). Unnamed labels
@@ -701,6 +724,7 @@ export const RecordingView = forwardRef<
                 showHeader={name !== prevName}
                 searchWords={searchWordsBySegment?.get(si)}
                 rename={rename}
+                onMergeUp={mergeTurnUp}
                 isActive={active.segment === si}
                 activeWordIndex={active.segment === si ? active.word : -1}
                 showTranslation={showTranslation}

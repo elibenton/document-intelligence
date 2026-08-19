@@ -168,6 +168,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   showHeader = true,
   searchWords,
   rename,
+  onMergeUp,
   isActive,
   activeWordIndex,
   showTranslation,
@@ -189,6 +190,10 @@ export const TranscriptTurn = memo(function TranscriptTurn({
    *  the speaker library). Renaming to a neighbor's name merges the turns
    *  (see showHeader). */
   rename?: SpeakerRename;
+  /** Remove this turn's speaker label, folding its run into the speaker
+   *  above. Stable across renders (keyed by `index`) so the memo holds;
+   *  the first turn renders no × — there is nothing above to merge into. */
+  onMergeUp?: (index: number) => void;
   isActive: boolean;
   activeWordIndex: number;
   showTranslation: boolean;
@@ -204,7 +209,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
     // its own.
     <div data-seg={index} className={cn(index > 0 && (showHeader ? "mt-5" : "mt-1"))}>
       {showHeader && (
-        <div className="flex items-baseline gap-2 mb-1">
+        <div className="group/turnheader flex items-baseline gap-2 mb-1">
           {rename ? (
             <SpeakerNameEditor
               machineLabel={seg.speaker}
@@ -227,6 +232,33 @@ export const TranscriptTurn = memo(function TranscriptTurn({
           >
             {formatTime(seg.startTime)}
           </button>
+          {onMergeUp && index > 0 && (
+            <button
+              type="button"
+              onClick={() => onMergeUp(index)}
+              title="Remove this speaker label (the turn joins the speaker above)"
+              aria-label="Remove this speaker label and merge with the speaker above"
+              className={cn(
+                "grid size-4 place-items-center self-center rounded",
+                "text-muted-foreground opacity-0 transition-opacity",
+                "hover:bg-accent hover:text-foreground",
+                "group-hover/turnheader:opacity-100 focus-visible:opacity-100",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              )}
+            >
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              >
+                <path d="M2 2l6 6M8 2l-6 6" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
       <p
