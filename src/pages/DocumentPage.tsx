@@ -26,7 +26,10 @@ import { HighlighterTool } from "@/components/viewer/HighlighterTool";
 import type { AnnotationColor } from "@/components/viewer/annotationColors";
 import { useViewerZoom } from "@/components/viewer/useViewerZoom";
 import { PageOverlays } from "@/components/viewer/PageOverlays";
-import { findPersonMentions } from "@/components/viewer/personMentions";
+import {
+  bestSearchVariant,
+  findPersonMentions,
+} from "@/components/viewer/personMentions";
 import type { EntityHover } from "@/components/viewer/EntityHighlights";
 import { PipelineProgress } from "@/components/documents/PipelineProgress";
 import { DocumentUsage } from "@/components/documents/DocumentUsage";
@@ -314,19 +317,29 @@ export default function DocumentPage({ id }: { id: string }) {
     }));
   }, [documentEntities, projectEntityTypes]);
 
-  // Precompute mention counts per entity item across all groups
+  // Precompute mentions per entity item across all groups — matched against
+  // every spelling the entity has carried (renames and merges teach aliases),
+  // so the row still lights up when the text says "Eli" and the entity says
+  // "Eli Cohen".
   const mentionData = useMemo(() => {
     if (!blocks) return new Map<string, ReturnType<typeof findPersonMentions>>();
+    const variantsByName = new Map<string, string[]>();
+    for (const entity of documentEntities ?? []) {
+      variantsByName.set(entity.name, [entity.name, ...(entity.aliases ?? [])]);
+    }
     const map = new Map<string, ReturnType<typeof findPersonMentions>>();
     for (const group of entityGroups) {
       for (const item of group.items) {
         if (!map.has(item)) {
-          map.set(item, findPersonMentions(blocks, item));
+          map.set(
+            item,
+            findPersonMentions(blocks, variantsByName.get(item) ?? [item])
+          );
         }
       }
     }
     return map;
-  }, [entityGroups, blocks]);
+  }, [entityGroups, blocks, documentEntities]);
 
   // Sort each group's items by mention count descending
   const sortedEntityGroups = useMemo(() => {
@@ -763,6 +776,12 @@ export default function DocumentPage({ id }: { id: string }) {
                     <div className="flex flex-col">
                       {group.items.map((item) => {
                         const isActive = selectedItem === item;
+                        const mentions = mentionData.get(item) ?? [];
+                        const mentionCount = mentions.length;
+                        // The spelling that actually occurs in this document
+                        // — search for that, not for a name the text never
+                        // spells out.
+                        const searchTerm = bestSearchVariant(mentions) ?? item;
                         const crossDoc = crossDocMap.get(item.toLowerCase());
                         const role = roleByName.get(item.toLowerCase());
                         const connections = crossDoc
@@ -824,19 +843,21 @@ export default function DocumentPage({ id }: { id: string }) {
                                     setSearchQuery("");
                                   } else {
                                     setSelectedItem(item);
-                                    setSearchQuery(item);
+                                    setSearchQuery(searchTerm);
                                   }
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key !== "Enter" && e.key !== " ") return;
                                   e.preventDefault();
                                   setSelectedItem(isActive ? null : item);
-                                  setSearchQuery(isActive ? "" : item);
+                                  setSearchQuery(isActive ? "" : searchTerm);
                                 }}
                                 title={
                                   isActive
                                     ? "Clear highlight"
-                                    : `Highlight ${item} in the document`
+                                    : mentionCount > 0
+                                      ? `Highlight ${searchTerm} in the document`
+                                      : `"${item}" was not found in the document text`
                                 }
                                 className={cn(
                                   "flex flex-1 cursor-pointer items-center gap-1.5 px-2 py-1.5 text-left text-sm transition-colors",

@@ -214,6 +214,10 @@ export const byDocument = authedQuery({
         mentionCount: e.mentionCount,
         localMentionCount: localCounts.get(e._id) ?? 0,
         isCustom: e.isCustom,
+        // Every spelling this entity has carried (renames and merges teach
+        // them) — the sidebar matches all of them against the visible text,
+        // so "Eli Cohen" still highlights a transcript that only says "Eli".
+        aliases: e.aliases,
       }));
   },
 });

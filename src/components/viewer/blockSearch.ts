@@ -1,4 +1,5 @@
 import type { TocBlock } from "./TableOfContents";
+import { decodeEntities, KEEP } from "../../../convex/nameMatch";
 
 export interface SearchHit {
   /** Unique per occurrence — a block can match more than once. */
@@ -38,44 +39,8 @@ export const MIN_QUERY_LENGTH = 2;
 const SNIPPET_BEFORE = 25;
 const SNIPPET_AFTER = 90;
 
-const ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-};
-
-/**
- * Entities have to go before the alphanumeric filter, or `&lt;` survives it as
- * the letters "lt" and corrupts everything around it. Block text carries them
- * raw — see the `&lt;Nicole.Elliott@…&gt;` blocks in any mail-derived document.
- */
-function decodeEntities(text: string): string {
-  return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (whole, body: string) => {
-    if (body[0] === "#") {
-      const code =
-        body[1] === "x" || body[1] === "X"
-          ? parseInt(body.slice(2), 16)
-          : parseInt(body.slice(1), 10);
-      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : whole;
-    }
-    return ENTITIES[body.toLowerCase()] ?? whole;
-  });
-}
-
-/**
- * True when a character survives normalization. Everything else — whitespace,
- * punctuation, quotes of either curliness — is dropped rather than collapsed.
- *
- * Dropping whitespace instead of normalizing it is the whole point. Extracted
- * block text spells a line join three different ways: a newline, a run of
- * spaces, or nothing at all ("Sincerely,Nicole"), and a reader typing the
- * phrase has no way to know which one they got. Ignoring the question entirely
- * is the only rule that matches all three.
- */
-const KEEP = /[\p{L}\p{N}]/u;
+// Entity decoding and the KEEP filter live in convex/nameMatch.ts — one
+// normalization shared with entity mention matching.
 
 export interface SearchIndex {
   /** Every block's text, lowercased down to alphanumerics, concatenated. */

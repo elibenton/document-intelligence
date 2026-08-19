@@ -11,6 +11,7 @@ import {
   relationLabel,
   relationSortIndex,
 } from "./relationTypes";
+import { buildNameIndex, matchedBlockIndexes } from "./nameMatch";
 import { authedQuery } from "./authz";
 import { requireDocument, requireEntity, requireProject } from "./ownership";
 import { sanitizeDocumentDate } from "./metadata";
@@ -125,6 +126,11 @@ export const ingestGraph = internalMutation({
     const pageIdByNumber = new Map<number, Id<"pages">>();
     for (const page of pages) pageIdByNumber.set(page.pageNumber, page._id);
 
+    // One index for the whole document, matched per entity below — the same
+    // normalized, word-bounded matcher the sidebar and search use, so what
+    // gets stored as a mention is exactly what the reader can find.
+    const nameIndex = buildNameIndex(blocks.map((b) => b.text));
+
     // Resolve names through the shared resolver (exact/alias auto-link,
     // fuzzy lookalikes queue merge suggestions), then make sure the entity has
     // mentions in THIS document.
@@ -170,9 +176,16 @@ export const ingestGraph = internalMutation({
       // Unconditional: this document's mentions were just cleared, so there is
       // nothing left to be idempotent about, and a stale gate here is what let
       // an entity keep a previous run's evidence.
-      const matchingBlocks = blocks.filter((b) =>
-        b.text.toLowerCase().includes(key)
-      );
+      //
+      // Grounded by name AND aliases: a merge teaches the loser's spellings as
+      // aliases, so the entity a document knows as "Eli" stays findable after
+      // it becomes "Eli Cohen".
+      const row = await ctx.db.get(entityId);
+      const variants = [entity.name, ...(row?.aliases ?? [])];
+      if (row && row.name !== entity.name) variants.unshift(row.name);
+      const matchingBlocks = [
+        ...matchedBlockIndexes(nameIndex, variants),
+      ].map((index) => blocks[index]);
       for (const block of matchingBlocks) {
         const pageId = pageIdByNumber.get(block.pageNumber);
         if (!pageId) continue;
