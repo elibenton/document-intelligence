@@ -97,6 +97,32 @@ export async function enqueueStage(
 }
 
 /**
+ * Failsafe behind createDocument's deferred enqueue: when an upload plans a
+ * native text-layer commit (nativeText.ts), parse waits for its
+ * finishNativeIngest — and for a browser that dies mid-commit, this fires on
+ * a delay and starts parse anyway. Any existing parse job, whatever its
+ * state, means the deferral already resolved; a failed document (demo page
+ * cap, unsupported type) has nothing left to parse.
+ */
+export const ensureParseStarted = internalMutation({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const document = await ctx.db.get(args.documentId);
+    if (!document || document.status === "failed") return null;
+    const existing = await ctx.db
+      .query("processingJobs")
+      .withIndex("by_document", (q) =>
+        q.eq("documentId", args.documentId).eq("stage", "parse")
+      )
+      .first();
+    if (existing) return null;
+    await enqueueStage(ctx, args.documentId, "parse");
+    return null;
+  },
+});
+
+/**
  * Pause gate, called first thing by every pipeline stage action. When
  * processing is paused the job is canceled rather than run — pause exists to
  * stop spend against a provider that is refusing everything, and canceling is

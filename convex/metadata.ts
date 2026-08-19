@@ -50,10 +50,17 @@ export const saveMetadataResult = internalMutation({
 
     const kindName = (parsed.primary_kind ?? "").trim().toLowerCase();
 
-    const toc = sanitizeTableOfContents(
-      parsed.table_of_contents,
-      document.pageCount
-    );
+    // What the PDF file itself declared (documents.pdfMetadata) outranks the
+    // model on the fields it covers — those fields were omitted from the
+    // request schema (NativeMetadataOmissions in analyzePrompt.ts), so the
+    // parsed response legitimately lacks them and the native value is the
+    // only one there is. Stored sanitized at commit (nativeText.ts), so it is
+    // used as-is here.
+    const native = document.pdfMetadata;
+
+    const toc = native?.tableOfContents?.length
+      ? native.tableOfContents
+      : sanitizeTableOfContents(parsed.table_of_contents, document.pageCount);
 
 
     const documentDate = sanitizeDocumentDate(parsed.document_date, Date.now());
@@ -136,17 +143,29 @@ export const saveMetadataResult = internalMutation({
       ...(human(document.citationSource)
         ? {}
         : (() => {
-            const citation = sanitizeCitation(parsed.citation);
-            return { citation, citationSource: citation ? "ai" : undefined };
+            const citation = sanitizeCitation(parsed.citation) ?? {};
+            // The Info author was withheld from the request, so the model's
+            // citation arrives without contributors; the file's own credit is
+            // the contributor list.
+            if (native?.author && !citation.contributors) {
+              citation.contributors = [
+                { role: "author", literal: native.author },
+              ];
+            }
+            const hasFacts = Object.keys(citation).length > 0;
+            return {
+              citation: hasFacts ? citation : undefined,
+              citationSource: hasFacts ? "ai" : undefined,
+            };
           })()),
       ...(human(document.metadataSource)
         ? {}
         : {
             metadata: JSON.stringify({
-              title: parsed.title,
+              title: parsed.title ?? native?.title,
               summary: parsed.summary,
               date: parsed.date,
-              author: parsed.author,
+              author: parsed.author ?? native?.author,
               language: parsed.language,
               additional: parsed.additional ?? [],
             }),

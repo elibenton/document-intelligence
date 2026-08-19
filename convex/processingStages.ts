@@ -26,6 +26,7 @@ import {
   buildAnalyzePrompt,
   buildDocumentUnderstandingSchema,
   type CategoryDef,
+  type NativeMetadataOmissions,
 } from "./analyzePrompt";
 import { usageLogger } from "./apiLogs";
 import { isCsvDocument } from "./mediaTypes";
@@ -180,6 +181,10 @@ async function understandingRequest(
     fileName?: string;
     promptOverride?: string;
     fileInput?: boolean;
+    /** The PDF file's own declared metadata (documents.pdfMetadata). Fields
+     * it covers are removed from the request — ground truth over inference;
+     * saveMetadataResult reads them back in when persisting. */
+    pdfMetadata?: Doc<"documents">["pdfMetadata"];
   }
 ): Promise<{
   systemPrompt: string;
@@ -195,6 +200,14 @@ async function understandingRequest(
           projectId: options.projectId,
         })
       : [];
+  const omit: NativeMetadataOmissions | undefined =
+    options.pdfMetadata && !options.csv
+      ? {
+          tableOfContents: !!options.pdfMetadata.tableOfContents?.length,
+          displayTitle: !!options.pdfMetadata.title,
+          author: !!options.pdfMetadata.author,
+        }
+      : undefined;
   return {
     systemPrompt: analyzeSystemPrompt(options.csv),
     prompt:
@@ -206,12 +219,14 @@ async function understandingRequest(
         fileName: options.fileName,
         graphExtraTypes: extraTypes,
         fileInput: options.fileInput,
+        omit,
       }),
     responseSchema: {
       name: "document_understanding",
       schema: buildDocumentUnderstandingSchema(
         categoryDefs.map((c) => c.key),
-        extraTypes.map((t) => t.key)
+        extraTypes.map((t) => t.key),
+        omit
       ),
     },
   };
@@ -279,6 +294,7 @@ async function analyzeAndStore(
     bypassCache?: boolean;
     promptOverride?: string;
     fileName?: string;
+    pdfMetadata?: Doc<"documents">["pdfMetadata"];
   }
 ): Promise<void> {
   const request = await understandingRequest(ctx, options);
@@ -359,6 +375,7 @@ export const runAnalyze = internalAction({
         bypassCache: args.bypassCache,
         promptOverride: args.promptOverride,
         fileName: document.name,
+        pdfMetadata: document.pdfMetadata,
       });
 
       await ctx.runMutation(internal.processing.updateJobStatus, {
@@ -471,6 +488,54 @@ export const runPipeline = internalAction({
         document.projectId
       );
 
+      // --- Digital-native fast path ----------------------------------------
+      // The browser committed this PDF's own text layer before parse was
+      // enqueued (convex/nativeText.ts), so there is nothing to OCR: no file
+      // leaves storage, and understanding rides the same text-in call an
+      // Analyze retry uses — measured ~5x cheaper than the file-in completion
+      // (see the cost note on understandDocument). The gate requires the
+      // layer to be complete and trustworthy; anything less falls through to
+      // the file-in call below and the per-page merge in ingest.ts.
+      if (document.mediaType === "pdf") {
+        const nativePages: { pageNumber: number; text: string }[] | null =
+          await ctx.runQuery(internal.nativeText.completeNativePages, {
+            documentId: args.documentId,
+          });
+        if (nativePages) {
+          textStored = true;
+          await ctx.scheduler.runAfter(0, internal.embeddings.embedDocument, {
+            documentId: args.documentId,
+          });
+          await ctx.runMutation(internal.processing.updateStatus, {
+            documentId: args.documentId,
+            status: "parsed",
+          });
+          await analyzeAndStore(ctx, {
+            documentId: args.documentId,
+            projectId: document.projectId,
+            pageTexts: nativePages.map((page) => page.text),
+            apiKey,
+            csv: false,
+            kindNames,
+            categories,
+            log,
+            bypassCache: args.bypassCache,
+            fileName: document.name,
+            pdfMetadata: document.pdfMetadata,
+          });
+          await ctx.runMutation(internal.processing.updateJobStatus, {
+            documentId: args.documentId,
+            stage: "parse",
+            status: "completed",
+          });
+          await ctx.runMutation(internal.processing.updateStatus, {
+            documentId: args.documentId,
+            status: "completed",
+          });
+          return null;
+        }
+      }
+
       // --- The one call ----------------------------------------------------
       const result = await understandDocument(fileUrl, document.name, apiKey, {
         ...(await understandingRequest(ctx, {
@@ -480,6 +545,9 @@ export const runPipeline = internalAction({
           categories,
           fileName: document.name,
           fileInput: true,
+          // A partially-native PDF still preempts the fields its own file
+          // metadata answers, even though the text goes through OCR.
+          pdfMetadata: document.pdfMetadata,
         })),
         log,
         bypassCache: args.bypassCache,
