@@ -31,14 +31,26 @@ export const list = authedQuery({
     // rather than a subscription per visible row.
     return await Promise.all(
       active.map(async (doc) => {
-        if (doc.status !== "parsed") return { ...doc, analyzeStatus: null };
+        // How many highlights/comments the document carries, for the Library's
+        // Notes column. Counted per document off `by_document` rather than a
+        // new by_project index because rows from before projectId was
+        // denormalized would be invisible to a project-scoped read.
+        const noteCount = (
+          await ctx.db
+            .query("annotations")
+            .withIndex("by_document", (q) => q.eq("documentId", doc._id))
+            .collect()
+        ).length;
+        if (doc.status !== "parsed") {
+          return { ...doc, analyzeStatus: null, noteCount };
+        }
         const job = await ctx.db
           .query("processingJobs")
           .withIndex("by_document", (q) =>
             q.eq("documentId", doc._id).eq("stage", "analyze")
           )
           .first();
-        return { ...doc, analyzeStatus: job?.status ?? null };
+        return { ...doc, analyzeStatus: job?.status ?? null, noteCount };
       })
     );
   },

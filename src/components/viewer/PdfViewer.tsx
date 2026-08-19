@@ -277,6 +277,12 @@ interface PdfViewerProps {
   /** The highlight whose comment box is open. Shared with the notes panel. */
   activeAnnotationId?: string | null;
   onActiveAnnotationChange?: (id: string | null) => void;
+  /**
+   * The armed highlighter color (HighlighterTool). While set, a text selection
+   * commits straight to a highlight of this color instead of opening the
+   * SelectionPopover.
+   */
+  penColor?: AnnotationColor | null;
   ref?: Ref<PdfViewerRef>;
 }
 
@@ -292,6 +298,7 @@ export function PdfViewer({
   sectionTitleForPage,
   activeAnnotationId = null,
   onActiveAnnotationChange,
+  penColor = null,
   ref,
 }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -359,12 +366,35 @@ export function PdfViewer({
 
   // The popover and the comment card are two dialogs over the same page, so
   // only one is ever up: starting a new selection puts away the open note.
+  // With the highlighter armed, a finished selection skips the popover
+  // entirely and commits as a highlight of the armed color.
   const handleDraftChange = useCallback(
     (next: AnnotationDraft | null) => {
+      if (next && penColor) {
+        clearSelection();
+        onActiveAnnotationChange?.(null);
+        void createAnnotation({
+          documentId,
+          pageNumber: next.pageNumber - 1,
+          color: penColor,
+          text: next.text,
+          sectionTitle: sectionTitleForPage?.(next.pageNumber - 1),
+          rects: next.rects,
+          blockIds: next.blockIds,
+        });
+        return;
+      }
       setDraft(next);
       if (next) onActiveAnnotationChange?.(null);
     },
-    [onActiveAnnotationChange]
+    [
+      clearSelection,
+      createAnnotation,
+      documentId,
+      onActiveAnnotationChange,
+      penColor,
+      sectionTitleForPage,
+    ]
   );
 
   const pageCount = Math.max(totalPages, 1);
@@ -1024,27 +1054,35 @@ function PageTextLayer({
         onPointerUp={handlePointerUp}
         onPointerCancel={finishMarquee}
       >
-      {[
-        ...selectionBoxes,
-        ...tokens
-          .filter((token) => marqueeSelection?.tokenIds.has(token.id))
-          .map((token) => ({
-            id: `marquee:${token.id}`,
-            left: token.left,
-            top: token.top,
-            width: token.width,
-            height: token.height,
-          })),
-      ].map((box) => (
+      {/* Per-token boxes merged into line runs before drawing: five selected
+          words paint as one stripe, not five slabs with hairlines between. */}
+      {mergeSelectionRects(
+        [
+          ...selectionBoxes,
+          ...tokens
+            .filter((token) => marqueeSelection?.tokenIds.has(token.id))
+            .map((token) => ({
+              left: token.left,
+              top: token.top,
+              width: token.width,
+              height: token.height,
+            })),
+        ].map((box) => ({
+          x: box.left,
+          y: box.top,
+          width: box.width,
+          height: box.height,
+        }))
+      ).map((run, index) => (
         <span
-          key={`selection:${box.id}`}
+          key={`selection:${index}:${run.x}:${run.y}`}
           aria-hidden="true"
           className="absolute pointer-events-none rounded-[2px] bg-blue-400/35"
           style={{
-            left: box.left,
-            top: box.top,
-            width: box.width,
-            height: box.height,
+            left: run.x,
+            top: run.y,
+            width: run.width,
+            height: run.height,
           }}
         />
       ))}

@@ -25,7 +25,10 @@ import {
   SelectionPopover,
   type SelectionAnchor,
 } from "@/components/viewer/SelectionPopover";
-import { annotationColor } from "@/components/viewer/annotationColors";
+import {
+  annotationColor,
+  type AnnotationColor,
+} from "@/components/viewer/annotationColors";
 import { useConfirm } from "@/components/ui/use-confirm";
 
 export interface RecordingViewRef {
@@ -45,8 +48,14 @@ export const RecordingView = forwardRef<
     document: Doc<"documents">;
     url: string | null | undefined;
     showTranslation?: boolean;
+    /** Armed highlighter color: a selection commits straight to a highlight
+     *  of this color instead of opening the SelectionPopover. */
+    penColor?: AnnotationColor | null;
   }
->(function RecordingView({ document: doc, url, showTranslation = false }, ref) {
+>(function RecordingView(
+  { document: doc, url, showTranslation = false, penColor = null },
+  ref
+) {
   const segments = useQuery(api.transcripts.byDocument, {
     documentId: doc._id,
   });
@@ -235,6 +244,23 @@ export const RecordingView = forwardRef<
     return map;
   }, [segments, annotations]);
 
+  const commitNote = useCallback(
+    async (note: PendingNote, color: string, comment?: string) => {
+      await createAnnotation({
+        documentId: doc._id,
+        // The transcript IS page 0 in the mirror — truthful, not a fudge.
+        pageNumber: 0,
+        color: color as "yellow" | "green" | "blue" | "pink" | "purple",
+        text: note.text,
+        comment,
+        rects: [],
+        blockIds: note.blockIds,
+        timeRange: note.timeRange,
+      });
+    },
+    [createAnnotation, doc._id],
+  );
+
   const clearPendingNote = useCallback(() => {
     setPendingNote(null);
     window.getSelection()?.removeAllRanges();
@@ -278,7 +304,7 @@ export const RecordingView = forwardRef<
       parts.push(words.slice(from, to + 1).map((w) => w.word).join(" "));
     }
     const rect = range.getBoundingClientRect();
-    setPendingNote({
+    const note: PendingNote = {
       anchor: {
         left: rect.left,
         right: rect.right,
@@ -291,22 +317,19 @@ export const RecordingView = forwardRef<
         { length: b.seg - a.seg + 1 },
         (_, i) => `transcript_seg${a.seg + i}`,
       ),
-    });
-  }, [segments]);
+    };
+    // The armed highlighter skips the popover: the selection is the gesture.
+    if (penColor) {
+      selection.removeAllRanges();
+      void commitNote(note, penColor);
+      return;
+    }
+    setPendingNote(note);
+  }, [segments, penColor, commitNote]);
 
   async function saveNote(color: string, comment?: string) {
     if (!pendingNote) return;
-    await createAnnotation({
-      documentId: doc._id,
-      // The transcript IS page 0 in the mirror — truthful, not a fudge.
-      pageNumber: 0,
-      color: color as "yellow" | "green" | "blue" | "pink" | "purple",
-      text: pendingNote.text,
-      comment,
-      rects: [],
-      blockIds: pendingNote.blockIds,
-      timeRange: pendingNote.timeRange,
-    });
+    await commitNote(pendingNote, color, comment);
     clearPendingNote();
   }
 

@@ -81,9 +81,16 @@ export const TranscriptTurn = memo(function TranscriptTurn({
         ) : seg.words.length > 0 ? (
           seg.words.map((w, wi) => {
             const wordActive = isActive && activeWordIndex === wi;
-            const highlight = highlights?.find(
-              (h) => w.start < h.end && w.end > h.start,
-            );
+            const highlightOf = (word: { start: number; end: number } | undefined) =>
+              word
+                ? highlights?.find((h) => word.start < h.end && word.end > h.start)
+                : undefined;
+            const highlight = highlightOf(w);
+            // A run of highlighted words paints as one continuous stripe: only
+            // the run's outer edges keep their rounding, so the marker doesn't
+            // scallop at every word boundary.
+            const joinsPrev = highlight && Boolean(highlightOf(seg.words[wi - 1]));
+            const joinsNext = highlight && Boolean(highlightOf(seg.words[wi + 1]));
             return (
               <span
                 key={w.start}
@@ -96,7 +103,14 @@ export const TranscriptTurn = memo(function TranscriptTurn({
                 )}
                 style={
                   highlight && !wordActive
-                    ? { backgroundColor: highlight.fill }
+                    ? {
+                        backgroundColor: highlight.fill,
+                        borderRadius: `${joinsPrev ? "0" : "0.25rem"} ${
+                          joinsNext ? "0" : "0.25rem"
+                        } ${joinsNext ? "0" : "0.25rem"} ${
+                          joinsPrev ? "0" : "0.25rem"
+                        }`,
+                      }
                     : undefined
                 }
                 title={formatTime(w.start)}

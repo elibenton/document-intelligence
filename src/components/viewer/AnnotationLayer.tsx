@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import { ANNOTATION_COLORS, annotationColor } from "./annotationColors";
 import type { AnnotationColor } from "./annotationColors";
-import { boundingRect } from "./annotationGeometry";
+import { boundingRect, mergeSelectionRects } from "./annotationGeometry";
 import type { TextBox } from "../../lib/pdfTextGeometry";
 
 /** The fields of an `annotations` row the viewer actually draws with. */
@@ -44,28 +44,38 @@ export function AnnotationLayer({
         const color = annotationColor(annotation.color);
         const bounds = boundingRect(annotation.rects);
         const isActive = annotation._id === activeId;
+        // Re-merged at paint so rows saved before line-run merging existed
+        // still draw as continuous stripes. Idempotent for new rows.
+        const runs = mergeSelectionRects(annotation.rects);
         return (
           <div key={annotation._id}>
-            {annotation.rects.map((rect, index) => (
-              <span
-                key={index}
-                aria-hidden="true"
-                className={cn(
-                  "absolute rounded-[2px] transition-shadow",
-                  // Multiply keeps glyphs readable through the ink instead of
-                  // washing them out the way a plain alpha overlay does.
-                  "mix-blend-multiply",
-                  isActive && "ring-2 ring-foreground/40"
-                )}
-                style={{
-                  left: rect.x * scale,
-                  top: rect.y * scale,
-                  width: rect.width * scale,
-                  height: rect.height * scale,
-                  backgroundColor: color.fill,
-                }}
-              />
-            ))}
+            {runs.map((rect, index) => {
+              // A marker stroke bleeds a little past the glyphs it covers;
+              // hairline-exact boxes are what reads as choppy. Scaled with the
+              // line height so zoom carries it along.
+              const bleedX = rect.height * scale * 0.18;
+              const bleedY = rect.height * scale * 0.1;
+              return (
+                <span
+                  key={index}
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute rounded-[3px] transition-shadow",
+                    // Multiply keeps glyphs readable through the ink instead of
+                    // washing them out the way a plain alpha overlay does.
+                    "mix-blend-multiply",
+                    isActive && "ring-2 ring-foreground/40"
+                  )}
+                  style={{
+                    left: rect.x * scale - bleedX,
+                    top: rect.y * scale - bleedY,
+                    width: rect.width * scale + bleedX * 2,
+                    height: rect.height * scale + bleedY * 2,
+                    backgroundColor: color.fill,
+                  }}
+                />
+              );
+            })}
             {/* The anchor the comment card measures itself against, and the
                 marker that says a note is attached at all. */}
             {bounds && (

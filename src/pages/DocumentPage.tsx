@@ -21,6 +21,8 @@ import { ContentsPanel } from "@/components/viewer/ContentsPanel";
 import { NotesPanel } from "@/components/viewer/NotesPanel";
 import { buildTocHeaders, sectionForPage } from "@/components/viewer/tocHeaders";
 import { ZoomControl } from "@/components/viewer/ZoomControl";
+import { HighlighterTool } from "@/components/viewer/HighlighterTool";
+import type { AnnotationColor } from "@/components/viewer/annotationColors";
 import { useViewerZoom } from "@/components/viewer/useViewerZoom";
 import { FLOATING_SURFACE } from "@/components/viewer/surfaces";
 import { PageOverlays } from "@/components/viewer/PageOverlays";
@@ -106,6 +108,10 @@ export default function DocumentPage({ id }: { id: string }) {
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(
     null
   );
+  // The armed highlighter color, or null when the pen is away. Lives here
+  // because the tool floats in the layout while the commit happens inside
+  // whichever viewer (PDF or transcript) is mounted.
+  const [penColor, setPenColor] = useState<AnnotationColor | null>(null);
   // How much room the layout gave the viewer, and the zoom floor that keeps
   // the page from shrinking before the panels do (see panelLayout).
   const [viewerMetrics, setViewerMetrics] = useState({ width: 0, zoomFloor: 1 });
@@ -562,15 +568,20 @@ export default function DocumentPage({ id }: { id: string }) {
             ) : undefined
           }
           bottomLeft={
-            isPdfDocument && (
-              <ZoomControl
-                zoom={zoom}
-                onZoomChange={chooseZoom}
-                onFitWidth={fitToWidth}
-                currentPage={currentPage}
-                totalPages={totalPages ?? 0}
-              />
-            )
+            isPdfDocument || isRecording ? (
+              <div className="flex flex-col items-start gap-2">
+                <HighlighterTool color={penColor} onChange={setPenColor} />
+                {isPdfDocument && (
+                  <ZoomControl
+                    zoom={zoom}
+                    onZoomChange={chooseZoom}
+                    onFitWidth={fitToWidth}
+                    currentPage={currentPage}
+                    totalPages={totalPages ?? 0}
+                  />
+                )}
+              </div>
+            ) : undefined
           }
           bottomRight={
             <PipelineProgress document={document} floating collapseWhenDone />
@@ -584,6 +595,7 @@ export default function DocumentPage({ id }: { id: string }) {
                 showTranslation={
                   hasTranslatedContent && languageView === "translated"
                 }
+                penColor={penColor}
               />
             ) : hasTranslatedContent && languageView === "translated" ? (
               <TranslatedDocumentView pages={translatedPages ?? []} />
@@ -615,6 +627,7 @@ export default function DocumentPage({ id }: { id: string }) {
                   sectionTitleForPage={sectionTitleForPage}
                   activeAnnotationId={activeAnnotationId}
                   onActiveAnnotationChange={setActiveAnnotationId}
+                  penColor={penColor}
                 />
               ) : null
             ) : (

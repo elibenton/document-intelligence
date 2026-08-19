@@ -1,3 +1,4 @@
+import { MessageSquare } from "lucide-react";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { DocTypePills } from "@/components/documents/DocTypePills";
 import { DocStatusIndicator } from "@/components/documents/DocStatusIndicator";
@@ -20,8 +21,12 @@ import type { PropertyDef, PropertyOption } from "./types";
  * generated from this list.
  */
 
-/** A row as `documents.list` returns it: the document plus its analyze job state. */
-export type LibraryDoc = Doc<"documents"> & { analyzeStatus?: string | null };
+/** A row as `documents.list` returns it: the document plus its analyze job
+ *  state and how many highlights/comments it carries. */
+export type LibraryDoc = Doc<"documents"> & {
+  analyzeStatus?: string | null;
+  noteCount?: number;
+};
 
 const CHIP = "text-2xs font-medium leading-none px-1.5 py-0.5 truncate";
 
@@ -294,6 +299,30 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     format: (doc) => (doc.pageCount ? `${doc.pageCount}` : null),
   },
   {
+    id: "noteCount",
+    label: "Notes",
+    kind: "number",
+    filterable: true,
+    sortable: true,
+    value: (doc) => doc.noteCount ?? 0,
+    format: (doc) => (doc.noteCount ? `${doc.noteCount}` : null),
+    // Silent at zero: most documents have no notes, and a column of zeros
+    // would be noise. The count appears the moment the first highlight lands.
+    render: (doc) =>
+      doc.noteCount ? (
+        <span
+          className={cn(
+            CHIP,
+            "inline-flex items-center gap-1 rounded-full bg-muted text-muted-foreground px-2 tabular-nums"
+          )}
+          title={`${doc.noteCount} note${doc.noteCount === 1 ? "" : "s"}`}
+        >
+          <MessageSquare className="size-3" aria-hidden="true" />
+          {doc.noteCount}
+        </span>
+      ) : null,
+  },
+  {
     id: "language",
     label: "Language",
     kind: "select",
@@ -340,11 +369,12 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
 ];
 
 /**
- * Reproduces the Library exactly as it looked before it became configurable,
- * so an untouched project sees no change.
+ * The Library as it looked before it became configurable, plus the note count.
+ * A project with a saved view keeps it — the count is added there via the
+ * properties menu, not by us rewriting the user's config.
  */
 export const DEFAULT_LIBRARY_VIEW = {
-  visibleProperties: ["status", "category", "kind", "documentDate"],
+  visibleProperties: ["status", "category", "kind", "noteCount", "documentDate"],
   filters: [],
   sorts: [{ property: "documentDate", direction: "desc" as const }],
 };
