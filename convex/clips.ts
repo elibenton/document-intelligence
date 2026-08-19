@@ -52,6 +52,15 @@ export const lookupClipped = internalQuery({
       projectId: v.id("projects"),
       projectName: v.string(),
       clippedAt: v.number(),
+      // The document's current metadata, so the popup can show (and edit)
+      // what's already filled instead of an empty preview.
+      meta: v.object({
+        title: v.optional(v.string()),
+        author: v.optional(v.string()),
+        publishedAt: v.optional(v.string()),
+        siteName: v.optional(v.string()),
+        description: v.optional(v.string()),
+      }),
     })
   ),
   handler: async (ctx, args) => {
@@ -73,11 +82,29 @@ export const lookupClipped = internalQuery({
         )
         .first();
       if (existing) {
+        let blob: Record<string, unknown> = {};
+        try {
+          blob = existing.metadata ? JSON.parse(existing.metadata) : {};
+        } catch {
+          /* unparseable blob — fall back to the live columns alone */
+        }
+        const str = (value: unknown): string | undefined =>
+          typeof value === "string" && value.trim() ? value : undefined;
+        const site = (Array.isArray(blob.additional) ? blob.additional : [])
+          .map((entry) => entry as Record<string, unknown> | null)
+          .find((entry) => entry?.key === "site")?.value;
         return {
           documentId: existing._id,
           projectId: project._id,
           projectName: project.name,
           clippedAt: existing.uploadedAt,
+          meta: {
+            title: existing.displayName ?? existing.name,
+            author: existing.author ?? str(blob.author),
+            publishedAt: existing.createdDate ?? str(blob.date),
+            siteName: str(site),
+            description: str(blob.summary),
+          },
         };
       }
     }

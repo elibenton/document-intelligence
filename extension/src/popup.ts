@@ -87,7 +87,7 @@ let clippedDocumentId: string | undefined;
 function showMetaPreview(meta: Record<string, string | undefined>): void {
   const values: Record<string, string> = {
     title: meta.title ?? "",
-    author: meta.byline ?? "",
+    author: meta.author ?? "",
     siteName: meta.siteName ?? "",
     publishedAt: meta.publishedAt ? formatDateTime(meta.publishedAt) : "",
     description: meta.description ?? "",
@@ -281,6 +281,7 @@ async function warnIfAlreadyClipped(url: string): Promise<void> {
         documentId: string;
         projectName: string;
         clippedAt: number;
+        meta?: Record<string, string | undefined>;
       } | null;
     };
     if (!existing) return;
@@ -289,6 +290,12 @@ async function warnIfAlreadyClipped(url: string): Promise<void> {
     appendOpenLink(reclipWarning, existing.documentId, "Open existing");
     reclipWarning.hidden = false;
     clipButton.textContent = "Clip again";
+    // Show the existing document's metadata, editable in place — unless a
+    // just-finished clip's preview is already on screen.
+    if (existing.meta && metaPreview.hidden) {
+      clippedDocumentId = existing.documentId;
+      showMetaPreview(existing.meta);
+    }
   } catch {
     /* offline or endpoint unreachable — clip proceeds; the server still refuses duplicates */
   }

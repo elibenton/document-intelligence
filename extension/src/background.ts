@@ -13,7 +13,7 @@ interface ClipStatus {
   /** Metadata the capture extracted, shown as a preview once clipped. */
   meta?: {
     title?: string;
-    byline?: string;
+    author?: string;
     siteName?: string;
     publishedAt?: string;
     description?: string;
@@ -196,7 +196,7 @@ async function runClip(
       tabId,
       meta: {
         title: payload.title as string | undefined,
-        byline: captured?.byline,
+        author: captured?.byline,
         siteName: captured?.siteName,
         publishedAt: captured?.publishedAt,
         description: captured?.description ?? captured?.excerpt,
