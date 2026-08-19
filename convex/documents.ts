@@ -262,15 +262,18 @@ const MAX_KINDS = 8;
  * semantic kinds it belongs to (see the identity menu on the left of every
  * document name).
  *
- * Both fields are optional and independent — the menu sends only what
- * changed. An empty `displayName` clears the human title and the "human"
- * stamp with it, which puts the document back in reach of the AI rename pass.
+ * Both fields are optional and independent — the editors send only what
+ * changed. An empty `displayName` is a tombstone like setField's: the library
+ * falls back to showing `name`, and the "human" stamp keeps the rename pass
+ * from re-titling what a person deleted. `resetDisplayName` re-opens the
+ * field to automation instead.
  */
 export const updateIdentity = authedMutation({
   args: {
     id: v.id("documents"),
     displayName: v.optional(v.string()),
     kinds: v.optional(v.array(v.string())),
+    resetDisplayName: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const doc = await requireDocument(ctx, args.id);
@@ -302,13 +305,20 @@ export const updateIdentity = authedMutation({
       kindSource?: string;
     } = {};
 
-    if (args.displayName !== undefined) {
+    if (args.resetDisplayName) {
+      patch.displayName = undefined;
+      patch.displayNameSource = undefined;
+    } else if (args.displayName !== undefined) {
       const title = args.displayName.trim();
       // A title equal to the filename is the same as having none: the UI
       // would print the same string twice, once per line.
       const keep = title && title !== doc.name;
       patch.displayName = keep ? title : undefined;
-      patch.displayNameSource = keep ? "human" : undefined;
+      // Always "human": a kept title is authored, and an emptied (or
+      // filename-restating) one is a tombstone — the person chose the
+      // filename, so the rename pass must not re-title it (rename.ts
+      // TITLE_RANK). resetDisplayName above is the re-open affordance.
+      patch.displayNameSource = "human";
     }
 
     if (args.kinds !== undefined) {
@@ -356,9 +366,12 @@ export const updateIdentity = authedMutation({
  * same for all of them, and only the validation differs.
  *
  * The rule (documented on the schema's *Source fields): a non-empty commit
- * stamps `"human"` and re-analysis skips the field; an empty commit clears
- * value and stamp both, re-opening the field to AI. Clearing still records
- * the override, so the rejection isn't lost with the stamp.
+ * stamps `"human"` and automation skips the field; an EMPTY commit is a
+ * deliberate deletion — the value goes and the stamp stays `"human"` (a
+ * tombstone), so neither Analyze nor a native ingest refills what a person
+ * edited out. `reset: true` is the separate re-open affordance: it clears
+ * value and stamp both, handing the field back to automation. Clearing still
+ * records the override, so the rejection isn't lost with the value.
  */
 export const setField = authedMutation({
   args: {
@@ -366,32 +379,42 @@ export const setField = authedMutation({
     field: v.union(
       v.literal("primaryCategory"),
       v.literal("documentDate"),
+      v.literal("createdDate"),
       v.literal("documentPlace"),
+      v.literal("author"),
       v.literal("sourceLanguageCode")
     ),
     value: v.optional(v.string()),
-    /** documentDate only: "day" | "month" | "year". Inferred client-side
+    /** Dates only: "day" | "month" | "year". Inferred client-side
      *  from the value's shape; validated here against it. */
     precision: v.optional(v.string()),
+    /** Re-open the field to automation: clears value AND stamp. The value
+     *  arg is ignored. Distinct from an empty commit, which tombstones. */
+    reset: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const doc = await requireDocument(ctx, args.id);
-    const value = (args.value ?? "").trim();
+    const value = args.reset ? "" : (args.value ?? "").trim();
 
     const sourceField = (
       {
         primaryCategory: "primaryCategorySource",
         documentDate: "documentDateSource",
+        createdDate: "createdDateSource",
         documentPlace: "documentPlaceSource",
+        author: "authorSource",
         sourceLanguageCode: "sourceLanguageSource",
       } as const
     )[args.field];
 
-    if (doc[args.field] && doc[sourceField] !== "human") {
+    // A reset is an un-decision, not a rejection — nothing to record.
+    if (!args.reset && doc[args.field] && doc[sourceField] !== "human") {
       await recordOverride(ctx, { documentId: args.id, field: args.field });
     }
 
-    const stamp = value ? "human" : undefined;
+    const stamp = value ? "human" : args.reset ? undefined : "human";
+    // Every empty-value patch below writes { value: undefined, source: stamp }:
+    // a tombstone on an ordinary clear, a full re-open on reset.
 
     switch (args.field) {
       case "primaryCategory": {
@@ -414,12 +437,18 @@ export const setField = authedMutation({
         } else {
           await ctx.db.patch(args.id, {
             primaryCategory: undefined,
-            primaryCategorySource: undefined,
+            primaryCategorySource: stamp,
           });
         }
         return;
       }
-      case "documentDate": {
+      case "documentDate":
+      case "createdDate": {
+        const valueField = args.field;
+        const precisionField =
+          args.field === "documentDate"
+            ? "documentDatePrecision"
+            : "createdDatePrecision";
         if (value) {
           // Same shape/impossible-date validation Analyze output gets, minus
           // the future-date rejection: that guard exists for hallucinations,
@@ -434,14 +463,15 @@ export const setField = authedMutation({
             );
           }
           await ctx.db.patch(args.id, {
-            ...sanitized,
-            documentDateSource: "human",
+            [valueField]: sanitized.documentDate,
+            [precisionField]: sanitized.documentDatePrecision,
+            [sourceField]: "human",
           });
         } else {
           await ctx.db.patch(args.id, {
-            documentDate: undefined,
-            documentDatePrecision: undefined,
-            documentDateSource: undefined,
+            [valueField]: undefined,
+            [precisionField]: undefined,
+            [sourceField]: stamp,
           });
         }
         return;
@@ -455,7 +485,15 @@ export const setField = authedMutation({
         await ctx.db.patch(args.id, {
           documentPlace: place || undefined,
           documentPlaceEvidence: undefined,
-          documentPlaceSource: place ? stamp : undefined,
+          documentPlaceSource: place ? "human" : stamp,
+        });
+        return;
+      }
+      case "author": {
+        const author = value.replace(/\s+/g, " ").slice(0, 120);
+        await ctx.db.patch(args.id, {
+          author: author || undefined,
+          authorSource: author ? "human" : stamp,
         });
         return;
       }
@@ -466,7 +504,7 @@ export const setField = authedMutation({
         }
         await ctx.db.patch(args.id, {
           sourceLanguageCode: code || undefined,
-          sourceLanguageSource: code ? stamp : undefined,
+          sourceLanguageSource: code ? "human" : stamp,
         });
         return;
       }

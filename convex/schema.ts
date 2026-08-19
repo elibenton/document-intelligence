@@ -156,12 +156,14 @@ export default defineSchema({
     // createdDateSource, tombstone included.
     author: v.optional(v.string()),
     authorSource: v.optional(v.string()),
-    // Provenance stamps, one per human-editable Analyze field, all following
-    // displayNameSource's rule (the one kindSource used to diverge from):
-    // a committed non-empty value stamps "human" and re-analysis skips the
-    // field; committing empty clears the value AND the stamp, re-opening the
-    // field to AI. The rejection itself isn't lost by clearing — the edit
-    // mutations record it into apiLogs (`override:<field>`) at commit time.
+    // Provenance stamps, one per human-editable Analyze field: a committed
+    // non-empty value stamps "human" and automation skips the field; a
+    // committed EMPTY value is a tombstone — value gone, stamp still "human" —
+    // so neither Analyze nor a native ingest refills what a person deleted.
+    // Re-opening a field to automation is the separate explicit `reset` on
+    // documents.setField, which clears value and stamp both. The rejection
+    // itself isn't lost by clearing — the edit mutations record it into
+    // apiLogs (`override:<field>`) at commit time.
     documentDateSource: v.optional(v.string()), // "ai" | "human"
     primaryCategorySource: v.optional(v.string()),
     documentPlaceSource: v.optional(v.string()),
