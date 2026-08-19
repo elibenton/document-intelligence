@@ -1,19 +1,27 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
+import {
+  readDisclosure,
+  writeDisclosure,
+} from "@/hooks/usePersistedDisclosure";
 
 /**
  * A collapsible group header, generalized from the Entities list's
  * type-groups so both lists can group by anything.
  *
- * Collapse state is local and deliberately not persisted: it's a "let me see
- * past this for a second" gesture, and restoring yesterday's collapsed groups
- * on load would hide rows the user has no memory of hiding.
+ * With a `storageKey`, collapse state persists across reloads — a group the
+ * user closed stays closed. (This reverses an earlier deliberate
+ * non-persistence: the product decision is now that every caret remembers
+ * its owner's choice.) Only user toggles persist: a `forceOpen` open, or
+ * Chrome expanding a closed <details> for a find-in-page match, is not the
+ * user choosing.
  */
 export function ListGroup({
   label,
   count,
   defaultOpen,
   forceOpen,
+  storageKey,
   onToggle,
   children,
   footer,
@@ -23,6 +31,8 @@ export function ListGroup({
   defaultOpen?: boolean;
   /** Filtering narrows the list to what you asked for — don't also hide it. */
   forceOpen?: boolean;
+  /** Persist the user's open/closed choice across reloads under this key. */
+  storageKey?: string;
   onToggle?: (open: boolean) => void;
   children: ReactNode;
   /** Rendered under a collapsed group — the starred-entity peek. */
@@ -31,7 +41,10 @@ export function ListGroup({
   // `defaultOpen` used to be passed straight into the controlled `open`
   // attribute, so a group that started open could never be closed. Hold the
   // state here and let `forceOpen` override it.
-  const [open, setOpen] = useState(defaultOpen ?? false);
+  const [open, setOpen] = useState(
+    () =>
+      (storageKey ? readDisclosure(storageKey) : null) ?? defaultOpen ?? false
+  );
 
   // Native <details> stays, rather than Base UI's Collapsible: Chrome expands
   // a closed <details> to reveal a find-in-page match, and a div-based panel
@@ -44,6 +57,9 @@ export function ListGroup({
         open={forceOpen || open}
         onToggle={(event) => {
           setOpen(event.currentTarget.open);
+          if (storageKey && !forceOpen) {
+            writeDisclosure(storageKey, event.currentTarget.open);
+          }
           onToggle?.(event.currentTarget.open);
         }}
       >

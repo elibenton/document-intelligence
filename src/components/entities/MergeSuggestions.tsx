@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { usePersistedDisclosure } from "@/hooks/usePersistedDisclosure";
 
 export type MergeSuggestion = {
   _id: Id<"mergeSuggestions">;
@@ -54,6 +55,11 @@ export function MergeSuggestions({
   const [confirming, setConfirming] = useState<MergeSuggestion | null>(null);
   const [keepId, setKeepId] = useState<Id<"entities"> | null>(null);
   const [undo, setUndo] = useState<UndoState | null>(null);
+  // The caret's choice survives reload, like every disclosure in the app.
+  const [duplicatesOpen, setDuplicatesOpen] = usePersistedDisclosure(
+    "merge-suggestions",
+    false
+  );
   const [busy, setBusy] = useState(false);
 
   if (suggestions.length === 0 && !undo) return null;
@@ -117,7 +123,11 @@ export function MergeSuggestions({
         </div>
       )}
       {suggestions.length > 0 && (
-        <details className="group/duplicates mt-1 rounded-md border border-amber-200/80 bg-amber-50/50 dark:border-amber-900/80 dark:bg-amber-950/20">
+        <details
+          open={duplicatesOpen}
+          onToggle={(event) => setDuplicatesOpen(event.currentTarget.open)}
+          className="group/duplicates mt-1 rounded-md border border-amber-200/80 bg-amber-50/50 dark:border-amber-900/80 dark:bg-amber-950/20"
+        >
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100/60 dark:text-amber-100 dark:hover:bg-amber-950/40 [&::-webkit-details-marker]:hidden">
             <span className="flex min-w-0 items-center gap-1.5">
               <ChevronRight className="size-3 shrink-0 text-amber-700 transition-transform group-open/duplicates:rotate-90 dark:text-amber-300" />

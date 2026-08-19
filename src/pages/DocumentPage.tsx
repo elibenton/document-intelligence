@@ -56,6 +56,7 @@ import { documentTitles } from "@/lib/documentTitle";
 import { isCsvDocument } from "@/lib/uploadTypes";
 import type { Id } from "../../convex/_generated/dataModel";
 import { isTypingTarget } from "@/lib/isTypingTarget";
+import { usePersistedStringSet } from "@/hooks/usePersistedDisclosure";
 
 /**
  * `id` arrives as a prop rather than from `useParams` because the route module
@@ -100,11 +101,14 @@ export default function DocumentPage({ id }: { id: string }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [showBlocks, setShowBlocks] = useState(false);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
-  /** Entity names whose connections are showing beneath them. */
-  const [expandedEntities, setExpandedEntities] = useState<Set<string>>(
-    new Set()
+  /** Entity names whose connections are showing beneath them. Persisted, as
+   *  is every caret: reopening the document keeps the user's choices. */
+  const [expandedEntities, setExpandedEntities] = usePersistedStringSet(
+    "doc:expanded-entity-connections"
   );
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = usePersistedStringSet(
+    "doc:collapsed-entity-groups"
+  );
   const [customTitle, setCustomTitle] = useState("");
   const [customDescription, setCustomDescription] = useState("");
   const [customExtracting, setCustomExtracting] = useState(false);

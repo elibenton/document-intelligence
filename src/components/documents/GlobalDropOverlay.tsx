@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useMatch, useSearchParams } from "react-router";
+import { usePersistedDisclosure } from "@/hooks/usePersistedDisclosure";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { useUploads, useProjectUploads } from "@/hooks/uploadContext";
@@ -203,8 +204,13 @@ function ProjectDropOverlay({
   const [isPreparing, setIsPreparing] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
   // Folds the progress card down to a one-line summary, so a long upload
-  // batch stops covering the page's bottom-left corner.
-  const [collapsed, setCollapsed] = useState(false);
+  // batch stops covering the page's bottom-left corner. Persisted: a card
+  // the user collapsed stays collapsed on the next visit.
+  const [uploadCardOpen, setUploadCardOpen] = usePersistedDisclosure(
+    "upload-card",
+    true
+  );
+  const collapsed = !uploadCardOpen;
 
   useEffect(() => {
     let dragDepth = 0;
@@ -355,7 +361,7 @@ function ProjectDropOverlay({
             <UploadPanelBody
               uploads={uploads}
               collapsed={collapsed}
-              onToggle={() => setCollapsed((v) => !v)}
+              onToggle={() => setUploadCardOpen(collapsed)}
             />
           )}
         </div>

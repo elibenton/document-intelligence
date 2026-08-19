@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { readDisclosure } from "@/hooks/usePersistedDisclosure";
 import { Link } from "react-router";
 import type { Route } from "./+types/HomePage";
 import {
@@ -288,7 +289,11 @@ function EntityGroup({
   forceOpen: boolean;
   grouped: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  // Seeded from the persisted caret so the starred-peek footer agrees with
+  // the ListGroup's restored state on first paint.
+  const [open, setOpen] = useState(
+    () => readDisclosure(`entities:${group.key}`) ?? false
+  );
   const starred = group.rows.filter((entity) => entity.starred === true);
 
   const rows = (
@@ -313,6 +318,7 @@ function EntityGroup({
       label={group.label}
       count={group.rows.length}
       forceOpen={forceOpen}
+      storageKey={`entities:${group.key}`}
       onToggle={setOpen}
       footer={
         !forceOpen && !open && starred.length > 0 ? (
@@ -712,6 +718,7 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                           label={group.label}
                           count={group.rows.length}
                           forceOpen={libraryNarrowed}
+                          storageKey={`library:${group.key}`}
                           defaultOpen
                         >
                           {renderLibraryRows(group)}
