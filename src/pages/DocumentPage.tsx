@@ -164,17 +164,37 @@ export default function DocumentPage({ id }: { id: string }) {
   }, [document?.tableOfContents]);
 
   // Transcript blocks were ingested one per segment, in segment order, so
-  // zipping the block rows against the segments recovers each block's start
-  // time. Guarded on equal lengths: a transcript mid-replacement zips wrong.
-  const blockStartTimes = useMemo(() => {
+  // zipping the block rows against the segments recovers each block's
+  // segment. Guarded on equal lengths: a transcript mid-replacement zips
+  // wrong.
+  const segmentByBlockId = useMemo(() => {
     if (!isRecordingDoc || !blocks || !transcriptSegments) return undefined;
     if (blocks.length !== transcriptSegments.length) return undefined;
-    const map = new Map<string, number>();
+    const map = new Map<string, (typeof transcriptSegments)[number]>();
     blocks.forEach((block, i) => {
-      map.set(block._id as string, transcriptSegments[i].startTime);
+      map.set(block._id as string, transcriptSegments[i]);
     });
     return map;
   }, [isRecordingDoc, blocks, transcriptSegments]);
+
+  // The second a search hit is spoken — the word under the hit's offset, not
+  // the segment's start, which for a long turn can be minutes earlier.
+  const hitTime = useCallback(
+    (hit: { blockId: string; blockOffset: number }) => {
+      const segment = segmentByBlockId?.get(hit.blockId);
+      if (!segment) return undefined;
+      // Segment text is its words joined by single spaces, so walking the
+      // words' cumulative lengths locates the word at the offset.
+      let pos = 0;
+      for (const word of segment.words) {
+        const end = pos + word.word.length;
+        if (hit.blockOffset <= end) return word.start;
+        pos = end + 1;
+      }
+      return segment.startTime;
+    },
+    [segmentByBlockId]
+  );
 
   // The same section list the Contents panel shows, so a new note is filed
   // under exactly the heading the user can see it sitting beneath.
@@ -592,7 +612,7 @@ export default function DocumentPage({ id }: { id: string }) {
                 totalPages={totalPages ?? 0}
                 onNavigate={scrollToPage}
                 onSeek={isRecording ? seekTo : undefined}
-                blockStartTimes={blockStartTimes}
+                hitTime={segmentByBlockId ? hitTime : undefined}
                 activeSection={isRecording ? activeSection : undefined}
                 searchQuery={searchQuery}
                 onSearchChange={(q) => {
@@ -618,6 +638,7 @@ export default function DocumentPage({ id }: { id: string }) {
                 penColor={penColor}
                 sectionTimes={sectionTimes}
                 onActiveSectionChange={setActiveSection}
+                searchTerm={activeSearch ?? undefined}
               />
             ) : hasTranslatedContent && languageView === "translated" ? (
               <TranslatedDocumentView pages={translatedPages ?? []} />

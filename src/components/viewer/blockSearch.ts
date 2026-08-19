@@ -11,6 +11,9 @@ export interface SearchHit {
    * highlights this rather than the query, because the two differ wherever
    * the stored text spells the whitespace differently than the reader did. */
   matchText: string;
+  /** Character offset of the match inside its own block's text — how a
+   * transcript hit finds the exact word (and so the exact second) to seek. */
+  blockOffset: number;
 }
 
 export interface SearchOutcome {
@@ -83,6 +86,8 @@ export interface SearchIndex {
   blockAt: number[];
   /** Original block text, one space per block boundary — the snippet source. */
   joined: string;
+  /** Where each block's text begins in `joined`. */
+  blockJoinedStart: number[];
   blocks: TocBlock[];
 }
 
@@ -100,11 +105,13 @@ export function buildSearchIndex(blocks: TocBlock[]): SearchIndex {
   let normalized = "";
   const offsets: number[] = [];
   const blockAt: number[] = [];
+  const blockJoinedStart: number[] = [];
 
   for (let b = 0; b < blocks.length; b++) {
     // NFKC first, so ligatures and exotic spaces reduce to their plain forms.
     const text = decodeEntities(blocks[b].text).normalize("NFKC");
     const base = joined.length;
+    blockJoinedStart.push(base);
     for (let i = 0; i < text.length; i++) {
       const char = text[i];
       if (!KEEP.test(char)) continue;
@@ -117,7 +124,7 @@ export function buildSearchIndex(blocks: TocBlock[]): SearchIndex {
     joined += text + " ";
   }
 
-  return { normalized, offsets, blockAt, joined, blocks };
+  return { normalized, offsets, blockAt, joined, blockJoinedStart, blocks };
 }
 
 export function normalizeQuery(query: string): string {
@@ -169,6 +176,7 @@ export function searchIndex(index: SearchIndex, query: string): SearchOutcome {
       pageNumber: block.pageNumber,
       snippet,
       matchText: joined.slice(matchStart, matchEnd),
+      blockOffset: matchStart - index.blockJoinedStart[blockAt[at]],
     });
   }
 

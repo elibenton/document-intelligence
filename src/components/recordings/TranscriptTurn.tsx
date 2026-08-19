@@ -33,6 +33,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   speakerName,
   colorClass,
   showHeader = true,
+  searchWords,
   isActive,
   activeWordIndex,
   showTranslation,
@@ -47,6 +48,8 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   /** False when the previous turn is the same (display) speaker — the turns
    *  read as one, so the repeated name/time header is dropped. */
   showHeader?: boolean;
+  /** Word indices covered by the active document search, if any. */
+  searchWords?: Set<number>;
   isActive: boolean;
   activeWordIndex: number;
   showTranslation: boolean;
@@ -111,6 +114,8 @@ export const TranscriptTurn = memo(function TranscriptTurn({
                 // read as separate boxes instead of one continuous run.
                 className={cn(
                   "cursor-pointer rounded hover:bg-primary/15",
+                  // Same blue the PDF search overlay paints its matches with.
+                  searchWords?.has(wi) && "bg-blue-400/35",
                   wordActive && "bg-primary/25",
                 )}
                 style={

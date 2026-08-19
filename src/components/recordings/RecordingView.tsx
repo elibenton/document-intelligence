@@ -59,6 +59,9 @@ export const RecordingView = forwardRef<
      *  changes, so the parent is not re-rendered per timeupdate tick. */
     sectionTimes?: number[];
     onActiveSectionChange?: (index: number) => void;
+    /** The Contents panel's committed search term: matching words highlight
+     *  in the transcript, mirroring the PDF viewer's search overlay. */
+    searchTerm?: string;
   }
 >(function RecordingView(
   {
@@ -68,6 +71,7 @@ export const RecordingView = forwardRef<
     penColor = null,
     sectionTimes,
     onActiveSectionChange,
+    searchTerm,
   },
   ref
 ) {
@@ -142,6 +146,39 @@ export const RecordingView = forwardRef<
     () => (segments ? findActive(segments, currentTime) : { segment: -1, word: -1 }),
     [segments, currentTime],
   );
+
+  // Which word indices of each segment the committed search term covers.
+  // Matching runs on the words joined by single spaces, so multi-word terms
+  // match across word boundaries; per-segment sets keep TranscriptTurn's
+  // memo effective (turns without matches receive undefined).
+  const searchWordsBySegment = useMemo(() => {
+    const term = searchTerm?.trim().toLowerCase();
+    if (!term || term.length < 2 || !segments) return null;
+    const map = new Map<number, Set<number>>();
+    segments.forEach((seg, si) => {
+      let joined = "";
+      const wordStart: number[] = [];
+      for (const w of seg.words) {
+        if (joined) joined += " ";
+        wordStart.push(joined.length);
+        joined += w.word.toLowerCase();
+      }
+      const matched = new Set<number>();
+      let from = 0;
+      for (;;) {
+        const at = joined.indexOf(term, from);
+        if (at === -1) break;
+        const end = at + term.length;
+        from = end;
+        seg.words.forEach((w, wi) => {
+          const s = wordStart[wi];
+          if (s < end && s + w.word.length > at) matched.add(wi);
+        });
+      }
+      if (matched.size > 0) map.set(si, matched);
+    });
+    return map;
+  }, [searchTerm, segments]);
 
   // Keep the active word in view during playback — unless the user has
   // scrolled away, in which case following pauses until they ask for it back
@@ -601,6 +638,7 @@ export const RecordingView = forwardRef<
                 speakerName={name}
                 colorClass={colorByName.get(name)}
                 showHeader={name !== prevName}
+                searchWords={searchWordsBySegment?.get(si)}
                 isActive={active.segment === si}
                 activeWordIndex={active.segment === si ? active.word : -1}
                 showTranslation={showTranslation}

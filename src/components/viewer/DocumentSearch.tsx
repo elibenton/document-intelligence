@@ -17,9 +17,9 @@ interface DocumentSearchProps {
   onNavigate: (page: number) => void;
   /** Recordings: seek playback to a hit instead of scrolling to a page. */
   onSeek?: (seconds: number) => void;
-  /** Recordings: block id → segment start time. With `onSeek`, switches the
-   *  list to a flat, timestamp-addressed view (a transcript has no pages). */
-  blockStartTimes?: Map<string, number>;
+  /** Recordings: the second a hit is spoken (word-accurate). With `onSeek`,
+   *  switches the list to a flat, timestamp-addressed view. */
+  hitTime?: (hit: SearchHit) => number | undefined;
 }
 
 /**
@@ -33,7 +33,7 @@ export function DocumentSearch({
   currentPage,
   onNavigate,
   onSeek,
-  blockStartTimes,
+  hitTime,
 }: DocumentSearchProps) {
   // Hits arrive in reading order (searchBlocks), so a page's matches are
   // contiguous — grouping is a fold, not a sort.
@@ -49,11 +49,11 @@ export function DocumentSearch({
 
   // Recording: the transcript is one nominal page, so page headers say
   // nothing — a flat list addressed by each hit's segment timestamp.
-  if (onSeek && blockStartTimes) {
+  if (onSeek && hitTime) {
     return (
       <div className="flex flex-col">
         {hits.map((hit) => {
-          const time = blockStartTimes.get(hit.blockId);
+          const time = hitTime(hit);
           return (
             <button
               key={hit.key}

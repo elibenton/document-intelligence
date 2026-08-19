@@ -23,8 +23,8 @@ interface ContentsPanelProps {
   /** Recordings: seek playback instead of scrolling. Presence marks the
    *  document as a recording for the TOC and search views. */
   onSeek?: (seconds: number) => void;
-  /** Recordings: block id → the segment's start time, for search hits. */
-  blockStartTimes?: Map<string, number>;
+  /** Recordings: the second a search hit is spoken (word-accurate). */
+  hitTime?: (hit: { blockId: string; blockOffset: number }) => number | undefined;
   /** Recordings: index of the TOC section the playhead is in (-1 = none). */
   activeSection?: number;
   searchQuery: string;
@@ -47,7 +47,7 @@ export function ContentsPanel({
   totalPages,
   onNavigate,
   onSeek,
-  blockStartTimes,
+  hitTime,
   activeSection,
   searchQuery,
   onSearchChange,
@@ -95,7 +95,7 @@ export function ContentsPanel({
             currentPage={currentPage}
             onNavigate={onNavigate}
             onSeek={onSeek}
-            blockStartTimes={blockStartTimes}
+            hitTime={hitTime}
           />
         ) : (
           <TableOfContents
