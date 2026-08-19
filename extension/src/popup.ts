@@ -81,8 +81,8 @@ const META_FIELDS: { key: string; label: string; multiline?: boolean }[] = [
 let clippedDocumentId: string | undefined;
 
 /**
- * Editable preview of the metadata the capture extracted. Edits save back to
- * the document via PATCH /clip/metadata.
+ * Editable preview of the metadata the capture extracted. Each field saves
+ * back to the document via PATCH /clip/metadata when focus leaves it.
  */
 function showMetaPreview(meta: Record<string, string | undefined>): void {
   const values: Record<string, string> = {
@@ -92,11 +92,6 @@ function showMetaPreview(meta: Record<string, string | undefined>): void {
     publishedAt: meta.publishedAt ? formatDateTime(meta.publishedAt) : "",
     description: meta.description ?? "",
   };
-  const saveButton = document.createElement("button");
-  saveButton.id = "saveMeta";
-  saveButton.textContent = "Save changes";
-  saveButton.hidden = true;
-
   metaPreview.replaceChildren(
     ...META_FIELDS.flatMap(({ key, label, multiline }) => {
       const dt = document.createElement("dt");
@@ -106,40 +101,25 @@ function showMetaPreview(meta: Record<string, string | undefined>): void {
       input.value = values[key];
       input.dataset.key = key;
       input.dataset.original = values[key];
-      input.addEventListener("input", () => {
-        saveButton.hidden = false;
-        saveButton.textContent = "Save changes";
-        saveButton.disabled = false;
-      });
+      // "change" fires when focus leaves an edited field (and on Enter).
+      input.addEventListener("change", () => void saveField(input));
       dd.appendChild(input);
       return [dt, dd];
-    }),
-    saveButton
+    })
   );
-  saveButton.addEventListener("click", () => void saveMetaEdits(saveButton));
   metaPreview.hidden = false;
 }
 
-/** PATCH only the fields the user actually changed. */
-async function saveMetaEdits(saveButton: HTMLButtonElement): Promise<void> {
-  if (!clippedDocumentId) return;
-  const changes: Record<string, string> = {};
-  const edited: (HTMLInputElement | HTMLTextAreaElement)[] = [];
-  for (const input of metaPreview.querySelectorAll<
-    HTMLInputElement | HTMLTextAreaElement
-  >("input, textarea")) {
-    if (input.value === input.dataset.original) continue;
-    const key = input.dataset.key!;
-    changes[key] =
-      key === "publishedAt" ? toServerDate(input.value) : input.value;
-    edited.push(input);
-  }
-  if (edited.length === 0) {
-    saveButton.hidden = true;
-    return;
-  }
-  saveButton.disabled = true;
-  saveButton.textContent = "Saving…";
+/** PATCH one edited field the moment the user commits it. */
+async function saveField(
+  input: HTMLInputElement | HTMLTextAreaElement
+): Promise<void> {
+  if (!clippedDocumentId || input.value === input.dataset.original) return;
+  const key = input.dataset.key!;
+  const value =
+    key === "publishedAt" ? toServerDate(input.value) : input.value;
+  input.classList.remove("saveError");
+  input.disabled = true;
   const { endpoint } = await chrome.storage.sync.get(["endpoint"]);
   const { apiKey } = await chrome.storage.local.get(["apiKey"]);
   try {
@@ -149,7 +129,7 @@ async function saveMetaEdits(saveButton: HTMLButtonElement): Promise<void> {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey as string}`,
       },
-      body: JSON.stringify({ documentId: clippedDocumentId, ...changes }),
+      body: JSON.stringify({ documentId: clippedDocumentId, [key]: value }),
     });
     if (!res.ok) {
       const { error } = (await res.json().catch(() => ({}))) as {
@@ -157,14 +137,14 @@ async function saveMetaEdits(saveButton: HTMLButtonElement): Promise<void> {
       };
       throw new Error(error ?? `HTTP ${res.status}`);
     }
-    for (const input of edited) input.dataset.original = input.value;
-    saveButton.textContent = "Saved ✓";
-    setTimeout(() => {
-      saveButton.hidden = true;
-    }, 1500);
+    input.dataset.original = input.value;
+    input.classList.add("saved");
+    setTimeout(() => input.classList.remove("saved"), 1200);
   } catch (e) {
-    saveButton.disabled = false;
-    saveButton.textContent = `Save failed: ${e instanceof Error ? e.message : "error"} — retry`;
+    input.classList.add("saveError");
+    input.title = `Not saved: ${e instanceof Error ? e.message : "error"}`;
+  } finally {
+    input.disabled = false;
   }
 }
 
