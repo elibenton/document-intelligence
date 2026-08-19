@@ -146,6 +146,44 @@ export const accept = authedMutation({
 
 
 /**
+ * A merge the user initiated directly — dragging one entity onto another —
+ * rather than by accepting the resolver's suggestion. The caller always says
+ * which of the pair survives; the same mergeEntities machinery runs, so the
+ * loser's names become aliases and the merge is undoable for 30 days. Any
+ * pending suggestion touching the merged entity is retired by mergeEntities.
+ */
+export const mergeManual = authedMutation({
+  args: {
+    entityId: v.id("entities"),
+    otherEntityId: v.id("entities"),
+    keepEntityId: v.id("entities"),
+  },
+  handler: async (ctx, args) => {
+    if (args.entityId === args.otherEntityId) {
+      throw new Error("An entity cannot merge with itself");
+    }
+    const a = await requireEntity(ctx, args.entityId);
+    const b = await requireEntity(ctx, args.otherEntityId);
+    // Entities are per-project; folding one project's entity into another's
+    // would drag its mentions and relationships across the boundary.
+    if (a.projectId !== b.projectId) {
+      throw new Error("Merged entities must share a project");
+    }
+    if (args.keepEntityId !== a._id && args.keepEntityId !== b._id) {
+      throw new Error("keepEntityId must be one of the pair");
+    }
+    const target = args.keepEntityId === a._id ? a : b;
+    const source = target === a ? b : a;
+
+    const logId = await mergeEntities(ctx, { source, target });
+    if (target.projectId) {
+      await bumpDedupeCounter(ctx, target.projectId, "manualMerges");
+    }
+    return { mergeLogId: logId, survivorId: target._id };
+  },
+});
+
+/**
  * Undo a merge from its log row — best-effort by declaration: rows the
  * deletion cascades have since taken are skipped, mentions attributed to
  * the target *after* the merge stay with it (there is no record they were

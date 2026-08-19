@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router";
-import { Folder, Sparkles } from "lucide-react";
+import { Folder, Sparkles, Undo2 } from "lucide-react";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
@@ -17,6 +17,22 @@ import {
   RecordingView,
   type RecordingViewRef,
 } from "@/components/recordings/RecordingView";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  EntityMergeDialog,
+  type MergeCandidate,
+} from "@/components/entities/EntityMergeDialog";
 import { ViewerLayout } from "@/components/viewer/ViewerLayout";
 import { ContentsPanel } from "@/components/viewer/ContentsPanel";
 import { NotesPanel } from "@/components/viewer/NotesPanel";
@@ -131,6 +147,103 @@ export default function DocumentPage({ id }: { id: string }) {
   // because the tool floats in the layout while the commit happens inside
   // whichever viewer (PDF or transcript) is mounted.
   const [penColor, setPenColor] = useState<AnnotationColor | null>(null);
+
+  // Drag-to-merge in the entity sidebar: dropping one row on another opens
+  // the same survivor picker the merge queue uses. The 8px activation
+  // distance keeps a plain click loading the entity into search instead.
+  const mergeSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+  const [draggedEntityName, setDraggedEntityName] = useState<string | null>(
+    null
+  );
+  const [mergePair, setMergePair] = useState<{
+    a: MergeCandidate;
+    b: MergeCandidate;
+  } | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  // A just-dropped merge offers the same immediate undo the merge queue does.
+  const [mergeUndo, setMergeUndo] = useState<{
+    logId: Id<"mergeLog">;
+    survivorName: string;
+    mergedName: string;
+  } | null>(null);
+  const mergeManual = useMutation(api.mergeSuggestions.mergeManual);
+  const unmerge = useMutation(api.mergeSuggestions.unmerge);
+  // The drop's trailing click lands on the target row and would load it into
+  // search — same gesture-tail suppression as everywhere else.
+  const suppressEntityClick = useRef(false);
+  const handleMergeDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const entity = documentEntities?.find((e) => e._id === event.active.id);
+      setDraggedEntityName(entity?.name ?? null);
+    },
+    [documentEntities]
+  );
+  const suppressNextEntityClick = useCallback(() => {
+    suppressEntityClick.current = true;
+    setTimeout(() => {
+      suppressEntityClick.current = false;
+    }, 0);
+  }, []);
+  const handleMergeDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setDraggedEntityName(null);
+      suppressNextEntityClick();
+      const { active, over } = event;
+      if (!over || over.id === active.id) return;
+      const byId = new Map(
+        (documentEntities ?? []).map((entity) => [entity._id as string, entity])
+      );
+      const a = byId.get(String(active.id));
+      const b = byId.get(String(over.id));
+      if (!a || !b) return;
+      setMergeError(null);
+      setMergePair({
+        a: { _id: a._id, name: a.name, mentionCount: a.mentionCount },
+        b: { _id: b._id, name: b.name, mentionCount: b.mentionCount },
+      });
+    },
+    [documentEntities, suppressNextEntityClick]
+  );
+  const runManualMerge = useCallback(
+    (keepEntityId: Id<"entities">) => {
+      if (!mergePair || mergeBusy) return;
+      setMergeBusy(true);
+      setMergeError(null);
+      void (async () => {
+        try {
+          const result = await mergeManual({
+            entityId: mergePair.a._id,
+            otherEntityId: mergePair.b._id,
+            keepEntityId,
+          });
+          const survivor =
+            keepEntityId === mergePair.a._id ? mergePair.a : mergePair.b;
+          const merged =
+            keepEntityId === mergePair.a._id ? mergePair.b : mergePair.a;
+          if (result?.mergeLogId) {
+            setMergeUndo({
+              logId: result.mergeLogId,
+              survivorName: survivor.name,
+              mergedName: merged.name,
+            });
+          }
+          setMergePair(null);
+        } catch {
+          // The pair may have changed under us — a concurrent merge or
+          // delete. Say so in the dialog rather than closing it silently.
+          setMergeError(
+            "The merge failed — one of these entities may have just changed. Close and try again."
+          );
+        } finally {
+          setMergeBusy(false);
+        }
+      })();
+    },
+    [mergeBusy, mergeManual, mergePair]
+  );
   // How much room the layout gave the viewer, and the zoom floor that keeps
   // the page from shrinking before the panels do (see panelLayout).
   const [viewerMetrics, setViewerMetrics] = useState({ width: 0, zoomFloor: 1 });
@@ -541,6 +654,18 @@ export default function DocumentPage({ id }: { id: string }) {
       {document.projectId && (
         <ProjectSearchDialog projectId={document.projectId} />
       )}
+      <EntityMergeDialog
+        pair={mergePair}
+        description={
+          mergePair
+            ? `You dropped “${mergePair.a.name}” onto “${mergePair.b.name}”.`
+            : ""
+        }
+        error={mergeError}
+        busy={mergeBusy}
+        onMerge={runManualMerge}
+        onClose={() => setMergePair(null)}
+      />
       {/* The underline is inset from both edges, matching the home page's
           divider rules rather than running the full window width. */}
       <header className="relative flex h-14 shrink-0 items-center gap-3 px-3 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
@@ -764,7 +889,42 @@ export default function DocumentPage({ id }: { id: string }) {
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <TabsContent value="entities">
+            <DndContext
+              sensors={mergeSensors}
+              collisionDetection={pointerWithin}
+              onDragStart={handleMergeDragStart}
+              onDragEnd={handleMergeDragEnd}
+              onDragCancel={() => {
+                setDraggedEntityName(null);
+                suppressNextEntityClick();
+              }}
+            >
             <div className="flex flex-col gap-4">
+              {mergeUndo && (
+                <div className="flex items-center justify-between gap-2 rounded-md border bg-card px-2 py-1.5 text-xs">
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    Merged{" "}
+                    <span className="font-medium text-foreground">
+                      {mergeUndo.mergedName}
+                    </span>{" "}
+                    into{" "}
+                    <span className="font-medium text-foreground">
+                      {mergeUndo.survivorName}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      void unmerge({ logId: mergeUndo.logId });
+                      setMergeUndo(null);
+                    }}
+                  >
+                    <Undo2 className="size-3" />
+                    Undo
+                  </button>
+                </div>
+              )}
               {/* Entity groups */}
               {sortedEntityGroups.map((group) => {
                 const isGroupCollapsed = collapsedGroups.has(group.id);
@@ -824,7 +984,18 @@ export default function DocumentPage({ id }: { id: string }) {
                         const isExpanded = expandedEntities.has(item);
 
                         return (
-                          <div key={item} className="border-b border-border/50 last:border-0">
+                          <MergeDropRow
+                            key={item}
+                            entityId={crossDoc?.entityId}
+                            name={item}
+                          >
+                            {({ handleProps, isDragging }) => (
+                          <div
+                            className={cn(
+                              "border-b border-border/50 last:border-0",
+                              isDragging && "opacity-40"
+                            )}
+                          >
                             <div className="flex items-center">
                               {/* Connections live under the name they belong
                                   to rather than in a tab of their own: the
@@ -872,7 +1043,9 @@ export default function DocumentPage({ id }: { id: string }) {
                               <div
                                 role="button"
                                 tabIndex={0}
+                                {...handleProps}
                                 onClick={() => {
+                                  if (suppressEntityClick.current) return;
                                   if (isActive) {
                                     setSelectedItem(null);
                                     setSearchQuery("");
@@ -978,6 +1151,8 @@ export default function DocumentPage({ id }: { id: string }) {
                             )}
 
                           </div>
+                            )}
+                          </MergeDropRow>
                         );
                       })}
                     </div>
@@ -1063,6 +1238,14 @@ export default function DocumentPage({ id }: { id: string }) {
                 </div>
               )}
             </div>
+              <DragOverlay>
+                {draggedEntityName && (
+                  <div className="flex cursor-grabbing items-center rounded-md border bg-background px-2 py-1 text-sm font-medium shadow-md">
+                    {draggedEntityName}
+                  </div>
+                )}
+              </DragOverlay>
+            </DndContext>
               </TabsContent>
               <TabsContent value="notes">
                 <div className="flex flex-col gap-4">
@@ -1194,6 +1377,58 @@ export default function DocumentPage({ id }: { id: string }) {
           }
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * One sidebar entity row as a drag-merge participant: draggable by its row
+ * (pointer only — the merge queue remains the keyboard path to a merge), and
+ * a drop target for any other row. While another entity hovers here, the row
+ * ring-highlights and a small "Merge with …" helper names what a drop does.
+ */
+function MergeDropRow({
+  entityId,
+  name,
+  children,
+}: {
+  entityId: Id<"entities"> | undefined;
+  name: string;
+  children: (drag: {
+    handleProps: React.HTMLAttributes<HTMLElement>;
+    isDragging: boolean;
+  }) => React.ReactNode;
+}) {
+  const id = entityId ?? `unresolved:${name}`;
+  const draggable = useDraggable({ id, disabled: entityId === undefined });
+  const droppable = useDroppable({
+    id,
+    disabled: entityId === undefined || draggable.isDragging,
+  });
+  return (
+    <div
+      ref={(el) => {
+        draggable.setNodeRef(el);
+        droppable.setNodeRef(el);
+      }}
+      className={cn(
+        "relative",
+        droppable.isOver && "rounded-md ring-2 ring-primary/60"
+      )}
+    >
+      {children({
+        handleProps: {
+          onPointerDown: draggable.listeners?.onPointerDown as
+            | React.PointerEventHandler<HTMLElement>
+            | undefined,
+        },
+        isDragging: draggable.isDragging,
+      })}
+      {droppable.isOver && (
+        <span className="pointer-events-none absolute -top-2 right-2 z-10 rounded-full border bg-background px-2 py-0.5 text-2xs font-medium shadow-sm">
+          Merge with {name}
+        </span>
+      )}
     </div>
   );
 }

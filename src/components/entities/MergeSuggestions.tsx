@@ -3,13 +3,7 @@ import { useMutation } from "convex/react";
 import { ChevronRight, Undo2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+import { EntityMergeDialog } from "@/components/entities/EntityMergeDialog";
 import { usePersistedDisclosure } from "@/hooks/usePersistedDisclosure";
 
 export type MergeSuggestion = {
@@ -53,7 +47,6 @@ export function MergeSuggestions({
   const unmerge = useMutation(api.mergeSuggestions.unmerge);
 
   const [confirming, setConfirming] = useState<MergeSuggestion | null>(null);
-  const [keepId, setKeepId] = useState<Id<"entities"> | null>(null);
   const [undo, setUndo] = useState<UndoState | null>(null);
   // The caret's choice survives reload, like every disclosure in the app.
   const [duplicatesOpen, setDuplicatesOpen] = usePersistedDisclosure(
@@ -64,23 +57,8 @@ export function MergeSuggestions({
 
   if (suggestions.length === 0 && !undo) return null;
 
-  function openConfirm(s: MergeSuggestion) {
-    setConfirming(s);
-    // Default survivor mirrors the backend's pickSurvivor: more evidence,
-    // then the fuller name.
-    const def =
-      s.source.mentionCount !== s.target.mentionCount
-        ? s.source.mentionCount > s.target.mentionCount
-          ? s.source._id
-          : s.target._id
-        : s.source.name.length >= s.target.name.length
-          ? s.source._id
-          : s.target._id;
-    setKeepId(def);
-  }
-
-  async function runMerge() {
-    if (!confirming || !keepId || busy) return;
+  async function runMerge(keepId: Id<"entities">) {
+    if (!confirming || busy) return;
     setBusy(true);
     try {
       const result = await accept({ id: confirming._id, keepEntityId: keepId });
@@ -154,7 +132,7 @@ export function MergeSuggestions({
                 <div className="flex gap-1">
                   <button
                     type="button"
-                    onClick={() => openConfirm(s)}
+                    onClick={() => setConfirming(s)}
                     className="rounded border bg-background px-2 py-1 text-xs hover:bg-accent"
                   >
                     Merge…
@@ -174,58 +152,15 @@ export function MergeSuggestions({
         </details>
       )}
 
-      <Dialog
-        open={confirming !== null}
-        onOpenChange={(open) => {
-          if (!open) setConfirming(null);
-        }}
-      >
-        {confirming && (
-          <DialogContent className="max-w-md">
-            <DialogTitle>Merge into one entity?</DialogTitle>
-            <DialogDescription>
-              {confirming.reason}. Pick which name survives — the other
-              becomes an alias, so nothing stops matching. Undo is available
-              for 30 days.
-            </DialogDescription>
-            <div className="mt-3 flex flex-col gap-1.5">
-              {[confirming.source, confirming.target].map((entity) => (
-                <label
-                  key={entity._id}
-                  className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm has-checked:border-primary"
-                >
-                  <input
-                    type="radio"
-                    name="merge-survivor"
-                    checked={keepId === entity._id}
-                    onChange={() => setKeepId(entity._id)}
-                    className="accent-primary"
-                  />
-                  <span className="min-w-0 flex-1 truncate font-medium">
-                    {entity.name}
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {entity.mentionCount} mention
-                    {entity.mentionCount !== 1 && "s"}
-                  </span>
-                </label>
-              ))}
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirming(null)}
-              >
-                Cancel
-              </Button>
-              <Button size="sm" disabled={busy} onClick={() => void runMerge()}>
-                {busy ? "Merging…" : "Merge"}
-              </Button>
-            </div>
-          </DialogContent>
-        )}
-      </Dialog>
+      <EntityMergeDialog
+        pair={
+          confirming ? { a: confirming.source, b: confirming.target } : null
+        }
+        description={confirming ? `${confirming.reason}.` : ""}
+        busy={busy}
+        onMerge={(keepId) => void runMerge(keepId)}
+        onClose={() => setConfirming(null)}
+      />
     </>
   );
 }
