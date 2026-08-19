@@ -144,14 +144,36 @@ const TITLE_RULE =
  * deterministically when the citation is rendered. Asking again would pay
  * tokens for a worse copy of a fact already in hand.
  */
-const CITATION_RULE =
+const CITATION_RULE_HEAD =
   "Fill in `citation` with the bibliographic facts this document states about itself, for formatting a reference to it. " +
   "Every field is optional and an empty string is the correct answer whenever the document does not supply it — do not infer a publisher from a logo, a court from a case caption's style, or a journal from formatting. " +
-  "Choose `type` from the list; when nothing fits, use \"document\". " +
-  "Give `contributors` only for people or bodies credited with producing the document — authors, editors, translators — not everyone it mentions. Use `family` and `given` for a person, and `literal` alone for an organization. " +
+  "Choose `type` from the list; when nothing fits, use \"document\". ";
+// Split out because the PDF's own Info dictionary can supply the author, in
+// which case `contributors` leaves the schema and this clause leaves with it.
+const CITATION_CONTRIBUTORS_CLAUSE =
+  "Give `contributors` only for people or bodies credited with producing the document — authors, editors, translators — not everyone it mentions. Use `family` and `given` for a person, and `literal` alone for an organization. ";
+const CITATION_RULE_TAIL =
   "`container_title` is the larger work this appeared in: a journal, a newspaper, a website, or a reporter for a decided case. " +
   "`authority` is the issuing court or agency, and `number` the docket, report or form number as printed. " +
   "Leave the whole object empty rather than half-guessing: a citation nobody can check is worse than one that is visibly incomplete.";
+
+/**
+ * Fields the document's own file metadata already answers, so the model is not
+ * asked for them: an authored PDF outline preempts table_of_contents, an Info
+ * title preempts display_title and the metadata title, an Info author preempts
+ * the author field and citation contributors. Ground truth over inference, and
+ * fewer billed output tokens. saveMetadataResult reads the native values back
+ * in from documents.pdfMetadata, so the stored result stays complete.
+ *
+ * With nothing omitted, both the prompt and the schema are byte-identical to
+ * the shapes they have always had — they are vcache inputs, and a byte of
+ * drift is a silent cache-miss regression.
+ */
+export interface NativeMetadataOmissions {
+  tableOfContents?: boolean;
+  displayTitle?: boolean;
+  author?: boolean;
+}
 
 export function buildAnalyzePrompt(options: {
   csv: boolean;
@@ -173,6 +195,8 @@ export function buildAnalyzePrompt(options: {
    * never see and asks for 1-based page numbers from the document itself.
    */
   fileInput?: boolean;
+  /** Fields the PDF's own metadata already answers — see NativeMetadataOmissions. */
+  omit?: NativeMetadataOmissions;
 }): string {
   const categoryRule = buildCategoryRule(options.categories);
   const typeRule = `${TYPE_RULE} ${buildKindReuseClause(options.kindNames)}`.trim();
@@ -184,12 +208,33 @@ export function buildAnalyzePrompt(options: {
   const graphRule = options.graphExtraTypes
     ? ` ${buildGraphRule(options.graphExtraTypes)}`
     : "";
+  const omit = options.omit;
   const lead = options.csv
     ? "Analyze this CSV dataset: its columns, row semantics, subject, and notable structure."
     : options.fileInput
-      ? "Analyze the attached document and return the requested metadata. Read the entire document. Build the table of contents from headings that actually appear in it, with each entry's page number as the 1-based page it starts on. Flag any page ranges that look like a separate document stapled into the same file."
-      : "Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker. Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under. Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.";
-  return `${lead}${fileNameFact} ${typeRule} ${categoryRule} ${TITLE_RULE} ${DATE_RULE} ${PLACE_RULE} ${CITATION_RULE}${graphRule}`;
+      ? "Analyze the attached document and return the requested metadata. Read the entire document." +
+        (omit?.tableOfContents
+          ? ""
+          : " Build the table of contents from headings that actually appear in it, with each entry's page number as the 1-based page it starts on.") +
+        " Flag any page ranges that look like a separate document stapled into the same file."
+      : "Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker." +
+        (omit?.tableOfContents
+          ? ""
+          : " Build the table of contents from headings that actually appear in the text, and take each entry's page number from the marker it falls under.") +
+        " Flag any page ranges that look like a separate document stapled into the same file, and suggest the extractions this particular document would reward.";
+  const citationRule =
+    CITATION_RULE_HEAD +
+    (omit?.author ? "" : CITATION_CONTRIBUTORS_CLAUSE) +
+    CITATION_RULE_TAIL;
+  return [
+    `${lead}${fileNameFact}`,
+    typeRule,
+    categoryRule,
+    ...(omit?.displayTitle ? [] : [TITLE_RULE]),
+    DATE_RULE,
+    PLACE_RULE,
+    citationRule,
+  ].join(" ") + graphRule;
 }
 
 /**
@@ -283,9 +328,15 @@ export function buildDocumentUnderstandingSchema(
    * reasoning chain — see the comment above `citation`). Undefined keeps the
    * schema byte-identical to the analysis-only shape.
    */
-  graphEntityTypes?: string[]
+  graphEntityTypes?: string[],
+  /**
+   * Fields the PDF's own metadata already answers, removed from the request
+   * entirely — see NativeMetadataOmissions. Removal cannot reorder what
+   * remains, so the reasoning chain the declaration order encodes survives.
+   */
+  omit?: NativeMetadataOmissions
 ) {
-  return {
+  const schema = {
     type: "object",
     properties: {
       title: {
@@ -561,6 +612,39 @@ export function buildDocumentUnderstandingSchema(
       ...(graphEntityTypes ? ["entities", "relationships"] : []),
     ],
   };
+
+  // Deleting keys never reorders the survivors, so the reasoning chain the
+  // declaration order encodes is untouched. `title` (the metadata blob's
+  // "as written" title) travels with the Info title, and `contributors`
+  // travels with the Info author — saveMetadataResult fills all of them back
+  // in from documents.pdfMetadata.
+  const properties = schema.properties as Record<string, unknown>;
+  const dropped = new Set<string>();
+  if (omit?.tableOfContents) {
+    delete properties.table_of_contents;
+    dropped.add("table_of_contents");
+  }
+  if (omit?.displayTitle) {
+    delete properties.display_title;
+    delete properties.title;
+    dropped.add("title");
+  }
+  if (omit?.author) {
+    delete properties.author;
+    dropped.add("author");
+    const citation = properties.citation as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    delete citation.properties.contributors;
+    citation.required = citation.required.filter(
+      (field) => field !== "contributors"
+    );
+  }
+  if (dropped.size > 0) {
+    schema.required = schema.required.filter((field) => !dropped.has(field));
+  }
+  return schema;
 }
 
 // ---------------------------------------------------------------------------

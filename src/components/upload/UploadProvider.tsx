@@ -292,7 +292,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             // Partial native pages are harmless; parse falls back to OCR.
           }
           try {
-            await finishNativeIngest({ documentId });
+            await finishNativeIngest({
+              documentId,
+              metadata: nativeText.metadata,
+            });
           } catch {
             // The failsafe starts parse without the finish call.
           }

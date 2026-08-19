@@ -23,6 +23,9 @@ import { requireDocument } from "./ownership";
 import { enqueueStage } from "./processing";
 import { enforceDemoPageLimit } from "./demo";
 import { geometryForPage, NATIVE_GEOMETRY_MIN_SCORE } from "./ingest";
+import { sanitizeTableOfContents } from "./metadata";
+import { cleanPdfAuthor, cleanPdfTitle } from "./pdfNativeMetadata";
+import { applyDisplayName, normalizeTitle } from "./rename";
 
 const bboxValidator = v.object({
   x: v.number(),
@@ -158,16 +161,66 @@ export const ingestNativePages = authedMutation({
 });
 
 /**
- * The upload's native commit is over (complete, partial, or empty) — start
- * the parse stage that createDocument deferred. The scheduler failsafe
+ * The upload's native commit is over (complete, partial, or empty) — record
+ * what the PDF file itself declares (Info title/author, the outline), then
+ * start the parse stage that createDocument deferred. The scheduler failsafe
  * (processing.ensureParseStarted) covers a browser that never gets here.
+ *
+ * The declared metadata is ground truth the model is then not asked to
+ * re-derive: understandingRequest (processingStages.ts) omits the covered
+ * fields from the Analyze schema, and saveMetadataResult reads these values
+ * back in. The outline and title also land on the document immediately, so
+ * the Contents tab and the library title exist before any provider call
+ * returns.
  */
 export const finishNativeIngest = authedMutation({
-  args: { documentId: v.id("documents") },
+  args: {
+    documentId: v.id("documents"),
+    metadata: v.optional(
+      v.object({
+        title: v.optional(v.string()),
+        author: v.optional(v.string()),
+        tableOfContents: v.optional(
+          v.array(
+            v.object({
+              title: v.string(),
+              level: v.number(),
+              page: v.number(),
+            })
+          )
+        ),
+      })
+    ),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     const document = await requireDocument(ctx, args.documentId);
     if (document.status !== "uploaded") return null;
+
+    const title = cleanPdfTitle(args.metadata?.title, document.name);
+    const author = cleanPdfAuthor(args.metadata?.author);
+    const tableOfContents = sanitizeTableOfContents(
+      args.metadata?.tableOfContents,
+      document.pageCount
+    );
+    if (title || author || tableOfContents.length > 0) {
+      await ctx.db.patch(args.documentId, {
+        pdfMetadata: {
+          title,
+          author,
+          tableOfContents:
+            tableOfContents.length > 0 ? tableOfContents : undefined,
+        },
+        ...(tableOfContents.length > 0 ? { tableOfContents } : {}),
+      });
+      if (title) {
+        const displayTitle = normalizeTitle(title);
+        if (displayTitle) {
+          await applyDisplayName(ctx, args.documentId, displayTitle);
+        }
+      }
+    }
+
     await enqueueStage(ctx, args.documentId, "parse");
     return null;
   },

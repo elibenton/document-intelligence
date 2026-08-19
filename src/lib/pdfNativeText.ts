@@ -38,9 +38,70 @@ export interface NativePageExtract {
   }[];
 }
 
+/** What the PDF file itself declares — Info title/author and the outline.
+ * Raw strings; the server junk-filters and sanitizes at commit
+ * (convex/pdfNativeMetadata.ts, sanitizeTableOfContents). */
+export interface NativePdfMetadata {
+  title?: string;
+  author?: string;
+  tableOfContents?: { title: string; level: number; page: number }[];
+}
+
 export interface NativePdfExtract {
   pageCount: number;
   pages: NativePageExtract[];
+  metadata?: NativePdfMetadata;
+}
+
+const MAX_OUTLINE_ENTRIES = 500;
+const MAX_OUTLINE_DEPTH = 4;
+
+interface OutlineNode {
+  title: string;
+  dest: string | unknown[] | null;
+  items: OutlineNode[];
+}
+
+/**
+ * The PDF's authored outline (bookmarks) as a flat table of contents, with
+ * each destination resolved to its 1-based page. Entries whose destination
+ * cannot be resolved (external links, dangling refs) are skipped; the level
+ * ladder is re-normalized server-side.
+ */
+async function outlineToToc(pdf: {
+  getOutline(): Promise<OutlineNode[] | null>;
+  getDestination(id: string): Promise<unknown[] | null>;
+  getPageIndex(ref: unknown): Promise<number>;
+}): Promise<NativePdfMetadata["tableOfContents"]> {
+  const outline = await pdf.getOutline();
+  if (!outline || outline.length === 0) return undefined;
+  const entries: { title: string; level: number; page: number }[] = [];
+  const walk = async (nodes: OutlineNode[], level: number) => {
+    for (const node of nodes) {
+      if (entries.length >= MAX_OUTLINE_ENTRIES) return;
+      const title = (node.title ?? "").trim();
+      const dest =
+        typeof node.dest === "string"
+          ? await pdf.getDestination(node.dest)
+          : node.dest;
+      if (title && Array.isArray(dest) && dest[0]) {
+        try {
+          entries.push({
+            title,
+            level,
+            page: (await pdf.getPageIndex(dest[0])) + 1,
+          });
+        } catch {
+          // Destination points outside the document; skip the entry.
+        }
+      }
+      if (node.items?.length && level < MAX_OUTLINE_DEPTH) {
+        await walk(node.items, level + 1);
+      }
+    }
+  };
+  await walk(outline, 1);
+  return entries.length > 0 ? entries : undefined;
 }
 
 export async function extractPdfNativeText(
@@ -140,7 +201,26 @@ export async function extractPdfNativeText(
           }
         }
         if (!pages.some((page) => page.text)) return null;
-        return { pageCount: pages.length, pages };
+
+        // What the file declares about itself, alongside its text: the
+        // authored outline and the Info title/author. Failures here cost the
+        // metadata, never the extraction.
+        let metadata: NativePdfMetadata | undefined;
+        try {
+          const { info } = (await pdf.getMetadata()) as {
+            info: { Title?: string; Author?: string };
+          };
+          const tableOfContents = await outlineToToc(pdf);
+          const title = typeof info?.Title === "string" ? info.Title : undefined;
+          const author =
+            typeof info?.Author === "string" ? info.Author : undefined;
+          if (title || author || tableOfContents) {
+            metadata = { title, author, tableOfContents };
+          }
+        } catch {
+          metadata = undefined;
+        }
+        return { pageCount: pages.length, pages, metadata };
       } finally {
         await pdf.destroy();
       }
