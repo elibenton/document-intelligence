@@ -107,6 +107,18 @@ export const RecordingView = forwardRef<
   const speakerRows = useQuery(api.documentSpeakers.byDocument, {
     documentId: doc._id,
   });
+  const confirmSpeakers = useMutation(api.documentSpeakers.confirm);
+  // Inline rename from a turn's header — one assignment through the same
+  // mutation the naming dialog uses, so the library/entity side effects and
+  // the answered-signature stay identical.
+  const renameSpeaker = useCallback(
+    (label: string, name: string) =>
+      confirmSpeakers({
+        documentId: doc._id,
+        assignments: [{ label, name }],
+      }),
+    [confirmSpeakers, doc._id]
+  );
   const nameByLabel = useMemo(() => {
     const map = new Map<string, string>();
     for (const row of speakerRows ?? []) {
@@ -639,6 +651,7 @@ export const RecordingView = forwardRef<
                 colorClass={colorByName.get(name)}
                 showHeader={name !== prevName}
                 searchWords={searchWordsBySegment?.get(si)}
+                onRename={renameSpeaker}
                 isActive={active.segment === si}
                 activeWordIndex={active.segment === si ? active.word : -1}
                 showTranslation={showTranslation}

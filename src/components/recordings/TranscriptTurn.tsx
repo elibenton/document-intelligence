@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { cn } from "@/lib/utils";
 import { languageDirection } from "@/lib/languages";
+import { EditableText } from "@/components/ui/editable";
 import { formatTime } from "./speakerColors";
 
 export interface TurnHighlight {
@@ -34,6 +35,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   colorClass,
   showHeader = true,
   searchWords,
+  onRename,
   isActive,
   activeWordIndex,
   showTranslation,
@@ -50,6 +52,9 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   showHeader?: boolean;
   /** Word indices covered by the active document search, if any. */
   searchWords?: Set<number>;
+  /** Rename this turn's diarizer label — the header becomes click-to-edit.
+   *  Renaming to a neighbor's name merges the turns (see showHeader). */
+  onRename?: (label: string, name: string) => Promise<unknown>;
   isActive: boolean;
   activeWordIndex: number;
   showTranslation: boolean;
@@ -66,12 +71,29 @@ export const TranscriptTurn = memo(function TranscriptTurn({
     <div data-seg={index} className={cn(index > 0 && (showHeader ? "mt-5" : "mt-1"))}>
       {showHeader && (
         <div className="flex items-baseline gap-2 mb-1">
-          <span
-            className={cn("text-sm font-semibold", colorClass)}
-            title={speakerName === seg.speaker ? undefined : seg.speaker}
-          >
-            {speakerName}
-          </span>
+          {onRename ? (
+            <EditableText
+              value={speakerName}
+              label={`Rename ${speakerName}`}
+              allowEmpty={false}
+              onCommit={(next) => onRename(seg.speaker, next)}
+              renderValue={(name) => (
+                <span
+                  className={cn("text-sm font-semibold", colorClass)}
+                  title={name === seg.speaker ? undefined : seg.speaker}
+                >
+                  {name}
+                </span>
+              )}
+            />
+          ) : (
+            <span
+              className={cn("text-sm font-semibold", colorClass)}
+              title={speakerName === seg.speaker ? undefined : seg.speaker}
+            >
+              {speakerName}
+            </span>
+          )}
           <button
             onClick={() => onSeek(seg.startTime)}
             className="text-xs text-muted-foreground tabular-nums hover:text-foreground hover:underline"
