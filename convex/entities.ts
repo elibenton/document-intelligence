@@ -1,6 +1,7 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { authedMutation, authedQuery } from "./authz";
-import { displayEntityType } from "./entityType";
+import { displayEntityType, entityTypeKey } from "./entityType";
 import {
   LEGACY_TO_STABLE,
   recountEntity,
@@ -26,19 +27,107 @@ import {
 // List all entities (for homepage grouped display)
 // ---------------------------------------------------------------------------
 
+/** Page size of each type group in the sidebar — never more on screen. */
+const SIDEBAR_PER_TYPE = 50;
+/**
+ * Ceiling on the scan behind the sidebar. Far above any observed project
+ * (largest measured: ~1,200); if a project ever exceeds it, `totalIsFloor`
+ * says so rather than lying quietly. The scan is what makes the rest cheap:
+ * the whole-project per-type totals, the starred rescue, and the per-type
+ * slices all come out of this one indexed read — which is also why no new
+ * index is needed: counting requires reading the rows regardless (Convex has
+ * no count operator), so a (projectId, type) index would only duplicate work
+ * the count already pays for.
+ */
+const SIDEBAR_SCAN_CAP = 2000;
+
 export const listAll = authedQuery({
-  args: { projectId: v.id("projects") },
+  args: {
+    projectId: v.id("projects"),
+    /**
+     * Page offset per type group, keyed by entityTypeKey — each group shows
+     * one 50-row window at a time. Absent key = the first page.
+     */
+    typeOffsets: v.optional(v.record(v.string(), v.number())),
+  },
   handler: async (ctx, args) => {
     await requireProject(ctx, args.projectId);
-    // Ordered by mentionCount, not creation time: the client sorts by mentions,
-    // so a creation-ordered cap silently hid the entities it most wanted.
+    // Ordered by mentionCount, not creation time: the client sorts by
+    // mentions, so a creation-ordered cap silently hid the entities it most
+    // wanted. Each type group serves one exact 50-row window over a
+    // starred-first sequence: a star is a human signal the first page must
+    // not hide (13 starred entities were invisible before this rule), so
+    // starred rows claim page-one slots and the top unstarred fill the rest.
+    // The client re-sorts by mentions, so display order is unaffected.
+    const rows = await ctx.db
+      .query("entities")
+      .withIndex("by_project_and_mentions", (q) =>
+        q.eq("projectId", args.projectId)
+      )
+      .order("desc")
+      .take(SIDEBAR_SCAN_CAP);
+
+    const byType = new Map<string, typeof rows>();
+    for (const e of rows) {
+      const key = entityTypeKey(displayEntityType(e));
+      const group = byType.get(key);
+      if (group) group.push(e);
+      else byType.set(key, [e]);
+    }
+
+    const entities: typeof rows = [];
+    const perType: Record<
+      string,
+      { total: number; offset: number; shown: number }
+    > = {};
+    for (const [key, group] of byType) {
+      const requested = args.typeOffsets?.[key];
+      const offset =
+        typeof requested === "number" && Number.isFinite(requested)
+          ? Math.min(
+              Math.max(Math.floor(requested), 0),
+              Math.max(group.length - 1, 0)
+            )
+          : 0;
+      // Both halves keep the scan's mention order, so pages stay stable.
+      const ordered = [
+        ...group.filter((e) => e.starred === true),
+        ...group.filter((e) => e.starred !== true),
+      ];
+      const kept = ordered.slice(offset, offset + SIDEBAR_PER_TYPE);
+      entities.push(...kept);
+      perType[key] = { total: group.length, offset, shown: kept.length };
+    }
+
+    return {
+      entities,
+      /** Whole-project row count per type group — what the headers show. */
+      perType,
+      total: rows.length,
+      /** True when the scan cap was hit and every total is a floor. */
+      totalIsFloor: rows.length === SIDEBAR_SCAN_CAP,
+    };
+  },
+});
+
+/**
+ * The full project entity list, paginated — the sidebar's escape hatch for
+ * everything beyond its cap. Same order as the sidebar: most mentioned first.
+ */
+export const listPaginated = authedQuery({
+  args: {
+    projectId: v.id("projects"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    await requireProject(ctx, args.projectId);
     return await ctx.db
       .query("entities")
       .withIndex("by_project_and_mentions", (q) =>
         q.eq("projectId", args.projectId)
       )
       .order("desc")
-      .take(200);
+      .paginate(args.paginationOpts);
   },
 });
 

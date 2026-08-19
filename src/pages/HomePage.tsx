@@ -288,6 +288,37 @@ function EntityListRow({
 }
 
 /**
+ * The "Showing 51–100 of 487" line with page controls — one look for both
+ * panes' windowed groups.
+ */
+function PagerFooter({
+  label,
+  onPrev,
+  onNext,
+}: {
+  label: string;
+  /** Absent = at that edge; the control renders disabled. */
+  onPrev?: () => void;
+  onNext?: () => void;
+}) {
+  const pageButton =
+    "rounded px-1 font-medium text-foreground transition-colors hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:text-muted-foreground/50";
+  return (
+    <div className="mt-1 flex items-baseline justify-between gap-3 py-1 text-xs text-muted-foreground">
+      <span className="tabular-nums">{label}</span>
+      <span className="flex items-center gap-2">
+        <button type="button" onClick={onPrev} disabled={!onPrev} className={pageButton}>
+          ‹ Prev
+        </button>
+        <button type="button" onClick={onNext} disabled={!onNext} className={pageButton}>
+          Next ›
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/**
  * One entity group, owning its own collapse state so it can keep showing
  * starred entities after you close it — the curation stays visible.
  */
@@ -301,6 +332,8 @@ function EntityGroup({
   grouped,
   dragHandle,
   mergeSuppressRef,
+  projectTotal,
+  pagerFooter,
 }: {
   group: ViewGroup<EntityRowType>;
   suggestions: MergeSuggestion[];
@@ -312,6 +345,13 @@ function EntityGroup({
   dragHandle?: ComponentProps<typeof ListGroup>["dragHandle"];
   /** From useEntityMergeDnd — arms the rows for drag-to-merge. */
   mergeSuppressRef: React.RefObject<boolean>;
+  /**
+   * Whole-project count for this group (server perType). When set, the
+   * header counts the project, not the fetched window.
+   */
+  projectTotal?: number;
+  /** The page controls, built by the parent that owns the offsets. */
+  pagerFooter?: React.ReactNode;
 }) {
   // Seeded from the persisted caret so the starred-peek footer agrees with
   // the ListGroup's restored state on first paint.
@@ -342,6 +382,7 @@ function EntityGroup({
           )}
         </MergeDropRow>
       ))}
+      {pagerFooter}
     </>
   );
 
@@ -351,7 +392,7 @@ function EntityGroup({
   return (
     <ListGroup
       label={group.label}
-      count={group.rows.length}
+      count={projectTotal ?? group.rows.length}
       forceOpen={forceOpen}
       storageKey={`entities:${group.key}`}
       onToggle={setOpen}
@@ -432,7 +473,14 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
         : allDocuments?.filter((doc) => !heldDocumentIds.has(doc._id)),
     [allDocuments, heldDocumentIds]
   );
-  const entities = useQuery(api.entities.listAll, { projectId });
+  // Which 50-row page each entity type group is on. Session state,
+  // deliberately not persisted: a fresh visit starts at the first page.
+  const [typeOffsets, setTypeOffsets] = useState<Record<string, number>>({});
+  const entityData = useQuery(api.entities.listAll, { projectId, typeOffsets });
+  const entities = entityData?.entities;
+  // Which 100-row page each library group is on. The library's rows are all
+  // client-side already, so its windowing is too.
+  const [libraryPages, setLibraryPages] = useState<Record<string, number>>({});
   // The project's declared entity types label the custom groups ("Addresses"
   // instead of the legacy "Other" their rows are stored under).
   const declaredEntityTypes = useQuery(api.projectEntityTypes.list, {
@@ -775,8 +823,42 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                           groupOrder,
                         })
                       }
-                      renderGroup={(group, dragHandle) =>
-                        libraryGrouped ? (
+                      renderGroup={(group, dragHandle) => {
+                        // Window each group to 100 rows. All rows are already
+                        // client-side, so paging is a slice; the header still
+                        // counts the whole group.
+                        const rawPage = libraryPages[group.key] ?? 0;
+                        const lastPage = Math.max(
+                          Math.ceil(group.rows.length / 100) - 1,
+                          0
+                        );
+                        const page = Math.min(rawPage, lastPage);
+                        const start = page * 100;
+                        const windowRows = group.rows.slice(start, start + 100);
+                        const setPage = (next: number) =>
+                          setLibraryPages((pages) => ({
+                            ...pages,
+                            [group.key]: next,
+                          }));
+                        const body = (
+                          <>
+                            {renderLibraryRows({ ...group, rows: windowRows })}
+                            {group.rows.length > 100 && (
+                              <PagerFooter
+                                label={`Showing ${start + 1}–${start + windowRows.length} of ${group.rows.length}`}
+                                onPrev={
+                                  page > 0 ? () => setPage(page - 1) : undefined
+                                }
+                                onNext={
+                                  page < lastPage
+                                    ? () => setPage(page + 1)
+                                    : undefined
+                                }
+                              />
+                            )}
+                          </>
+                        );
+                        return libraryGrouped ? (
                           <ListGroup
                             label={group.label}
                             count={group.rows.length}
@@ -785,14 +867,12 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                             defaultOpen
                             dragHandle={dragHandle}
                           >
-                            {renderLibraryRows(group)}
+                            {body}
                           </ListGroup>
                         ) : (
-                          <div className="flex flex-col">
-                            {renderLibraryRows(group)}
-                          </div>
-                        )
-                      }
+                          <div className="flex flex-col">{body}</div>
+                        );
+                      }}
                     />
                   </div>
                 )}
@@ -854,19 +934,56 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                           </div>
                         ),
                       }}
-                      renderGroup={(group, dragHandle) => (
-                        <EntityGroup
-                          group={group}
-                          suggestions={suggestionsByGroup.get(group.key) ?? []}
-                          projectId={projectId}
-                          visibleProperties={views.entities.visibleProperties}
-                          defs={entityDefs}
-                          forceOpen={entitiesNarrowed}
-                          grouped={entitiesGrouped}
-                          dragHandle={dragHandle}
-                          mergeSuppressRef={mergeDnd.suppressClickRef}
-                        />
-                      )}
+                      renderGroup={(group, dragHandle) => {
+                        // Whole-project truth is only claimable when the
+                        // groups ARE the types and no filter/search has
+                        // narrowed the rows — otherwise the header honestly
+                        // counts what is visible.
+                        const perType =
+                          views.entities.groupBy === "type" &&
+                          !entitiesNarrowed
+                            ? entityData?.perType?.[group.key]
+                            : undefined;
+                        const setPage = (offset: number) =>
+                          setTypeOffsets((offsets) => ({
+                            ...offsets,
+                            [group.key]: offset,
+                          }));
+                        return (
+                          <EntityGroup
+                            group={group}
+                            suggestions={suggestionsByGroup.get(group.key) ?? []}
+                            projectId={projectId}
+                            visibleProperties={views.entities.visibleProperties}
+                            defs={entityDefs}
+                            forceOpen={entitiesNarrowed}
+                            grouped={entitiesGrouped}
+                            dragHandle={dragHandle}
+                            mergeSuppressRef={mergeDnd.suppressClickRef}
+                            projectTotal={perType?.total}
+                            pagerFooter={
+                              perType && perType.total > perType.shown && (
+                                <PagerFooter
+                                  label={`Showing ${perType.offset + 1}–${perType.offset + group.rows.length} of ${perType.total}`}
+                                  onPrev={
+                                    perType.offset > 0
+                                      ? () =>
+                                          setPage(
+                                            Math.max(perType.offset - 50, 0)
+                                          )
+                                      : undefined
+                                  }
+                                  onNext={
+                                    perType.offset + 50 < perType.total
+                                      ? () => setPage(perType.offset + 50)
+                                      : undefined
+                                  }
+                                />
+                              )
+                            }
+                          />
+                        );
+                      }}
                     />
                     <EntityMergeDialog
                       pair={mergeDnd.mergePair}
@@ -880,6 +997,24 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                       onMerge={mergeDnd.runMerge}
                       onClose={mergeDnd.closeDialog}
                     />
+                  </div>
+                )}
+
+                {/* Per-group "showing N of M" lines live inside each type
+                    group; this line carries the project total and the way
+                    to the full paginated list. */}
+                {entityData && entityData.total > 0 && (
+                  <div className="mt-3 flex items-baseline justify-between gap-3 border-t pt-2 text-xs text-muted-foreground">
+                    <span className="tabular-nums">
+                      {counted(entityData.total, "entity", "entities")}
+                      {entityData.totalIsFloor && "+"} in this project
+                    </span>
+                    <Link
+                      to={`/p/${project.slug}/entities`}
+                      className="shrink-0 font-medium text-foreground hover:underline"
+                    >
+                      View all →
+                    </Link>
                   </div>
                 )}
               </div>

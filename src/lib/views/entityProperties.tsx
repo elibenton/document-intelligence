@@ -1,5 +1,5 @@
 import type { Doc } from "../../../convex/_generated/dataModel";
-import { displayEntityType } from "../../../convex/entityType";
+import { displayEntityType, entityTypeKey } from "../../../convex/entityType";
 import { cn } from "@/lib/utils";
 import type { PropertyDef, PropertyOption } from "./types";
 
@@ -16,8 +16,9 @@ export type EntityRow = Doc<"entities">;
 const CHIP = "text-2xs font-medium leading-none px-1.5 py-0.5 truncate";
 
 /**
- * The stable global types. `entityTypeKey` folds the plural spellings that
- * exist in older rows onto the singular ones so a single entity kind doesn't
+ * The stable global types. `entityTypeKey` (convex/entityType.ts, shared
+ * with the server's per-type totals) folds the plural spellings that exist
+ * in older rows onto the singular ones so a single entity kind doesn't
  * split into two groups.
  */
 export const ENTITY_TYPE_LABELS: Record<string, string> = {
@@ -27,12 +28,7 @@ export const ENTITY_TYPE_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-export function entityTypeKey(type: string): string {
-  if (type === "people") return "person";
-  if (type === "places") return "place";
-  if (type === "dates") return "other";
-  return type;
-}
+export { entityTypeKey };
 
 const countChip = (n: number, one: string, many: string) => (
   <span className="font-mono text-2xs tabular-nums text-muted-foreground shrink-0">

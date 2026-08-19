@@ -20,3 +20,16 @@ export function displayEntityType(entity: {
   );
   return current ?? entity.types?.[0] ?? entity.type;
 }
+
+/**
+ * Folds the legacy plural spellings older rows carry onto the stable
+ * singular keys, so one kind of entity never splits into two groups. The
+ * grouping key for both the sidebar's client-side view engine and the
+ * server's per-type totals — one fold, shared, so they cannot disagree.
+ */
+export function entityTypeKey(type: string): string {
+  if (type === "people") return "person";
+  if (type === "places") return "place";
+  if (type === "dates") return "other";
+  return type;
+}
