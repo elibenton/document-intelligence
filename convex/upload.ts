@@ -1,5 +1,6 @@
 import { type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
 import { PROVIDER_FILE_PART_SAFE_BYTES } from "./interfazeLimits";
@@ -10,6 +11,12 @@ import { enqueueStage } from "./processing";
 export const generateUploadUrl = authedMutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
 });
+
+/** How long a planned native text-layer commit may run before parse starts
+ * without it. Commits happen in seconds; the slack is for slow machines and
+ * big documents, and a partial commit is harmless — the pipeline's fast-path
+ * gate requires completeness and otherwise runs the normal OCR path. */
+const NATIVE_INGEST_FAILSAFE_MS = 3 * 60 * 1000;
 
 /**
  * Objective media type for a upload, from its MIME type with a filename
@@ -111,6 +118,10 @@ export const createDocument = authedMutation({
     mimeType: v.string(),
     /** Hex SHA-256 of the selected file; see documents.contentHash. */
     contentHash: v.optional(v.string()),
+    /** True when the browser extracted this PDF's own text layer and is about
+     * to commit it (nativeText.ingestNativePages). Parse is deferred to that
+     * commit's finish, with a scheduled failsafe for a browser that dies. */
+    nativeTextPlanned: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     await requireBudget(ctx, ctx.user._id);
@@ -176,7 +187,18 @@ export const createDocument = authedMutation({
     // No automatic retries anywhere on this path: Interfaze may have
     // completed a request before a network failure is observed, so a retry
     // could duplicate a billable call.
-    await enqueueStage(ctx, documentId, "parse");
+    if (mediaType === "pdf" && args.nativeTextPlanned) {
+      // The browser commits the PDF's own text layer next; parse starts when
+      // that finishes (nativeText.finishNativeIngest) so the pipeline's
+      // fast-path gate sees the complete layer rather than racing it.
+      await ctx.scheduler.runAfter(
+        NATIVE_INGEST_FAILSAFE_MS,
+        internal.processing.ensureParseStarted,
+        { documentId }
+      );
+    } else {
+      await enqueueStage(ctx, documentId, "parse");
+    }
 
     return { documentId, duplicateOf: null };
   },

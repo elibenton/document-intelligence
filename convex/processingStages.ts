@@ -471,6 +471,53 @@ export const runPipeline = internalAction({
         document.projectId
       );
 
+      // --- Digital-native fast path ----------------------------------------
+      // The browser committed this PDF's own text layer before parse was
+      // enqueued (convex/nativeText.ts), so there is nothing to OCR: no file
+      // leaves storage, and understanding rides the same text-in call an
+      // Analyze retry uses — measured ~5x cheaper than the file-in completion
+      // (see the cost note on understandDocument). The gate requires the
+      // layer to be complete and trustworthy; anything less falls through to
+      // the file-in call below and the per-page merge in ingest.ts.
+      if (document.mediaType === "pdf") {
+        const nativePages: { pageNumber: number; text: string }[] | null =
+          await ctx.runQuery(internal.nativeText.completeNativePages, {
+            documentId: args.documentId,
+          });
+        if (nativePages) {
+          textStored = true;
+          await ctx.scheduler.runAfter(0, internal.embeddings.embedDocument, {
+            documentId: args.documentId,
+          });
+          await ctx.runMutation(internal.processing.updateStatus, {
+            documentId: args.documentId,
+            status: "parsed",
+          });
+          await analyzeAndStore(ctx, {
+            documentId: args.documentId,
+            projectId: document.projectId,
+            pageTexts: nativePages.map((page) => page.text),
+            apiKey,
+            csv: false,
+            kindNames,
+            categories,
+            log,
+            bypassCache: args.bypassCache,
+            fileName: document.name,
+          });
+          await ctx.runMutation(internal.processing.updateJobStatus, {
+            documentId: args.documentId,
+            stage: "parse",
+            status: "completed",
+          });
+          await ctx.runMutation(internal.processing.updateStatus, {
+            documentId: args.documentId,
+            status: "completed",
+          });
+          return null;
+        }
+      }
+
       // --- The one call ----------------------------------------------------
       const result = await understandDocument(fileUrl, document.name, apiKey, {
         ...(await understandingRequest(ctx, {

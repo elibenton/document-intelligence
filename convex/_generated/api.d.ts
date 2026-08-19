@@ -48,6 +48,7 @@ import type * as mediaTypes from "../mediaTypes.js";
 import type * as mergeSuggestions from "../mergeSuggestions.js";
 import type * as metadata from "../metadata.js";
 import type * as migrations from "../migrations.js";
+import type * as nativeText from "../nativeText.js";
 import type * as ocrChecks from "../ocrChecks.js";
 import type * as ownership from "../ownership.js";
 import type * as pages from "../pages.js";
@@ -120,6 +121,7 @@ declare const fullApi: ApiFromModules<{
   mergeSuggestions: typeof mergeSuggestions;
   metadata: typeof metadata;
   migrations: typeof migrations;
+  nativeText: typeof nativeText;
   ocrChecks: typeof ocrChecks;
   ownership: typeof ownership;
   pages: typeof pages;

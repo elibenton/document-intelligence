@@ -44,7 +44,12 @@ function bboxFitsPage(
   );
 }
 
-function geometryForPage(
+/** The floor under `pages.nativeGeometryScore` for native PDF geometry to be
+ * trusted over vision OCR — shared by the OCR reconcile below, the native
+ * ingest (nativeText.ts), and the pipeline's fast-path gate. */
+export const NATIVE_GEOMETRY_MIN_SCORE = 0.65;
+
+export function geometryForPage(
   bbox: WordEntry["bbox"],
   words: WordEntry[] | undefined,
   width: number | undefined,
@@ -148,7 +153,7 @@ async function reconcilePagesAndBlocks(
     const nativeGeometryIsPreferred =
       canonicalPage?.textSource === "pdf" &&
       canonicalPage.nativeTextVisibility !== "hidden" &&
-      (canonicalPage.nativeGeometryScore ?? 1) >= 0.65;
+      (canonicalPage.nativeGeometryScore ?? 1) >= NATIVE_GEOMETRY_MIN_SCORE;
     if (nativeGeometryIsPreferred) {
       for (const duplicatePage of existingPages.slice(1)) {
         await ctx.db.delete(duplicatePage._id);
