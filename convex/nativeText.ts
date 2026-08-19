@@ -24,7 +24,7 @@ import { enqueueStage } from "./processing";
 import { enforceDemoPageLimit } from "./demo";
 import { geometryForPage, NATIVE_GEOMETRY_MIN_SCORE } from "./ingest";
 import { sanitizeTableOfContents } from "./metadata";
-import { cleanPdfAuthor, cleanPdfTitle } from "./pdfNativeMetadata";
+import { cleanPdfAuthor, cleanPdfDate, cleanPdfTitle } from "./pdfNativeMetadata";
 import { applyDisplayName, normalizeTitle } from "./rename";
 
 const bboxValidator = v.object({
@@ -180,6 +180,7 @@ export const finishNativeIngest = authedMutation({
       v.object({
         title: v.optional(v.string()),
         author: v.optional(v.string()),
+        creationDate: v.optional(v.string()),
         tableOfContents: v.optional(
           v.array(
             v.object({
@@ -199,6 +200,7 @@ export const finishNativeIngest = authedMutation({
 
     const title = cleanPdfTitle(args.metadata?.title, document.name);
     const author = cleanPdfAuthor(args.metadata?.author);
+    const createdDate = cleanPdfDate(args.metadata?.creationDate, Date.now());
     // Page mode always sets `page`; the `?? 1` only narrows the type back to
     // the page-required shape pdfMetadata declares.
     const tableOfContents = sanitizeTableOfContents(
@@ -209,20 +211,32 @@ export const finishNativeIngest = authedMutation({
       level: entry.level,
       page: entry.page ?? 1,
     }));
-    if (title || author || tableOfContents.length > 0) {
+    if (title || author || createdDate || tableOfContents.length > 0) {
+      const declared = {
+        title,
+        author,
+        tableOfContents:
+          tableOfContents.length > 0 ? tableOfContents : undefined,
+      };
       await ctx.db.patch(args.documentId, {
-        pdfMetadata: {
-          title,
-          author,
-          tableOfContents:
-            tableOfContents.length > 0 ? tableOfContents : undefined,
-        },
+        // Double-written until the pdfMetadata → sourceMetadata migration
+        // lands and the legacy field is stripped.
+        pdfMetadata: declared,
+        sourceMetadata: { ...declared, createdDate: createdDate ?? undefined },
         ...(tableOfContents.length > 0 ? { tableOfContents } : {}),
+        ...(createdDate
+          ? {
+              createdDate: createdDate.value,
+              createdDatePrecision: createdDate.precision,
+              createdDateSource: "native",
+            }
+          : {}),
+        ...(author ? { author, authorSource: "native" } : {}),
       });
       if (title) {
         const displayTitle = normalizeTitle(title);
         if (displayTitle) {
-          await applyDisplayName(ctx, args.documentId, displayTitle);
+          await applyDisplayName(ctx, args.documentId, displayTitle, "native");
         }
       }
     }

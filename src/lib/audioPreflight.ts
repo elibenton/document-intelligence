@@ -129,9 +129,13 @@ function formatDuration(seconds: number | null): string | null {
     : `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
-function readDuration(file: File): Promise<number | null> {
+/** Media length via the browser's own demuxer; null when it can't decode. */
+export function readMediaDuration(
+  file: File,
+  kind: "audio" | "video" = "audio"
+): Promise<number | null> {
   return new Promise((resolve) => {
-    const element = document.createElement("audio");
+    const element = document.createElement(kind);
     const objectUrl = URL.createObjectURL(file);
     let settled = false;
 
@@ -173,7 +177,7 @@ export async function preflightAudio(file: File): Promise<AudioPreflightResult> 
   const header = new Uint8Array(await file.slice(0, 32).arrayBuffer());
   const signatureContainer = detectAudioContainer(header);
   const extensionContainer = containerFromExtension(file);
-  const durationSeconds = await readDuration(file);
+  const durationSeconds = await readMediaDuration(file);
   const container =
     signatureContainer !== "unknown" ? signatureContainer : extensionContainer;
 

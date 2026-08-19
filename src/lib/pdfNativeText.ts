@@ -44,6 +44,8 @@ export interface NativePageExtract {
 export interface NativePdfMetadata {
   title?: string;
   author?: string;
+  /** Raw Info CreationDate ("D:2019…") or XMP CreateDate (ISO). */
+  creationDate?: string;
   tableOfContents?: { title: string; level: number; page: number }[];
 }
 
@@ -207,15 +209,25 @@ export async function extractPdfNativeText(
         // metadata, never the extraction.
         let metadata: NativePdfMetadata | undefined;
         try {
-          const { info } = (await pdf.getMetadata()) as {
-            info: { Title?: string; Author?: string };
+          const { info, metadata: xmp } = (await pdf.getMetadata()) as {
+            info: { Title?: string; Author?: string; CreationDate?: string };
+            metadata?: { get(name: string): unknown } | null;
           };
           const tableOfContents = await outlineToToc(pdf);
           const title = typeof info?.Title === "string" ? info.Title : undefined;
           const author =
             typeof info?.Author === "string" ? info.Author : undefined;
-          if (title || author || tableOfContents) {
-            metadata = { title, author, tableOfContents };
+          // Info dict first; professionally produced PDFs without one often
+          // carry the date in the XMP packet instead.
+          const xmpDate = xmp?.get("xmp:createdate");
+          const creationDate =
+            typeof info?.CreationDate === "string"
+              ? info.CreationDate
+              : typeof xmpDate === "string"
+                ? xmpDate
+                : undefined;
+          if (title || author || creationDate || tableOfContents) {
+            metadata = { title, author, creationDate, tableOfContents };
           }
         } catch {
           metadata = undefined;

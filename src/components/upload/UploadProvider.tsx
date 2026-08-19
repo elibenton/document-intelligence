@@ -11,7 +11,17 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { UploadContext, type UploadItem } from "@/hooks/uploadContext";
 import { isSupportedUpload, UNSUPPORTED_REASON } from "@/lib/uploadTypes";
-import { isAudioUpload, preflightAudio } from "@/lib/audioPreflight";
+import {
+  isAudioUpload,
+  preflightAudio,
+  readMediaDuration,
+} from "@/lib/audioPreflight";
+import {
+  isImageUpload,
+  isVideoUpload,
+  readImageCreatedDate,
+  readMediaCreatedDate,
+} from "@/lib/mediaMetadata";
 import { isPdfUpload, preflightPdf } from "@/lib/pdfPreflight";
 import {
   batchNativePages,
@@ -186,6 +196,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         /** Runs while the bytes upload; resolves null for anything that still
          * needs vision OCR (scans, searchable scans, mixed documents). */
         let nativeTextPromise: Promise<NativePdfExtract | null> | null = null;
+        /** Source-native facts read off the ORIGINAL file (never the
+         * converter's output, whose lastModified/tags are the encoder's). */
+        let nativeFacts: { durationSeconds?: number; createdDate?: string } = {};
         const nameWarning = existing.sameName
           ? [`Another file here is also named "${existing.sameName.name}". Its contents differ, so this was uploaded as a separate document.`]
           : [];
@@ -222,6 +235,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             return undefined;
           }
           patchUpload(id, { detail: preflight.message });
+          nativeFacts = {
+            durationSeconds: preflight.durationSeconds ?? undefined,
+            createdDate: (await readMediaCreatedDate(file)) ?? undefined,
+          };
           if (preflight.action === "convert") {
             patchUpload(id, { status: "converting", progress: 0 });
             const { optimizeAudioForUpload } = await import(
@@ -238,6 +255,16 @@ export function UploadProvider({ children }: { children: ReactNode }) {
               ).toFixed(1)} MB WebM/Opus`,
             });
           }
+        } else if (isVideoUpload(file)) {
+          nativeFacts = {
+            durationSeconds:
+              (await readMediaDuration(file, "video")) ?? undefined,
+            createdDate: (await readMediaCreatedDate(file)) ?? undefined,
+          };
+        } else if (isImageUpload(file)) {
+          nativeFacts = {
+            createdDate: (await readImageCreatedDate(file)) ?? undefined,
+          };
         }
 
         if (nameWarning.length && !isPdfUpload(file)) {
@@ -259,6 +286,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           mimeType: uploadFile.type,
           contentHash,
           nativeTextPlanned: nativeText ? true : undefined,
+          native:
+            nativeFacts.durationSeconds !== undefined ||
+            nativeFacts.createdDate !== undefined
+              ? nativeFacts
+              : undefined,
         });
         // Lost a race with a concurrent upload of the same bytes; the server
         // kept the first row and discarded these.

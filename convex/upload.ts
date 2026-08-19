@@ -6,6 +6,7 @@ import { authedMutation, authedQuery } from "./authz";
 import { PROVIDER_FILE_PART_SAFE_BYTES } from "./interfazeLimits";
 import { requireProject } from "./ownership";
 import { requireBudget } from "./budget";
+import { sanitizeNativeDate } from "./nativeDate";
 import { enqueueStage } from "./processing";
 
 export const generateUploadUrl = authedMutation(async (ctx) => {
@@ -122,6 +123,15 @@ export const createDocument = authedMutation({
      * to commit it (nativeText.ingestNativePages). Parse is deferred to that
      * commit's finish, with a scheduled failsafe for a browser that dies. */
     nativeTextPlanned: v.optional(v.boolean()),
+    /** Facts the browser read off the file itself (src/lib/mediaMetadata.ts):
+     * recording/EXIF creation date and media duration. Re-sanitized here —
+     * same trust model as contentHash. */
+    native: v.optional(
+      v.object({
+        durationSeconds: v.optional(v.number()),
+        createdDate: v.optional(v.string()),
+      })
+    ),
   },
   handler: async (ctx, args) => {
     await requireBudget(ctx, ctx.user._id);
@@ -149,6 +159,17 @@ export const createDocument = authedMutation({
     const verifiedMimeType = storedFile.contentType || args.mimeType;
     const mediaType = detectMediaType(verifiedMimeType, args.name);
 
+    // Client-read facts, re-sanitized: a duration must be a plausible finite
+    // length, and the date goes through the same gate every native date does.
+    const durationSeconds =
+      typeof args.native?.durationSeconds === "number" &&
+      Number.isFinite(args.native.durationSeconds) &&
+      args.native.durationSeconds > 0 &&
+      (mediaType === "audio" || mediaType === "video")
+        ? Math.round(args.native.durationSeconds * 10) / 10
+        : undefined;
+    const createdDate = sanitizeNativeDate(args.native?.createdDate, Date.now());
+
     const documentId = await ctx.db.insert("documents", {
       projectId: args.projectId,
       name: args.name,
@@ -159,6 +180,15 @@ export const createDocument = authedMutation({
       mediaType,
       status: "uploaded",
       uploadedAt: Date.now(),
+      ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+      ...(createdDate
+        ? {
+            createdDate: createdDate.value,
+            createdDatePrecision: createdDate.precision,
+            createdDateSource: "native",
+            sourceMetadata: { createdDate },
+          }
+        : {}),
     });
 
     // Nothing downstream can read this file — fail it here with a reason

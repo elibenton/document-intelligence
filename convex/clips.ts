@@ -1,6 +1,8 @@
 import { internalMutation, internalQuery } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
+import { sanitizeNativeDate } from "./nativeDate";
+import { cleanPdfAuthor } from "./pdfNativeMetadata";
 
 // ---------------------------------------------------------------------------
 // Web clip ingestion. The extension already parsed the page (Readability →
@@ -133,6 +135,16 @@ export const createFromClip = internalMutation({
 
     const pageTexts = chunkIntoPages(args.articleMarkdown);
 
+    // What the page itself stated, sanitized once here and never rewritten:
+    // the published date and byline are ground truth (decision: trust the
+    // scrape), so they land on the live columns as "native" and in
+    // sourceMetadata, which survives every later Analyze run and human edit.
+    const createdDate = sanitizeNativeDate(args.publishedAt, Date.now());
+    // The byline junk filter is the PDF author's: CMS residue ("admin",
+    // software names) is the same failure mode as Info.Author residue.
+    const author = cleanPdfAuthor(args.byline);
+    const trimmed = (value: string | undefined) => value?.trim() || undefined;
+
     const documentId = await ctx.db.insert("documents", {
       projectId: args.projectId,
       name: args.title,
@@ -159,6 +171,23 @@ export const createFromClip = internalMutation({
       pageCount: pageTexts.length,
       status: "parsed",
       uploadedAt: Date.now(),
+      ...(createdDate
+        ? {
+            createdDate: createdDate.value,
+            createdDatePrecision: createdDate.precision,
+            createdDateSource: "native",
+          }
+        : {}),
+      ...(author ? { author, authorSource: "native" } : {}),
+      sourceMetadata: {
+        title: trimmed(args.title),
+        author,
+        createdDate: createdDate ?? undefined,
+        siteName: trimmed(args.siteName),
+        description: trimmed(args.description),
+        excerpt: trimmed(args.excerpt),
+        ogImage: trimmed(args.ogImage),
+      },
     });
 
     for (let pageNum = 0; pageNum < pageTexts.length; pageNum++) {

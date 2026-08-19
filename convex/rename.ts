@@ -74,21 +74,28 @@ export function normalizeTitle(raw: string): string {
  * helper so metadata.ts can apply the title inline from the Analyze response
  * rather than opening a subtransaction with ctx.runMutation.
  */
+/** Provenance rank: a model title never displaces what the file declared,
+ *  and nothing displaces what a person typed. */
+const TITLE_RANK = { ai: 0, native: 1, human: 2 } as const;
+
 export async function applyDisplayName(
   ctx: MutationCtx,
   documentId: Id<"documents">,
-  displayName: string
+  displayName: string,
+  source: "ai" | "native" = "ai"
 ): Promise<void> {
   const document = await ctx.db.get(documentId);
   if (!document) return;
   // A title identical to the filename is noise: the UI would render the same
   // string twice, once as the AI title and once as the original beneath it.
   if (displayName === document.name) return;
-  // A title the user typed outranks anything this pass comes up with.
-  if (document.displayNameSource === "human") return;
+  const existing = document.displayNameSource as
+    | keyof typeof TITLE_RANK
+    | undefined;
+  if (existing && TITLE_RANK[existing] > TITLE_RANK[source]) return;
   await ctx.db.patch(documentId, {
     displayName,
-    displayNameSource: "ai",
+    displayNameSource: source,
   });
 }
 
