@@ -539,18 +539,36 @@ export default function DocumentPage({ id }: { id: string }) {
 
   const titles = documentTitles(document);
   const titleFacts = buildDocumentFacts(document).title;
-  // Web archives lead with the parsed title, and the address itself sits on
-  // the secondary line — host + path, without scheme/query noise.
-  const clipShortUrl = (() => {
+  // Web archives lead with the parsed title, and the domain sits on the
+  // secondary line — just the host, no path.
+  const clipDomain = (() => {
     if (!isWebClip || !document.sourceUrl) return null;
     try {
-      const parsed = new URL(document.sourceUrl);
-      const path = parsed.pathname.replace(/\/$/, "");
-      return parsed.hostname.replace(/^www\./, "") + path;
+      return new URL(document.sourceUrl).hostname.replace(/^www\./, "");
     } catch {
       return null;
     }
   })();
+  // Docs put their page count right after the file name; web clips show the
+  // domain instead. Null for an unrenamed, unpaged document — no second line.
+  const secondaryLine = isWebClip
+    ? clipDomain
+    : [
+        titles.original,
+        document.pageCount
+          ? `${document.pageCount} ${document.pageCount === 1 ? "page" : "pages"}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null;
+  const MEDIA_ICONS = {
+    webScrape: Globe,
+    audio: Mic,
+    video: Film,
+    image: ImageIcon,
+  } as const;
+  const MediaIcon =
+    MEDIA_ICONS[document.mediaType as keyof typeof MEDIA_ICONS] ?? FileText;
   const hasBlocks = blocks && blocks.some((b) => b.bbox);
   const isParsed =
     document.status === "parsed" ||
@@ -690,7 +708,7 @@ export default function DocumentPage({ id }: { id: string }) {
           divider rules rather than running the full window width. Two rows:
           the title row, then the source's own metadata line (ViewerMetaBar)
           — the page-view tools float over the viewer's bottom edge instead. */}
-      <header className="relative flex shrink-0 flex-col justify-center gap-1 px-3 py-2 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
+      <header className="relative flex shrink-0 flex-col justify-center gap-1.5 px-4 py-3 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
         <div className="flex items-center gap-3">
         <Link
           to={projectSlug ? `/p/${projectSlug}` : "/"}
@@ -698,14 +716,18 @@ export default function DocumentPage({ id }: { id: string }) {
           aria-label="Back to project"
           className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
-          <Folder className="size-4" />
+          <ArrowLeft className="size-4" />
         </Link>
         {/* The title edits in place (the EntityPage pattern) — the ⋮ identity
             menu is retired; kinds edit in the Info panel and the library's
             chips. Clearing the title tombstones it back to the filename. */}
         <div className="flex min-w-0 flex-1 items-center gap-3">
+          <MediaIcon
+            className="size-5 shrink-0 text-muted-foreground"
+            aria-hidden="true"
+          />
           <div className="min-w-0 flex-1">
-            <h1 className="min-w-0 text-base font-semibold leading-tight text-foreground">
+            <h1 className="min-w-0 text-lg font-semibold leading-tight text-foreground">
               <EditableText
                 value={titles.primary}
                 multiline
@@ -723,11 +745,11 @@ export default function DocumentPage({ id }: { id: string }) {
                 }
               />
             </h1>
-            {/* Web archives show their address beneath the parsed title;
-                everything else shows the original filename after a rename. */}
-            {(clipShortUrl ?? titles.original) && (
-              <p className="truncate text-xs leading-tight text-muted-foreground">
-                {clipShortUrl ?? titles.original}
+            {/* Web archives show their domain beneath the parsed title; docs
+                show the original filename (after a rename) and page count. */}
+            {secondaryLine && (
+              <p className="truncate text-sm leading-tight text-muted-foreground">
+                {secondaryLine}
               </p>
             )}
           </div>

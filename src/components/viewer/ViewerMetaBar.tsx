@@ -1,4 +1,3 @@
-import { Globe, FileText, Image as ImageIcon, Mic, Film } from "lucide-react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
@@ -14,7 +13,7 @@ import { formatDuration } from "@/lib/duration";
 /**
  * The one metadata line for every document: what the source says about
  * itself — byline, published/recorded/taken/created date, the "about" date,
- * duration, pages — every value hover-editable in place (editable.tsx), with
+ * duration — every value hover-editable in place (editable.tsx), with
  * provenance and the retained native/AI candidates inside the open editor.
  * Rendered as the page header's second row (DocumentPage), so it carries no
  * chrome of its own; the values come from buildDocumentFacts, so the line
@@ -100,27 +99,19 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
   const dot = <span aria-hidden="true">·</span>;
   const duration = formatDuration(document.durationSeconds);
 
-  let icon = <FileText className="size-3.5 shrink-0" aria-hidden="true" />;
-  let line: React.ReactNode = null;
+  // The media icon lives beside the title in the header; the domain and the
+  // page count live on the title's secondary line. This row is only the
+  // editable facts.
+  let line: React.ReactNode;
   if (media === "webScrape") {
-    // No domain here — the header's secondary title line shows the URL.
-    icon = <Globe className="size-3.5 shrink-0" aria-hidden="true" />;
     line = (
       <>
         {authorEditor(facts.author)}
         {dot}
         {dateEditor}
-        {dot}
-        {aboutEditor}
       </>
     );
   } else if (media === "audio" || media === "video") {
-    icon =
-      media === "audio" ? (
-        <Mic className="size-3.5 shrink-0" aria-hidden="true" />
-      ) : (
-        <Film className="size-3.5 shrink-0" aria-hidden="true" />
-      );
     line = (
       <>
         {dateEditor}
@@ -131,7 +122,6 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
       </>
     );
   } else if (media === "image") {
-    icon = <ImageIcon className="size-3.5 shrink-0" aria-hidden="true" />;
     line = (
       <>
         {dateEditor}
@@ -148,22 +138,13 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
         {dateEditor}
         {dot}
         {aboutEditor}
-        {document.pageCount ? (
-          <>
-            {dot}
-            <span>
-              {document.pageCount} {document.pageCount === 1 ? "page" : "pages"}
-            </span>
-          </>
-        ) : null}
       </>
     );
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-      {icon}
-      <div className="flex min-w-0 flex-1 items-center gap-2">{line}</div>
+    <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+      {line}
     </div>
   );
 }
