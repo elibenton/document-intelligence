@@ -31,12 +31,13 @@ import { ListGroup } from "@/components/views/ListGroup";
 import { PropertyChips, type ChipCommit } from "@/components/views/PropertyChips";
 import { ViewBar } from "@/components/views/ViewBar";
 import { applyView, type ViewGroup } from "@/lib/views/applyView";
+import type { PropertyDef } from "@/lib/views/types";
 import {
   DOCUMENT_PROPERTIES,
   type LibraryDoc,
 } from "@/lib/views/documentProperties";
 import {
-  ENTITY_PROPERTIES,
+  entityProperties,
   type EntityRow as EntityRowType,
 } from "@/lib/views/entityProperties";
 import {
@@ -225,10 +226,12 @@ function EntityListRow({
   entity,
   projectId,
   visibleProperties,
+  defs,
 }: {
   entity: Doc<"entities">;
   projectId: Id<"projects">;
   visibleProperties: string[];
+  defs: PropertyDef<EntityRowType>[];
 }) {
   const setStarred = useMutation(api.entities.setStarred);
   const setTypes = useMutation(api.entities.setTypes);
@@ -259,7 +262,7 @@ function EntityListRow({
       </Link>
       <PropertyChips
         row={entity}
-        defs={ENTITY_PROPERTIES}
+        defs={defs}
         visible={visibleProperties}
         onEdit={(row, commit) =>
           setTypes({ id: row._id, types: [commit.value] })
@@ -279,6 +282,7 @@ function EntityGroup({
   suggestions,
   projectId,
   visibleProperties,
+  defs,
   forceOpen,
   grouped,
 }: {
@@ -286,6 +290,7 @@ function EntityGroup({
   suggestions: MergeSuggestion[];
   projectId: Id<"projects">;
   visibleProperties: string[];
+  defs: PropertyDef<EntityRowType>[];
   forceOpen: boolean;
   grouped: boolean;
 }) {
@@ -305,6 +310,7 @@ function EntityGroup({
           entity={entity}
           projectId={projectId}
           visibleProperties={visibleProperties}
+          defs={defs}
         />
       ))}
     </>
@@ -329,6 +335,7 @@ function EntityGroup({
                 entity={entity}
                 projectId={projectId}
                 visibleProperties={visibleProperties}
+                defs={defs}
               />
             ))}
           </div>
@@ -396,6 +403,15 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
     [allDocuments, heldDocumentIds]
   );
   const entities = useQuery(api.entities.listAll, { projectId });
+  // The project's declared entity types label the custom groups ("Addresses"
+  // instead of the legacy "Other" their rows are stored under).
+  const declaredEntityTypes = useQuery(api.projectEntityTypes.list, {
+    projectId,
+  });
+  const entityDefs = useMemo(
+    () => entityProperties(declaredEntityTypes ?? []),
+    [declaredEntityTypes]
+  );
   const mergeSuggestions = useQuery(api.mergeSuggestions.listPending, {
     projectId,
   });
@@ -482,8 +498,8 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
     [libraryRows, views.library, libraryQuery]
   );
   const entityResult = useMemo(
-    () => applyView(entityRows, ENTITY_PROPERTIES, views.entities, entityQuery),
-    [entityRows, views.entities, entityQuery]
+    () => applyView(entityRows, entityDefs, views.entities, entityQuery),
+    [entityRows, entityDefs, views.entities, entityQuery]
   );
 
   // Drop anything that left the list — archived, deleted, or filtered out — so
@@ -739,7 +755,7 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                   <div className="flex items-center justify-between gap-3 border-b pb-2">
                     <h2 className="shrink-0 text-lg font-semibold">Entities</h2>
                     <ViewBar
-                      defs={ENTITY_PROPERTIES}
+                      defs={entityDefs}
                       config={views.entities}
                       onChange={views.setEntities}
                       rows={entityRows}
@@ -772,6 +788,7 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                         suggestions={suggestionsByGroup.get(group.key) ?? []}
                         projectId={projectId}
                         visibleProperties={views.entities.visibleProperties}
+                        defs={entityDefs}
                         forceOpen={entitiesNarrowed}
                         grouped={entitiesGrouped}
                       />

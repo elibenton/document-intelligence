@@ -32,6 +32,7 @@ import type * as entities from "../entities.js";
 import type * as entityMerge from "../entityMerge.js";
 import type * as entityResolution from "../entityResolution.js";
 import type * as entitySweep from "../entitySweep.js";
+import type * as entityType from "../entityType.js";
 import type * as hash from "../hash.js";
 import type * as http from "../http.js";
 import type * as ingest from "../ingest.js";
@@ -109,6 +110,7 @@ declare const fullApi: ApiFromModules<{
   entityMerge: typeof entityMerge;
   entityResolution: typeof entityResolution;
   entitySweep: typeof entitySweep;
+  entityType: typeof entityType;
   hash: typeof hash;
   http: typeof http;
   ingest: typeof ingest;

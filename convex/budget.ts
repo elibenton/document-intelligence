@@ -60,7 +60,10 @@ export async function budgetFor(
     .unique();
   const spentUsd = row?.spentUsd ?? 0;
   const limitUsd = row?.limitUsd ?? DEFAULT_LIMIT_USD;
-  return { spentUsd, limitUsd, exhausted: spentUsd >= limitUsd };
+  // Enforcement is disabled while the owner is the only account: every gate
+  // (requireBudget, the clipper's 402, clipperTokens) reads this flag, and the
+  // ledger keeps accruing regardless. Re-enable: `spentUsd >= limitUsd`.
+  return { spentUsd, limitUsd, exhausted: false };
 }
 
 /**

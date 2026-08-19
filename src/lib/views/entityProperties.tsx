@@ -1,4 +1,5 @@
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { displayEntityType } from "../../../convex/entityType";
 import { cn } from "@/lib/utils";
 import type { PropertyDef, PropertyOption } from "./types";
 
@@ -33,25 +34,42 @@ export function entityTypeKey(type: string): string {
   return type;
 }
 
-function observedTypes(rows: EntityRow[]): PropertyOption[] {
-  const seen = new Set(rows.map((entity) => entityTypeKey(entity.type)));
-  const known = Object.entries(ENTITY_TYPE_LABELS)
-    .filter(([value]) => seen.has(value))
-    .map(([value, label]) => ({ value, label }));
-  const extra = [...seen]
-    .filter((value) => !(value in ENTITY_TYPE_LABELS))
-    .sort()
-    .map((value) => ({ value, label: value }));
-  return [...known, ...extra];
-}
-
 const countChip = (n: number, one: string, many: string) => (
   <span className="font-mono text-2xs tabular-nums text-muted-foreground shrink-0">
     {n} {n === 1 ? one : many}
   </span>
 );
 
-export const ENTITY_PROPERTIES: PropertyDef<EntityRow>[] = [
+/**
+ * The registry is built per project rather than being one constant, because a
+ * project-declared type ("addresses") is stored under the legacy type "other"
+ * and only its `types[]` slug — the declared label lives in the project's
+ * entity-type rows. Without them, every custom entity grouped as "Other".
+ */
+export function entityProperties(
+  declaredTypes: { key: string; label: string }[]
+): PropertyDef<EntityRow>[] {
+  const declared = new Map(declaredTypes.map((t) => [t.key, t.label]));
+  // The same rule the server groups by (convex/entityType.ts), folded through
+  // the legacy plural spellings.
+  const typeKey = (entity: EntityRow) =>
+    entityTypeKey(displayEntityType(entity));
+  const typeLabel = (key: string) =>
+    ENTITY_TYPE_LABELS[key] ?? declared.get(key) ?? key;
+
+  const observedTypes = (rows: EntityRow[]): PropertyOption[] => {
+    const seen = new Set(rows.map(typeKey));
+    const known = Object.entries(ENTITY_TYPE_LABELS)
+      .filter(([value]) => seen.has(value))
+      .map(([value, label]) => ({ value, label }));
+    const extra = [...seen]
+      .filter((value) => !(value in ENTITY_TYPE_LABELS))
+      .sort()
+      .map((value) => ({ value, label: typeLabel(value) }));
+    return [...known, ...extra];
+  };
+
+  return [
   {
     id: "name",
     label: "Name",
@@ -69,27 +87,25 @@ export const ENTITY_PROPERTIES: PropertyDef<EntityRow>[] = [
     filterable: true,
     groupable: true,
     sortable: true,
-    value: (entity) => entityTypeKey(entity.type),
-    format: (entity) => {
-      const key = entityTypeKey(entity.type);
-      return ENTITY_TYPE_LABELS[key] ?? key;
-    },
+    value: typeKey,
+    format: (entity) => typeLabel(typeKey(entity)),
     options: observedTypes,
-    render: (entity) => {
-      const key = entityTypeKey(entity.type);
-      return (
-        <span className={cn(CHIP, "rounded-full bg-muted text-muted-foreground px-2")}>
-          {ENTITY_TYPE_LABELS[key] ?? key}
-        </span>
-      );
-    },
+    render: (entity) => (
+      <span className={cn(CHIP, "rounded-full bg-muted text-muted-foreground px-2")}>
+        {typeLabel(typeKey(entity))}
+      </span>
+    ),
     editor: {
       control: "select",
       field: "types",
       allowClear: false,
-      staticOptions: Object.entries(ENTITY_TYPE_LABELS).map(
-        ([value, label]) => ({ value, label })
-      ),
+      staticOptions: [
+        ...Object.entries(ENTITY_TYPE_LABELS).map(([value, label]) => ({
+          value,
+          label,
+        })),
+        ...declaredTypes.map((t) => ({ value: t.key, label: t.label })),
+      ],
     },
   },
   {
@@ -168,7 +184,8 @@ export const ENTITY_PROPERTIES: PropertyDef<EntityRow>[] = [
         </span>
       ) : null,
   },
-];
+  ];
+}
 
 /** Reproduces the Entities list as it looked before it became configurable. */
 export const DEFAULT_ENTITIES_VIEW = {

@@ -1,6 +1,6 @@
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
+import { displayEntityType } from "./entityType";
 import {
   LEGACY_TO_STABLE,
   recountEntity,
@@ -150,19 +150,8 @@ export const setStarred = authedMutation({
 // including their global documentCount for cross-doc display.
 // ---------------------------------------------------------------------------
 
-/**
- * The type to group an entity under, preferring the stable vocabulary.
- *
- * An entity carries both a legacy `type` and a stable `types[]`. Only the
- * latter is maintained, so the first current type in it wins; the legacy value
- * is the fallback for rows written before `types[]` existed.
- */
-function displayType(entity: Doc<"entities">): string {
-  const current = entity.types?.find(
-    (t) => t === "person" || t === "organization"
-  );
-  return current ?? entity.types?.[0] ?? entity.type;
-}
+// The shared display-type rule — see convex/entityType.ts.
+const displayType = displayEntityType;
 
 export const byDocument = authedQuery({
   args: { documentId: v.id("documents") },
