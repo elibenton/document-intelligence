@@ -21,7 +21,6 @@ import type { OcrPageResult, Precontext } from "./interfaze";
 import type { SttTaskResult } from "./interfazeStt";
 import { normalizeGraphResponse } from "./relationships";
 import type { GraphResponse } from "./relationships";
-import { checkGeometry } from "./ocrChecks";
 import {
   analyzeSystemPrompt,
   buildAnalyzePrompt,
@@ -175,9 +174,105 @@ async function projectTaxonomy(
 }
 
 /**
- * Analyze: text in, structured metadata out. Shared by the upload pipeline and
- * by the standalone retry action below, so a re-run sends exactly what the
- * first run sent unless the user edited the prompt.
+ * Build the understanding request — system prompt, user prompt, and schema —
+ * for either input shape. One home, so the file-in and text-in calls cannot
+ * drift: the only branch is `fileInput`, which changes the prompt's lead
+ * sentence and nothing else.
+ */
+async function understandingRequest(
+  ctx: ActionCtx,
+  options: {
+    projectId: Id<"projects"> | undefined;
+    csv: boolean;
+    kindNames: string[];
+    categories: Doc<"documentCategories">[];
+    fileName?: string;
+    promptOverride?: string;
+    fileInput?: boolean;
+  }
+): Promise<{
+  systemPrompt: string;
+  prompt: string;
+  responseSchema: { name: string; schema: Record<string, unknown> };
+}> {
+  const categoryDefs: CategoryDef[] = options.categories
+    .sort((a, b) => a.order - b.order)
+    .map((c) => ({ key: c.key, label: c.label, description: c.description }));
+  const extraTypes: { key: string; label: string; description: string }[] =
+    options.projectId
+      ? await ctx.runQuery(internal.projectEntityTypes.listInternal, {
+          projectId: options.projectId,
+        })
+      : [];
+  return {
+    systemPrompt: analyzeSystemPrompt(options.csv),
+    prompt:
+      options.promptOverride?.trim() ||
+      buildAnalyzePrompt({
+        csv: options.csv,
+        kindNames: options.kindNames,
+        categories: categoryDefs,
+        fileName: options.fileName,
+        graphExtraTypes: extraTypes,
+        fileInput: options.fileInput,
+      }),
+    responseSchema: {
+      name: "document_understanding",
+      schema: buildDocumentUnderstandingSchema(
+        categoryDefs.map((c) => c.key),
+        extraTypes.map((t) => t.key)
+      ),
+    },
+  };
+}
+
+/**
+ * Persist one understanding response: metadata, language, and the entity
+ * graph. The single home for what a response *means* — the file-in pipeline
+ * and the text-in analyze both end here, so a field added to the response
+ * lands in every path or none.
+ *
+ * Parsed once, up front, and a throw here happens *before* any mutation:
+ * a truncated response fails whole rather than half-persisting metadata
+ * before dying on the graph.
+ */
+async function persistUnderstanding(
+  ctx: ActionCtx,
+  documentId: Id<"documents">,
+  content: string
+): Promise<void> {
+  const structured = JSON.parse(content) as GraphResponse & {
+    source_language_code?: string;
+    is_multilingual?: boolean;
+  };
+  await ctx.runMutation(internal.metadata.saveMetadataResult, {
+    documentId,
+    raw: content,
+  });
+  if (structured.source_language_code) {
+    await ctx.runMutation(internal.translations.setSourceLanguage, {
+      documentId,
+      sourceLanguageCode: structured.source_language_code,
+      sourceLanguageIsMixed: structured.is_multilingual,
+    });
+  }
+  const graph = normalizeGraphResponse(structured);
+  if (graph.unlisted > 0) {
+    console.warn(
+      `${graph.unlisted} relationship(s) named entities missing from the entity list for ${documentId}`
+    );
+  }
+  await ctx.runMutation(internal.relationships.ingestGraph, {
+    documentId,
+    entities: graph.entities,
+    relationships: graph.relationships,
+  });
+}
+
+/**
+ * Analyze: text in, structured metadata out. Shared by clips and by the
+ * standalone retry action below, so a re-run sends exactly what the first run
+ * sent unless the user edited the prompt.
  */
 async function analyzeAndStore(
   ctx: ActionCtx,
@@ -195,65 +290,13 @@ async function analyzeAndStore(
     fileName?: string;
   }
 ): Promise<void> {
-  const categoryDefs: CategoryDef[] = options.categories
-    .sort((a, b) => a.order - b.order)
-    .map((c) => ({ key: c.key, label: c.label, description: c.description }));
-  // The graph rides along here exactly as it does on the file-in call, so a
-  // clip or an Analyze retry ends with the same fields as an upload.
-  const extraTypes: { key: string; label: string; description: string }[] =
-    options.projectId
-      ? await ctx.runQuery(internal.projectEntityTypes.listInternal, {
-          projectId: options.projectId,
-        })
-      : [];
+  const request = await understandingRequest(ctx, options);
   const analysis = await analyzeDocumentText(options.pageTexts, options.apiKey, {
     log: options.log,
     bypassCache: options.bypassCache,
-    systemPrompt: analyzeSystemPrompt(options.csv),
-    prompt:
-      options.promptOverride?.trim() ||
-      buildAnalyzePrompt({
-        csv: options.csv,
-        kindNames: options.kindNames,
-        categories: categoryDefs,
-        fileName: options.fileName,
-        graphExtraTypes: extraTypes,
-      }),
-    responseSchema: {
-      name: "document_understanding",
-      schema: buildDocumentUnderstandingSchema(
-        categoryDefs.map((c) => c.key),
-        extraTypes.map((t) => t.key)
-      ),
-    },
+    ...request,
   });
-
-  await ctx.runMutation(internal.metadata.saveMetadataResult, {
-    documentId: options.documentId,
-    raw: analysis.content,
-  });
-  const structured = JSON.parse(analysis.content) as GraphResponse & {
-    source_language_code?: string;
-    is_multilingual?: boolean;
-  };
-  if (structured.source_language_code) {
-    await ctx.runMutation(internal.translations.setSourceLanguage, {
-      documentId: options.documentId,
-      sourceLanguageCode: structured.source_language_code,
-      sourceLanguageIsMixed: structured.is_multilingual,
-    });
-  }
-  const graph = normalizeGraphResponse(structured);
-  if (graph.unlisted > 0) {
-    console.warn(
-      `${graph.unlisted} relationship(s) named entities missing from the entity list for ${options.documentId}`
-    );
-  }
-  await ctx.runMutation(internal.relationships.ingestGraph, {
-    documentId: options.documentId,
-    entities: graph.entities,
-    relationships: graph.relationships,
-  });
+  await persistUnderstanding(ctx, options.documentId, analysis.content);
 }
 
 /**
@@ -396,7 +439,6 @@ export const runPipeline = internalAction({
   args: {
     documentId: v.id("documents"),
     bypassCache: v.optional(v.boolean()),
-    promptOverride: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -437,36 +479,17 @@ export const runPipeline = internalAction({
         ctx,
         document.projectId
       );
-      const categoryDefs: CategoryDef[] = categories
-        .sort((a, b) => a.order - b.order)
-        .map((c) => ({ key: c.key, label: c.label, description: c.description }));
-      const extraTypes: { key: string; label: string; description: string }[] =
-        document.projectId
-          ? await ctx.runQuery(internal.projectEntityTypes.listInternal, {
-              projectId: document.projectId,
-            })
-          : [];
 
       // --- The one call ----------------------------------------------------
       const result = await understandDocument(fileUrl, document.name, apiKey, {
-        systemPrompt: analyzeSystemPrompt(csv),
-        prompt:
-          args.promptOverride?.trim() ||
-          buildAnalyzePrompt({
-            csv,
-            kindNames,
-            categories: categoryDefs,
-            fileName: document.name,
-            graphExtraTypes: extraTypes,
-            fileInput: true,
-          }),
-        responseSchema: {
-          name: "document_understanding",
-          schema: buildDocumentUnderstandingSchema(
-            categoryDefs.map((c) => c.key),
-            extraTypes.map((t) => t.key)
-          ),
-        },
+        ...(await understandingRequest(ctx, {
+          projectId: document.projectId,
+          csv,
+          kindNames,
+          categories,
+          fileName: document.name,
+          fileInput: true,
+        })),
         log,
         bypassCache: args.bypassCache,
       });
@@ -478,7 +501,9 @@ export const runPipeline = internalAction({
         const stt = precontextResult<SttTaskResult>(
           result.precontext,
           "speech_to_text"
-        ) ?? precontextResult<SttTaskResult>(result.precontext, "stt");
+        ) ?? // The provider's docs name this entry "stt" in their own example
+          // while the task is "speech_to_text" — accept both spellings.
+          precontextResult<SttTaskResult>(result.precontext, "stt");
         // Measured 2026-08-18: the merged call's STT precontext arrives without
         // per-chunk speaker labels, so an hour of interview collapsed into one
         // "Speaker 1" segment. Diarization is the transcript UI's structure —
@@ -540,16 +565,9 @@ export const runPipeline = internalAction({
             `possible pagination misread`
         );
       }
-      const geometry = checkGeometry(parsedPages);
-      if (geometry.violations > 0) {
-        console.error(
-          `OCR geometry: ${geometry.violations} violations across ` +
-            `${geometry.checked} blocks ` +
-            `(${Object.entries(geometry.byKind)
-              .map(([kind, n]) => `${kind}=${n}`)
-              .join(", ")}) — ${geometry.examples.join("; ")}`
-        );
-      }
+      // Geometry is not re-checked here: both sources of pages run
+      // checkGeometry at their own call's quality hook, so the rate lands on
+      // the apiLogs row that produced the pages.
 
       if (transcriptSegments) {
         await ctx.runMutation(internal.transcripts.ingestTranscript, {
@@ -592,32 +610,7 @@ export const runPipeline = internalAction({
       });
 
       // --- Metadata + graph, off the same response -------------------------
-      await ctx.runMutation(internal.metadata.saveMetadataResult, {
-        documentId: args.documentId,
-        raw: result.content,
-      });
-      const structured = JSON.parse(result.content) as GraphResponse & {
-        source_language_code?: string;
-        is_multilingual?: boolean;
-      };
-      if (structured.source_language_code) {
-        await ctx.runMutation(internal.translations.setSourceLanguage, {
-          documentId: args.documentId,
-          sourceLanguageCode: structured.source_language_code,
-          sourceLanguageIsMixed: structured.is_multilingual,
-        });
-      }
-      const graph = normalizeGraphResponse(structured);
-      if (graph.unlisted > 0) {
-        console.warn(
-          `${graph.unlisted} relationship(s) named entities missing from the entity list for ${args.documentId}`
-        );
-      }
-      await ctx.runMutation(internal.relationships.ingestGraph, {
-        documentId: args.documentId,
-        entities: graph.entities,
-        relationships: graph.relationships,
-      });
+      await persistUnderstanding(ctx, args.documentId, result.content);
 
       await ctx.runMutation(internal.processing.updateJobStatus, {
         documentId: args.documentId,

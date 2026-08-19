@@ -767,11 +767,12 @@ export async function analyzeDocumentText(
  *
  *  - Correctness: the full model's OCR precontext was non-deterministic
  *    (duplicate entries, wrong entry count, pages collapsed onto page 1).
- *    Today it is worse — probes on 2026-08-18 show `precontext` comes back
- *    empty on every full-model call, contradicting the provider's docs. That
- *    is reported to Interfaze as a bug; until it is fixed, callers shim the
- *    geometry from the dedicated task (see processingStages.runPipeline), so
- *    the old non-determinism cannot bite either way.
+ *    Measured 2026-08-18: OCR precontext works again on healthy documents
+ *    (it is empty only for files hit by the provider's `empty_ocr_response`
+ *    bug), while STT precontext arrives without speaker labels. Both gaps are
+ *    reported to Interfaze; callers shim what is missing from the dedicated
+ *    task (see processingStages.runPipeline), so neither absence nor the old
+ *    non-determinism can bite.
  *  - Cost: ~$0.18 a call against ~$0.037 for task + text-Analyze. Accepted:
  *    the merged call replaces Analyze + relationships + rename in one request,
  *    and the decision (2026-08-18) is to buy the simpler architecture and
@@ -797,7 +798,23 @@ export async function understandDocument(
     ],
     responseSchema: options.responseSchema,
     bypassCache: options.bypassCache,
-    usage: options.log ? { log: options.log, operation: "understand" } : undefined,
+    usage: options.log
+      ? {
+          log: options.log,
+          operation: "understand",
+          // Same arithmetic geometry check ocrDocument runs, over the pages
+          // this call's own precontext carries — so the main path's accuracy
+          // rate lands on its apiLogs row, not just the shim's.
+          quality: ({ precontext }) => {
+            const pages = ocrPrecontextToPages(
+              precontext.filter((p) => p.name === "ocr")
+            );
+            if (pages.length === 0) return undefined;
+            const { checked, violations, byKind } = checkGeometry(pages);
+            return { checked, violations, byKind };
+          },
+        }
+      : undefined,
   });
 }
 
