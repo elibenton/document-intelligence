@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { MessageSquare, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent } from "@/components/ui/popover";
@@ -6,6 +6,14 @@ import { ANNOTATION_COLORS, annotationColor } from "./annotationColors";
 import type { AnnotationColor } from "./annotationColors";
 import { boundingRect, mergeSelectionRects } from "./annotationGeometry";
 import type { TextBox } from "../../lib/pdfTextGeometry";
+
+/** A viewport-pixel box a popover can hang from (a selection's client rect). */
+export interface SelectionAnchor {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
 
 /** The fields of an `annotations` row the viewer actually draws with. */
 export interface ViewerAnnotation {
@@ -108,20 +116,26 @@ export function AnnotationLayer({
 /**
  * The comment box beside a highlight.
  *
- * Anchored to the highlight's own DOM node and portalled out, for the same
- * reason SelectionPopover is: the page surface carries the zoom scale and the
- * rotation transform, and a comment box that rotates with the paper — or
- * doubles in size at 2× zoom — is unusable. Anchoring keeps it glued to the
- * highlight through both.
+ * Anchored to the highlight's own DOM node and portalled out: the page surface
+ * carries the zoom scale and the rotation transform, and a comment box that
+ * rotates with the paper — or doubles in size at 2× zoom — is unusable.
+ * Anchoring keeps it glued to the highlight through both.
  */
 export function AnnotationComment({
   annotation,
+  anchorRect,
   onChangeComment,
   onChangeColor,
   onDelete,
   onDismiss,
 }: {
   annotation: ViewerAnnotation;
+  /**
+   * Viewport box to anchor to instead of the highlight's own DOM node — for
+   * highlights that have no `data-annotation-anchor` span (the transcript,
+   * whose runs render inside each turn rather than in an AnnotationLayer).
+   */
+  anchorRect?: SelectionAnchor;
   onChangeComment: (comment: string) => void;
   onChangeColor: (color: AnnotationColor) => void;
   onDelete: () => void;
@@ -140,13 +154,27 @@ export function AnnotationComment({
   // container, so scroll never reaches window) and on resize — about 45 lines,
   // re-run on every keystroke because `draft` was in the dependency array.
   // floating-ui's autoUpdate covers all of it.
-  const anchor = useCallback(
+  const domAnchor = useCallback(
     () =>
       window.document.querySelector<HTMLElement>(
         `[data-annotation-anchor="${annotationId}"]`
       ),
     [annotationId]
   );
+  const virtualAnchor = useMemo(
+    () =>
+      anchorRect && {
+        getBoundingClientRect: () =>
+          new DOMRect(
+            anchorRect.left,
+            anchorRect.top,
+            anchorRect.right - anchorRect.left,
+            anchorRect.bottom - anchorRect.top
+          ),
+      },
+    [anchorRect]
+  );
+  const anchor = virtualAnchor ?? domAnchor;
 
   const dirty = draft.trim() !== (annotation.comment ?? "").trim();
 

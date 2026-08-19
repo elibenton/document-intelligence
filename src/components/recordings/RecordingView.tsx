@@ -22,13 +22,15 @@ import { TransportBar } from "./TransportBar";
 import { SpeakerNamingDialog } from "./SpeakerNamingDialog";
 import { transcriptSignature } from "../../../convex/speakerSignature";
 import {
-  SelectionPopover,
+  AnnotationComment,
   type SelectionAnchor,
-} from "@/components/viewer/SelectionPopover";
+} from "@/components/viewer/AnnotationLayer";
 import {
   annotationColor,
+  DEFAULT_ANNOTATION_COLOR,
   type AnnotationColor,
 } from "@/components/viewer/annotationColors";
+import { useHighlightUndo } from "@/components/viewer/useHighlightUndo";
 import { useConfirm } from "@/components/ui/use-confirm";
 
 export interface RecordingViewRef {
@@ -49,7 +51,7 @@ export const RecordingView = forwardRef<
     url: string | null | undefined;
     showTranslation?: boolean;
     /** Armed highlighter color: a selection commits straight to a highlight
-     *  of this color instead of opening the SelectionPopover. */
+     *  of this color, with no comment card afterwards. */
     penColor?: AnnotationColor | null;
   }
 >(function RecordingView(
@@ -223,7 +225,25 @@ export const RecordingView = forwardRef<
     documentId: doc._id,
   });
   const createAnnotation = useMutation(api.annotations.create);
-  const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
+  const updateAnnotation = useMutation(api.annotations.update);
+  const removeAnnotation = useMutation(api.annotations.remove);
+  // The comment card open on a just-created highlight. Transcript runs render
+  // inside each turn with no anchor node, so the card hangs from the
+  // selection's own viewport rect instead.
+  const [notePopup, setNotePopup] = useState<{
+    id: string;
+    anchor: SelectionAnchor;
+  } | null>(null);
+
+  // ⌘Z deletes the last highlight this visit created; the catch swallows the
+  // not-found error for one already deleted through its comment card.
+  const undoRemove = useCallback(
+    (id: string) => {
+      removeAnnotation({ id: id as Doc<"annotations">["_id"] }).catch(() => {});
+    },
+    [removeAnnotation]
+  );
+  const recordCreated = useHighlightUndo(undoRemove);
 
   const highlightsBySegment = useMemo(() => {
     const map = new Map<number, { start: number; end: number; fill: string }[]>();
@@ -245,14 +265,13 @@ export const RecordingView = forwardRef<
   }, [segments, annotations]);
 
   const commitNote = useCallback(
-    async (note: PendingNote, color: string, comment?: string) => {
-      await createAnnotation({
+    async (note: PendingNote, color: AnnotationColor) => {
+      return await createAnnotation({
         documentId: doc._id,
         // The transcript IS page 0 in the mirror — truthful, not a fudge.
         pageNumber: 0,
-        color: color as "yellow" | "green" | "blue" | "pink" | "purple",
+        color,
         text: note.text,
-        comment,
         rects: [],
         blockIds: note.blockIds,
         timeRange: note.timeRange,
@@ -261,18 +280,13 @@ export const RecordingView = forwardRef<
     [createAnnotation, doc._id],
   );
 
-  const clearPendingNote = useCallback(() => {
-    setPendingNote(null);
-    window.getSelection()?.removeAllRanges();
-  }, []);
-
   const onTranscriptPointerUp = useCallback(() => {
     if (!segments) return;
     const selection = window.getSelection();
     // A click is a zero-length selection; without this every seek would pop
-    // the note menu.
+    // the note card.
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-      setPendingNote(null);
+      setNotePopup(null);
       return;
     }
     const range = selection.getRangeAt(0);
@@ -318,20 +332,16 @@ export const RecordingView = forwardRef<
         (_, i) => `transcript_seg${a.seg + i}`,
       ),
     };
-    // The armed highlighter skips the popover: the selection is the gesture.
-    if (penColor) {
-      selection.removeAllRanges();
-      void commitNote(note, penColor);
-      return;
-    }
-    setPendingNote(note);
-  }, [segments, penColor, commitNote]);
-
-  async function saveNote(color: string, comment?: string) {
-    if (!pendingNote) return;
-    await commitNote(pendingNote, color, comment);
-    clearPendingNote();
-  }
+    // The selection commits straight to a highlight. Armed, the pen's color is
+    // the whole gesture; a normal drag also opens the comment card on the
+    // fresh highlight, anchored where the selection ended.
+    void (async () => {
+      const id = await commitNote(note, penColor ?? DEFAULT_ANNOTATION_COLOR);
+      recordCreated(id);
+      if (penColor) selection.removeAllRanges();
+      else setNotePopup({ id, anchor: note.anchor });
+    })();
+  }, [segments, penColor, commitNote, recordCreated]);
 
   useImperativeHandle(ref, () => ({ seekTo }), [seekTo]);
 
@@ -527,14 +537,31 @@ export const RecordingView = forwardRef<
         />
       )}
 
-      {pendingNote && (
-        <SelectionPopover
-          anchor={pendingNote.anchor}
-          onHighlight={(color) => void saveNote(color)}
-          onComment={(color, comment) => void saveNote(color, comment)}
-          onDismiss={clearPendingNote}
-        />
-      )}
+      {notePopup &&
+        (() => {
+          const annotation = annotations?.find((a) => a._id === notePopup.id);
+          if (!annotation) return null;
+          const id = annotation._id;
+          const dismiss = () => setNotePopup(null);
+          return (
+            <AnnotationComment
+              // Remount per highlight: the comment draft is seeded from the row.
+              key={id}
+              annotation={annotation}
+              anchorRect={notePopup.anchor}
+              onChangeComment={(comment) => {
+                void updateAnnotation({ id, comment });
+                dismiss();
+              }}
+              onChangeColor={(color) => void updateAnnotation({ id, color })}
+              onDelete={() => {
+                void removeAnnotation({ id });
+                dismiss();
+              }}
+              onDismiss={dismiss}
+            />
+          );
+        })()}
     </div>
   );
 });

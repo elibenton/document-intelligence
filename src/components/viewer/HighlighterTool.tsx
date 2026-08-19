@@ -9,9 +9,9 @@ import {
 
 /**
  * The highlighter pen. While armed, any text selection in the viewer commits
- * straight to a highlight of the armed color — no popover in between. Disarmed
- * (the default), selecting text keeps offering the SelectionPopover, so the
- * pen is a mode you opt into, not a change to the existing gesture.
+ * straight to a highlight of the armed color — no comment card in between.
+ * Disarmed (the default), a selection still commits, but opens the comment
+ * card on the fresh highlight; the pen is the quiet, card-free mode.
  *
  * The armed color is remembered across disarm/re-arm within the page's
  * lifetime because the parent owns it; this component is stateless.
@@ -37,7 +37,11 @@ export function HighlighterTool({
         className={cn(
           "flex items-center gap-1.5 rounded-md px-2.5 py-2 text-xs font-medium transition-colors",
           "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring",
-          color ? "bg-accent text-foreground" : "text-foreground hover:bg-accent"
+          // Armed is unmistakable: the button inverts rather than tinting,
+          // because bg-accent read as a hover state, not a mode.
+          color
+            ? "bg-foreground text-background"
+            : "text-foreground hover:bg-accent"
         )}
       >
         <Highlighter className="size-3.5" />

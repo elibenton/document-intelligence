@@ -28,9 +28,12 @@ import {
   AnnotationLayer,
   type ViewerAnnotation,
 } from "./AnnotationLayer";
-import type { AnnotationColor } from "./annotationColors";
+import {
+  DEFAULT_ANNOTATION_COLOR,
+  type AnnotationColor,
+} from "./annotationColors";
 import { mergeSelectionRects } from "./annotationGeometry";
-import { SelectionPopover, type SelectionAnchor } from "./SelectionPopover";
+import { useHighlightUndo } from "./useHighlightUndo";
 
 /**
  * Paged PDF viewer: each page is a rendered surface plus a transparent text
@@ -236,15 +239,13 @@ function selectedSpans(
   });
 }
 
-/** A highlight the user has selected but not yet committed to a color. */
-interface AnnotationDraft {
+/** A finished text selection, ready to commit as a highlight. */
+interface HighlightSelection {
   pageNumber: number; // 1-indexed, as the viewer counts pages
   text: string;
   /** Page units. */
   rects: TextBox[];
   blockIds: string[];
-  /** Viewport box the popover hangs off. */
-  anchor: SelectionAnchor;
 }
 
 function uniqueBlockIds(spans: Array<{ blockId: string }>): string[] {
@@ -278,9 +279,8 @@ interface PdfViewerProps {
   activeAnnotationId?: string | null;
   onActiveAnnotationChange?: (id: string | null) => void;
   /**
-   * The armed highlighter color (HighlighterTool). While set, a text selection
-   * commits straight to a highlight of this color instead of opening the
-   * SelectionPopover.
+   * The armed highlighter color (HighlighterTool). While set, a selection
+   * commits as a highlight of this color with no comment card afterwards.
    */
   penColor?: AnnotationColor | null;
   ref?: Ref<PdfViewerRef>;
@@ -307,7 +307,6 @@ export function PdfViewer({
   const [nearPages, setNearPages] = useState<Set<number>>(new Set([1]));
   const [marqueeSelection, setMarqueeSelection] =
     useState<MarqueeSelection | null>(null);
-  const [draft, setDraft] = useState<AnnotationDraft | null>(null);
 
   // One document-wide subscription rather than one per mounted page: the rows
   // are small, and the notes panel needs all of them anyway.
@@ -329,70 +328,50 @@ export function PdfViewer({
   const activeAnnotation =
     annotations?.find((a) => a._id === activeAnnotationId) ?? null;
 
-  const clearSelection = useCallback(() => {
-    setDraft(null);
-    window.getSelection()?.removeAllRanges();
-  }, []);
-
-  const commitDraft = useCallback(
-    async (color: AnnotationColor, comment?: string) => {
-      if (!draft) return;
-      const pageNumber = draft.pageNumber - 1;
-      clearSelection();
-      // Deliberately does not open the comment box afterwards: picking a color
-      // is the whole gesture for a bare highlight, and a box that pops up
-      // uninvited after every one of them is in the way.
-      await createAnnotation({
-        documentId,
-        pageNumber,
-        color,
-        text: draft.text,
-        comment,
-        sectionTitle: sectionTitleForPage?.(pageNumber),
-        rects: draft.rects,
-        blockIds: draft.blockIds,
-      });
-    },
-    [clearSelection, createAnnotation, documentId, draft, sectionTitleForPage]
-  );
-
   const handleActivate = useCallback(
     (id: string | null) => {
-      setDraft(null);
       onActiveAnnotationChange?.(id);
     },
     [onActiveAnnotationChange]
   );
 
-  // The popover and the comment card are two dialogs over the same page, so
-  // only one is ever up: starting a new selection puts away the open note.
-  // With the highlighter armed, a finished selection skips the popover
-  // entirely and commits as a highlight of the armed color.
-  const handleDraftChange = useCallback(
-    (next: AnnotationDraft | null) => {
-      if (next && penColor) {
-        clearSelection();
-        onActiveAnnotationChange?.(null);
-        void createAnnotation({
+  // ⌘Z deletes the last highlight this visit created. The catch swallows the
+  // not-found error for one already deleted through its comment card.
+  const undoRemove = useCallback(
+    (id: string) => {
+      removeAnnotation({ id: id as Id<"annotations"> }).catch(() => {});
+    },
+    [removeAnnotation]
+  );
+  const recordCreated = useHighlightUndo(undoRemove);
+
+  // A finished selection commits straight to a highlight. With the pen armed
+  // that is the whole gesture; a normal drag also opens the comment card on
+  // the fresh highlight, so a note is one drag and typing away. The native
+  // selection is left standing so ⌘C still copies what was just dragged.
+  const handleSelection = useCallback(
+    (selection: HighlightSelection) => {
+      onActiveAnnotationChange?.(null);
+      void (async () => {
+        const id = await createAnnotation({
           documentId,
-          pageNumber: next.pageNumber - 1,
-          color: penColor,
-          text: next.text,
-          sectionTitle: sectionTitleForPage?.(next.pageNumber - 1),
-          rects: next.rects,
-          blockIds: next.blockIds,
+          pageNumber: selection.pageNumber - 1,
+          color: penColor ?? DEFAULT_ANNOTATION_COLOR,
+          text: selection.text,
+          sectionTitle: sectionTitleForPage?.(selection.pageNumber - 1),
+          rects: selection.rects,
+          blockIds: selection.blockIds,
         });
-        return;
-      }
-      setDraft(next);
-      if (next) onActiveAnnotationChange?.(null);
+        recordCreated(id);
+        if (!penColor) onActiveAnnotationChange?.(id);
+      })();
     },
     [
-      clearSelection,
       createAnnotation,
       documentId,
       onActiveAnnotationChange,
       penColor,
+      recordCreated,
       sectionTitleForPage,
     ]
   );
@@ -632,7 +611,7 @@ export function PdfViewer({
                     annotations={annotationsByPage.get(pageNumber - 1) ?? []}
                     activeAnnotationId={activeAnnotationId}
                     onActivateAnnotation={handleActivate}
-                    onDraftChange={handleDraftChange}
+                    onSelect={handleSelection}
                   />
                 ) : null}
 
@@ -647,16 +626,7 @@ export function PdfViewer({
         })}
       </div>
 
-      {/* Both of these are `position: fixed`, so they are only nested here for
-          lifecycle — they escape the page surface's zoom and rotation. */}
-      {draft && (
-        <SelectionPopover
-          anchor={draft.anchor}
-          onHighlight={(color) => void commitDraft(color)}
-          onComment={(color, comment) => void commitDraft(color, comment)}
-          onDismiss={clearSelection}
-        />
-      )}
+      {/* Portalled out, so it escapes the page surface's zoom and rotation. */}
       {activeAnnotation && (
         <AnnotationComment
           // Remount per highlight: the comment draft is seeded from the row.
@@ -702,7 +672,7 @@ function PageTextLayer({
   annotations,
   activeAnnotationId,
   onActivateAnnotation,
-  onDraftChange,
+  onSelect,
 }: {
   documentId: Id<"documents">;
   pageNumber: number; // 1-indexed
@@ -714,7 +684,7 @@ function PageTextLayer({
   annotations: ViewerAnnotation[];
   activeAnnotationId: string | null;
   onActivateAnnotation: (id: string | null) => void;
-  onDraftChange: (draft: AnnotationDraft | null) => void;
+  onSelect: (selection: HighlightSelection) => void;
 }) {
   const layerRef = useRef<HTMLDivElement>(null);
   const selectionSignatureRef = useRef("");
@@ -813,9 +783,6 @@ function PageTextLayer({
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
-      // Any new gesture retires the previous one's popover — the selection it
-      // was offering to highlight is about to be replaced.
-      onDraftChange(null);
       const target = event.target as HTMLElement;
       if (target.closest(PDF_TEXT_TOKEN_SELECTOR)) {
         if (marqueeSelection) onMarqueeSelectionChange(null);
@@ -836,7 +803,7 @@ function PageTextLayer({
       setDragRect({ left: point.x, top: point.y, width: 0, height: 0 });
       onMarqueeSelectionChange(null);
     },
-    [localPoint, marqueeSelection, onDraftChange, onMarqueeSelectionChange]
+    [localPoint, marqueeSelection, onMarqueeSelectionChange]
   );
 
   const handlePointerMove = useCallback(
@@ -868,7 +835,6 @@ function PageTextLayer({
       };
       dragOriginRef.current = null;
       setDragRect(null);
-      onDraftChange(null);
       if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -898,27 +864,18 @@ function PageTextLayer({
         tokenIds: new Set(selected.map((token) => token.id)),
         text,
       });
-      // A marquee is a text selection too, so it gets the same offer to
-      // highlight. Its anchor is the pointer rather than a range rect: the
-      // marquee's own box is in the page's rotated local space, and turning
-      // that back into viewport pixels would re-derive the transform by hand.
-      onDraftChange({
+      // A marquee is a text selection too, so it commits the same way.
+      onSelect({
         pageNumber,
         text,
         rects: mergeSelectionRects(selected.map((token) => token.bbox)),
         blockIds: uniqueBlockIds(selected),
-        anchor: {
-          left: event.clientX,
-          right: event.clientX,
-          top: event.clientY,
-          bottom: event.clientY,
-        },
       });
     },
     [
       localPoint,
       onActivateAnnotation,
-      onDraftChange,
+      onSelect,
       onMarqueeSelectionChange,
       pageNumber,
       tokens,
@@ -949,13 +906,13 @@ function PageTextLayer({
   }, [tokens]);
 
   /**
-   * Mouse-up over a live text selection: offer to highlight it.
+   * Mouse-up over a live text selection: commit it as a highlight.
    *
    * A selection dragged across a page boundary only yields the part that lives
    * on the page the pointer came up over — each page owns its own text layer
    * and its own coordinate space, and one row cannot span two of them.
    */
-  const captureSelectionDraft = useCallback(() => {
+  const captureSelection = useCallback(() => {
     const layer = layerRef.current;
     if (!layer) return false;
     const selection = layer.ownerDocument.defaultView?.getSelection();
@@ -965,21 +922,14 @@ function PageTextLayer({
     const text = selectedPdfText(layer, selection);
     if (!text?.trim()) return false;
 
-    const anchor = selection.getRangeAt(0).getBoundingClientRect();
-    onDraftChange({
+    onSelect({
       pageNumber,
       text,
       rects: mergeSelectionRects(spans.map((span) => span.pageRect)),
       blockIds: uniqueBlockIds(spans),
-      anchor: {
-        left: anchor.left,
-        right: anchor.right,
-        top: anchor.top,
-        bottom: anchor.bottom,
-      },
     });
     return true;
-  }, [onDraftChange, pageNumber, tokens]);
+  }, [onSelect, pageNumber, tokens]);
 
   /** The highlight under a point, in page units. Topmost (newest) wins. */
   const annotationAt = useCallback(
@@ -1009,7 +959,7 @@ function PageTextLayer({
         finishMarquee(event);
         return;
       }
-      if (captureSelectionDraft()) return;
+      if (captureSelection()) return;
       // A plain click, with nothing selected: open the highlight under it, or
       // dismiss whatever was open.
       const hit = annotationAt(localPoint(event));
@@ -1017,7 +967,7 @@ function PageTextLayer({
     },
     [
       annotationAt,
-      captureSelectionDraft,
+      captureSelection,
       finishMarquee,
       localPoint,
       onActivateAnnotation,
