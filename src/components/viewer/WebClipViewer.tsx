@@ -107,11 +107,19 @@ interface PendingNote {
 }
 
 /**
- * Archived pages often ship a modal captured mid-display — a subscribe
- * prompt, a cookie wall — and with scripts stripped, its close button is
- * dead. Remove modal roles and fixed overlays covering a meaningful share of
- * the viewport, then undo the scroll lock they installed. Small fixed chrome
- * (a site header, a bottom banner) is under the coverage bar and stays.
+ * Archived pages carry live-site chrome that has no job in a static snapshot,
+ * and with scripts stripped some of it is actively broken. One pass, before
+ * the text index snapshots the DOM:
+ *
+ * - Modals and near-full-screen fixed overlays (a subscribe prompt, a cookie
+ *   wall — their close buttons are dead) are removed, and the scroll lock
+ *   they installed is undone.
+ * - Everything else pinned (`fixed` or `sticky` — nav bars, share rails) is
+ *   demoted to static flow: the content survives at its DOM position and
+ *   scrolls away with the page instead of riding over the article.
+ * - Blank boxes — ad slots and script-built sections that render as empty
+ *   space with scripts stripped — are removed: section-sized, no text, no
+ *   media, no background image.
  */
 function removeArchivedOverlays(doc: Document, win: Window): void {
   const vw = win.innerWidth;
@@ -120,17 +128,34 @@ function removeArchivedOverlays(doc: Document, win: Window): void {
   for (const el of Array.from(doc.body.querySelectorAll<HTMLElement>("*"))) {
     if (!el.isConnected) continue; // inside an overlay already removed
     const isModal = el.matches("dialog[open], [aria-modal='true']");
-    if (!isModal && win.getComputedStyle(el).position !== "fixed") continue;
+    const position = win.getComputedStyle(el).position;
+    if (!isModal && position !== "fixed" && position !== "sticky") continue;
     const rect = el.getBoundingClientRect();
     const coverage =
       (Math.min(rect.width, vw) * Math.min(rect.height, vh)) / (vw * vh);
-    if (isModal || coverage >= 0.25) el.remove();
+    if (isModal || (position === "fixed" && coverage >= 0.25)) el.remove();
+    else el.style.setProperty("position", "static", "important");
   }
   for (const el of [doc.documentElement, doc.body]) {
     const { overflow, overflowY } = win.getComputedStyle(el);
     if (overflow === "hidden" || overflowY === "hidden") {
       el.style.setProperty("overflow", "visible", "important");
     }
+  }
+  // The blank sweep runs after the demotions, on layout as it now stands.
+  // Text and media checks come first — they're cheap and spare a computed
+  // style on almost every element.
+  for (const el of Array.from(doc.body.querySelectorAll<HTMLElement>("*"))) {
+    if (!el.isConnected) continue;
+    if (el.textContent?.trim()) continue;
+    // matches() as well as querySelector(): a bare <img> is itself media,
+    // and querySelector only looks at descendants.
+    const media = "img, svg, picture, video, canvas, embed, object";
+    if (el.matches(media) || el.querySelector(media)) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.height < 40 || rect.width < vw / 2) continue;
+    if (win.getComputedStyle(el).backgroundImage !== "none") continue;
+    el.remove();
   }
 }
 
