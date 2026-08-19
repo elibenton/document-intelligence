@@ -67,6 +67,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { smoothScrollIntoView } from "@/lib/smoothScroll";
 import { isAudioVideo } from "@/components/documents/docStatus";
 import { documentTitles } from "@/lib/documentTitle";
 import { isCsvDocument } from "@/lib/uploadTypes";
@@ -271,7 +272,7 @@ export default function DocumentPage({ id }: { id: string }) {
         `[data-page-number="${page}"]`
       );
       if (el) {
-        el.scrollIntoView({ block: "start" });
+        smoothScrollIntoView(el as HTMLElement, { block: "start" });
         clearInterval(timer);
       } else if (tries > 40) {
         clearInterval(timer);
@@ -1278,12 +1279,7 @@ export default function DocumentPage({ id }: { id: string }) {
                   {detections && detections.length > 0 && (
                     <VisualEvidenceList
                       detections={detections}
-                      onJumpToPage={(page) => {
-                        const el = window.document.querySelector(
-                          `[data-page-number="${page}"]`
-                        );
-                        el?.scrollIntoView({ block: "start" });
-                      }}
+                      onJumpToPage={scrollToPage}
                     />
                   )}
                   {document && (

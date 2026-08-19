@@ -22,6 +22,7 @@ import {
 } from "../../lib/pdfTextGeometry";
 import type { PageDims } from "./PersonHighlight";
 import { usePdfDocument } from "../../lib/pdfDocument";
+import { smoothScrollIntoView } from "../../lib/smoothScroll";
 import { PdfPageCanvas } from "./PdfPageCanvas";
 import {
   AnnotationComment,
@@ -523,12 +524,14 @@ export function PdfViewer({
     return 11 / 8.5;
   }, [pages]);
 
-  // Not smooth: pages below the proximity window mount their text layers as
-  // the animation crosses them, and the resulting reflow cancels the browser's
-  // smooth scroll partway. A jump from page 5 to page 9 simply never arrived —
-  // which read as "clicking the table of contents does nothing".
+  // smoothScrollIntoView, not native smooth scroll: pages mount their text
+  // layers as the animation crosses them, and the resulting reflow cancels
+  // scrollIntoView({ behavior: "smooth" }) partway — and shifts the layout
+  // under an instant jump, landing it on the wrong page. The helper re-aims
+  // at the page's live position every frame, so it survives both.
   const scrollToPage = useCallback((pageNumber: number) => {
-    pageRefs.current.get(pageNumber)?.scrollIntoView({ block: "start" });
+    const el = pageRefs.current.get(pageNumber);
+    if (el) smoothScrollIntoView(el, { block: "start" });
   }, []);
 
   useImperativeHandle(ref, () => ({ scrollToPage }), [scrollToPage]);

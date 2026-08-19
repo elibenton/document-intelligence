@@ -19,6 +19,7 @@ import {
   type AnnotationColor,
 } from "./annotationColors";
 import { useHighlightUndo } from "./useHighlightUndo";
+import { smoothScrollIntoView } from "@/lib/smoothScroll";
 import {
   buildTextIndex,
   quoteFromRange,
@@ -391,9 +392,9 @@ export function WebClipViewer({
   // bumps anchorVersion, which re-runs the positioning effect below.
   useEffect(() => {
     if (!activeDocId) return;
-    rangesRef.current
-      .get(activeDocId)
-      ?.startContainer.parentElement?.scrollIntoView({ block: "nearest" });
+    const passage = rangesRef.current.get(activeDocId)?.startContainer
+      .parentElement;
+    if (passage) smoothScrollIntoView(passage, { block: "nearest" });
   }, [activeDocId, frameGen]);
 
   useEffect(() => {
