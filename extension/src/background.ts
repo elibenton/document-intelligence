@@ -91,24 +91,6 @@ async function setStatus(status: ClipStatus): Promise<void> {
   }
 }
 
-const MAX_CLIPPED_URLS = 200;
-
-/** Remember what we clipped, so the popup can warn before a re-clip. */
-async function recordClip(url: string, documentId: string): Promise<void> {
-  const { clippedUrls } = await chrome.storage.local.get(["clippedUrls"]);
-  const map: Record<string, { at: number; documentId: string }> =
-    clippedUrls ?? {};
-  map[url] = { at: Date.now(), documentId };
-  const entries = Object.entries(map);
-  if (entries.length > MAX_CLIPPED_URLS) {
-    entries.sort((a, b) => b[1].at - a[1].at);
-    for (const [staleUrl] of entries.slice(MAX_CLIPPED_URLS)) {
-      delete map[staleUrl];
-    }
-  }
-  await chrome.storage.local.set({ clippedUrls: map });
-}
-
 async function capture(
   tabId: number,
   inlineImages: boolean
@@ -134,6 +116,7 @@ async function runClip(
   extras: {
     title?: string;
     projectId?: string;
+    force?: boolean;
   }
 ): Promise<void> {
   const settings = await getSettings();
@@ -163,6 +146,9 @@ async function runClip(
     // Per-clip project from the popup's dropdown; the server falls back to
     // the token's own project when absent.
     if (extras.projectId) payload.projectId = extras.projectId;
+    // Past the server's duplicate refusal: the popup warned, the user chose
+    // "Clip again".
+    if (extras.force) payload.force = true;
 
     await setStatus({ state: "uploading", tabId });
     const res = await fetch(`${settings.endpoint}/clip`, {
@@ -174,6 +160,21 @@ async function runClip(
       body: JSON.stringify(payload),
     });
 
+    if (res.status === 409) {
+      // Duplicate refused server-side (clipped from another machine, or a
+      // race). Surface the existing document so the popup can link to it.
+      const dup = (await res.json().catch(() => ({}))) as {
+        documentId?: string;
+        projectName?: string;
+      };
+      await setStatus({
+        state: "error",
+        message: `Already clipped${dup.projectName ? ` into ${dup.projectName}` : ""}. `,
+        documentId: dup.documentId,
+        tabId,
+      });
+      return;
+    }
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       const hint =
@@ -189,7 +190,6 @@ async function runClip(
     const captured = payload.metadata as
       | Record<string, string | undefined>
       | undefined;
-    await recordClip(payload.url as string, documentId);
     await setStatus({
       state: "done",
       documentId,
@@ -247,6 +247,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     void runClip(msg.tabId, {
       title: msg.title,
       projectId: typeof msg.projectId === "string" ? msg.projectId : undefined,
+      force: msg.force === true,
     });
     sendResponse({ started: true });
   }

@@ -1,4 +1,4 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 
@@ -34,6 +34,54 @@ function chunkIntoPages(markdown: string): string[] {
   return pages.length > 0 ? pages : [markdown.slice(0, PAGE_CHAR_LIMIT)];
 }
 
+/**
+ * Is this URL already clipped in any of the owner's projects? Powers the
+ * popup's re-clip warning (GET /clip/lookup) and the pre-storage duplicate
+ * refusal in POST /clip — both authenticated by the same bearer token, so
+ * this resolves it itself, like clipperTokens.projectsFor.
+ */
+export const lookupClipped = internalQuery({
+  args: { token: v.string(), url: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({
+      documentId: v.id("documents"),
+      projectId: v.id("projects"),
+      projectName: v.string(),
+      clippedAt: v.number(),
+    })
+  ),
+  handler: async (ctx, args) => {
+    if (!args.token) return null;
+    const row = await ctx.db
+      .query("clipperTokens")
+      .withIndex("by_token", (q) => q.eq("token", args.token))
+      .unique();
+    if (!row) return null;
+    const owned = await ctx.db
+      .query("projects")
+      .withIndex("by_owner", (q) => q.eq("ownerId", row.ownerId))
+      .collect();
+    for (const project of owned) {
+      const existing = await ctx.db
+        .query("documents")
+        .withIndex("by_project_sourceUrl", (q) =>
+          q.eq("projectId", project._id).eq("sourceUrl", args.url)
+        )
+        .first();
+      if (existing) {
+        return {
+          documentId: existing._id,
+          projectId: project._id,
+          projectName: project.name,
+          clippedAt: existing.uploadedAt,
+        };
+      }
+    }
+    return null;
+  },
+});
+
 export const createFromClip = internalMutation({
   args: {
     // Resolved from the caller's clipper token by http.ts /clip. Both are
@@ -55,12 +103,32 @@ export const createFromClip = internalMutation({
     excerpt: v.optional(v.string()),
     lang: v.optional(v.string()),
     ogImage: v.optional(v.string()),
+    // The user saw the popup's re-clip warning and chose "Clip again".
+    force: v.optional(v.boolean()),
   },
   returns: v.id("documents"),
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
     if (!project || project.ownerId !== args.ownerId) {
       throw new ConvexError("Clipper token no longer matches its project");
+    }
+
+    // Backstop against duplicates racing past the pre-storage check in
+    // http.ts /clip; same index, transactional this time.
+    if (!args.force) {
+      const existing = await ctx.db
+        .query("documents")
+        .withIndex("by_project_sourceUrl", (q) =>
+          q.eq("projectId", args.projectId).eq("sourceUrl", args.url)
+        )
+        .first();
+      if (existing) {
+        throw new ConvexError({
+          code: "duplicate_clip",
+          documentId: existing._id,
+          clippedAt: existing.uploadedAt,
+        });
+      }
     }
 
     const pageTexts = chunkIntoPages(args.articleMarkdown);

@@ -1,5 +1,6 @@
 import { registerStaticRoutes } from "@convex-dev/static-hosting";
 import { httpRouter } from "convex/server";
+import { ConvexError } from "convex/values";
 import { httpAction } from "./_generated/server";
 import { components, internal } from "./_generated/api";
 import { authComponent, createAuth } from "./auth";
@@ -115,6 +116,25 @@ http.route({
       ? b.tags.filter((t): t is string => typeof t === "string" && !!t.trim())
       : [];
     const notes = optionalString(b.notes);
+    const force = b.force === true;
+
+    // Refuse duplicates before storing any bytes (across all the owner's
+    // projects — the same scope the popup's warning checks). The mutation
+    // re-checks the target project transactionally as the race backstop.
+    if (!force) {
+      const existing = await ctx.runQuery(internal.clips.lookupClipped, {
+        token,
+        url: b.url,
+      });
+      if (existing) {
+        return jsonResponse(409, {
+          error: "This page is already clipped",
+          documentId: existing.documentId,
+          projectName: existing.projectName,
+          clippedAt: existing.clippedAt,
+        });
+      }
+    }
 
     // Store both artifacts: the archive is what humans view; the markdown is
     // what the AI pipeline (metadata pass, extraction) reads.
@@ -125,24 +145,42 @@ http.route({
       new Blob([b.articleMarkdown], { type: "text/markdown" })
     );
 
-    const documentId = await ctx.runMutation(internal.clips.createFromClip, {
-      projectId: resolved.projectId,
-      ownerId: resolved.ownerId,
-      title: b.title.trim(),
-      url: b.url,
-      storageId,
-      textStorageId,
-      articleMarkdown: b.articleMarkdown,
-      tags,
-      notes,
-      byline: optionalString(rawMeta.byline),
-      siteName: optionalString(rawMeta.siteName),
-      description: optionalString(rawMeta.description),
-      publishedAt: optionalString(rawMeta.publishedAt),
-      excerpt: optionalString(rawMeta.excerpt),
-      lang: optionalString(rawMeta.lang),
-      ogImage: optionalString(rawMeta.ogImage),
-    });
+    let documentId;
+    try {
+      documentId = await ctx.runMutation(internal.clips.createFromClip, {
+        projectId: resolved.projectId,
+        ownerId: resolved.ownerId,
+        title: b.title.trim(),
+        url: b.url,
+        force,
+        storageId,
+        textStorageId,
+        articleMarkdown: b.articleMarkdown,
+        tags,
+        notes,
+        byline: optionalString(rawMeta.byline),
+        siteName: optionalString(rawMeta.siteName),
+        description: optionalString(rawMeta.description),
+        publishedAt: optionalString(rawMeta.publishedAt),
+        excerpt: optionalString(rawMeta.excerpt),
+        lang: optionalString(rawMeta.lang),
+        ogImage: optionalString(rawMeta.ogImage),
+      });
+    } catch (e) {
+      // The mutation's transactional duplicate backstop (two clips racing).
+      const data =
+        e instanceof ConvexError && typeof e.data === "object" && e.data !== null
+          ? (e.data as Record<string, unknown>)
+          : null;
+      if (data?.code === "duplicate_clip") {
+        return jsonResponse(409, {
+          error: "This page is already clipped",
+          documentId: data.documentId,
+          clippedAt: data.clippedAt,
+        });
+      }
+      throw e;
+    }
 
     return jsonResponse(200, { documentId });
   }),
@@ -163,6 +201,29 @@ http.route({
       return jsonResponse(401, { error: "Invalid or missing clipper token" });
     }
     return jsonResponse(200, result);
+  }),
+});
+
+// GET /clip/lookup?url=… — has this URL already been clipped into any of the
+// owner's projects? Powers the popup's re-clip warning; same bearer token.
+http.route({
+  path: "/clip/lookup",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const auth = req.headers.get("Authorization") ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    if (!token) {
+      return jsonResponse(401, { error: "Invalid or missing clipper token" });
+    }
+    const url = new URL(req.url).searchParams.get("url") ?? "";
+    if (!/^https?:\/\//.test(url)) {
+      return jsonResponse(400, { error: "'url' must be an http(s) URL" });
+    }
+    const existing = await ctx.runQuery(internal.clips.lookupClipped, {
+      token,
+      url,
+    });
+    return jsonResponse(200, { existing });
   }),
 });
 

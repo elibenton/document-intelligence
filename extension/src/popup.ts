@@ -9,6 +9,23 @@ const reclipWarning = $<HTMLDivElement>("reclipWarning");
 const metaPreview = $<HTMLDListElement>("metaPreview");
 
 let activeTabId: number | undefined;
+let forceReclip = false;
+
+/** Append an "Open in Haystack" link for a documentId to `parent`. */
+function appendOpenLink(
+  parent: HTMLElement,
+  documentId: string,
+  text: string
+): void {
+  void chrome.storage.sync.get(["appBaseUrl"]).then(({ appBaseUrl }) => {
+    const base = ((appBaseUrl as string) ?? "http://localhost:5173").replace(/\/+$/, "");
+    const link = document.createElement("a");
+    link.href = `${base}/documents/${documentId}`;
+    link.target = "_blank";
+    link.textContent = text;
+    parent.appendChild(link);
+  });
+}
 
 function timeAgo(ms: number): string {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
@@ -63,20 +80,19 @@ function showStatus(status: {
     case "done": {
       statusEl.className = "ok";
       statusEl.textContent = "✓ Clipped! ";
-      void chrome.storage.sync.get(["appBaseUrl"]).then(({ appBaseUrl }) => {
-        const base = ((appBaseUrl as string) ?? "http://localhost:5173").replace(/\/+$/, "");
-        const link = document.createElement("a");
-        link.href = `${base}/documents/${status.documentId}`;
-        link.target = "_blank";
-        link.textContent = "Open in Haystack";
-        statusEl.appendChild(link);
-      });
+      if (status.documentId) {
+        appendOpenLink(statusEl, status.documentId, "Open in Haystack");
+      }
       if (status.meta) showMetaPreview(status.meta);
       break;
     }
     case "error":
       statusEl.className = "error";
       statusEl.textContent = status.message ?? "Something went wrong";
+      // A 409 duplicate refusal carries the existing document's id.
+      if (status.documentId) {
+        appendOpenLink(statusEl, status.documentId, "Open existing");
+      }
       break;
   }
 }
@@ -130,20 +146,44 @@ async function init(): Promise<void> {
   titleInput.value = tab.title ?? "";
   $<HTMLDivElement>("pageUrl").textContent = tab.url;
 
-  // Warn before clipping a page the user already clipped.
-  const { clippedUrls } = await chrome.storage.local.get(["clippedUrls"]);
-  const previous = (
-    clippedUrls as Record<string, { at: number; documentId: string }> | undefined
-  )?.[tab.url];
-  if (previous) {
-    reclipWarning.textContent = `⚠ Already clipped ${timeAgo(previous.at)} — clipping again creates a duplicate.`;
-    reclipWarning.hidden = false;
-    clipButton.textContent = "Clip again";
-  }
-
   // Resume in-flight/finished status if the popup was reopened
   const { clipStatus } = await chrome.storage.session.get(["clipStatus"]);
   if (clipStatus && clipStatus.tabId === activeTabId) showStatus(clipStatus);
+
+  void warnIfAlreadyClipped(tab.url);
+}
+
+/**
+ * Ask the server whether this URL is already clipped into any of the owner's
+ * projects. The server refuses duplicates (409) unless `force` is sent, so
+ * this both warns and arms the "Clip again" override.
+ */
+async function warnIfAlreadyClipped(url: string): Promise<void> {
+  const { endpoint } = await chrome.storage.sync.get(["endpoint"]);
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+  if (!endpoint || !apiKey) return;
+  try {
+    const res = await fetch(
+      `${endpoint as string}/clip/lookup?url=${encodeURIComponent(url)}`,
+      { headers: { Authorization: `Bearer ${apiKey as string}` } }
+    );
+    if (!res.ok) return;
+    const { existing } = (await res.json()) as {
+      existing: {
+        documentId: string;
+        projectName: string;
+        clippedAt: number;
+      } | null;
+    };
+    if (!existing) return;
+    forceReclip = true;
+    reclipWarning.textContent = `⚠ Already clipped into ${existing.projectName} ${timeAgo(existing.clippedAt)} — clipping again creates a duplicate. `;
+    appendOpenLink(reclipWarning, existing.documentId, "Open existing");
+    reclipWarning.hidden = false;
+    clipButton.textContent = "Clip again";
+  } catch {
+    /* offline or endpoint unreachable — clip proceeds; the server still refuses duplicates */
+  }
 }
 
 clipButton.addEventListener("click", () => {
@@ -157,6 +197,7 @@ clipButton.addEventListener("click", () => {
     tabId: activeTabId,
     title: titleInput.value,
     projectId,
+    force: forceReclip,
   });
   showStatus({ state: "capturing" });
 });
