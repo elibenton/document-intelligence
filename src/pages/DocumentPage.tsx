@@ -705,11 +705,11 @@ export default function DocumentPage({ id }: { id: string }) {
         onClose={mergeDnd.closeDialog}
       />
       {/* The underline is inset from both edges, matching the home page's
-          divider rules rather than running the full window width. Two rows:
-          the title row, then the source's own metadata line (ViewerMetaBar)
-          — the page-view tools float over the viewer's bottom edge instead. */}
-      <header className="relative flex shrink-0 flex-col justify-center gap-1.5 px-4 py-3 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
-        <div className="flex items-center gap-3">
+          divider rules rather than running the full window width. One row;
+          the title column stacks title, secondary line, and the source's
+          metadata line (ViewerMetaBar), all sharing the same left edge —
+          the page-view tools float over the viewer's bottom edge instead. */}
+      <header className="relative flex shrink-0 items-center gap-3 px-4 py-3 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
         <Link
           to={projectSlug ? `/p/${projectSlug}` : "/"}
           title="Back to project"
@@ -745,13 +745,31 @@ export default function DocumentPage({ id }: { id: string }) {
                 }
               />
             </h1>
-            {/* Web archives show their domain beneath the parsed title; docs
-                show the original filename (after a rename) and page count. */}
-            {secondaryLine && (
-              <p className="truncate text-sm leading-tight text-muted-foreground">
-                {secondaryLine}
-              </p>
-            )}
+            {/* Web archives show their domain (with the original a click
+                away) beneath the parsed title; docs show the original
+                filename (after a rename) and page count. */}
+            {isWebClip
+              ? clipDomain && (
+                  <p className="flex items-center gap-2 text-sm leading-tight text-muted-foreground">
+                    <span className="truncate">{clipDomain}</span>
+                    {document.sourceUrl && (
+                      <a
+                        href={document.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex shrink-0 items-center gap-1 transition-colors hover:text-foreground"
+                      >
+                        View original <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                  </p>
+                )
+              : secondaryLine && (
+                  <p className="truncate text-sm leading-tight text-muted-foreground">
+                    {secondaryLine}
+                  </p>
+                )}
+            <ViewerMetaBar document={document} />
           </div>
           <DocTypePills
             projectId={document.projectId}
@@ -762,16 +780,6 @@ export default function DocumentPage({ id }: { id: string }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {isWebClip && document.sourceUrl && (
-            <a
-              href={document.sourceUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              View original <ExternalLink className="size-3" />
-            </a>
-          )}
           {translationInProgress && (
             <span className="text-xs text-muted-foreground">Translating…</span>
           )}
@@ -817,8 +825,6 @@ export default function DocumentPage({ id }: { id: string }) {
             </div>
           )}
         </div>
-        </div>
-        <ViewerMetaBar document={document} />
       </header>
 
       <div className="min-h-0 flex-1 overflow-hidden">

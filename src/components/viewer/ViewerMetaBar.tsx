@@ -91,7 +91,11 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
       provenance={fact.provenance}
       candidates={fact.candidates}
       clearMode="clear"
-      renderValue={(value) => <span className="text-foreground">{value}</span>}
+      renderValue={(value) => (
+        <span>
+          author <span className="text-foreground">{value}</span>
+        </span>
+      )}
       onCommit={commitText("author")}
     />
   );
