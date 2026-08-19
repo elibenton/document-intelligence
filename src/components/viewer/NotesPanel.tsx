@@ -117,7 +117,9 @@ function NoteRow({
         onClick={onSelect}
         className="flex w-full flex-col items-start gap-1 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring rounded-md"
       >
-        <span className="flex w-full items-start gap-2">
+        {/* pr-8 keeps the quote clear of the hover trash button overlaid in
+            the row's top-right corner. */}
+        <span className="flex w-full items-start gap-2 pr-8">
           <span
             aria-hidden="true"
             className="mt-1 size-3 shrink-0 rounded-full ring-1 ring-inset ring-black/10"

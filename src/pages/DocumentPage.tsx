@@ -77,6 +77,9 @@ export default function DocumentPage({ id }: { id: string }) {
     documentId,
   });
   const detections = useQuery(api.detections.byDocument, { documentId });
+  // The same subscription the viewer and Notes panel already hold, so the tab
+  // count is free — Convex dedupes identical queries across components.
+  const annotations = useQuery(api.annotations.byDocument, { documentId });
   const translatedPages = useQuery(api.translations.pagesByDocument, {
     documentId,
   });
@@ -654,7 +657,15 @@ export default function DocumentPage({ id }: { id: string }) {
                 <div className="shrink-0 px-4 pt-3">
                   <TabsList className="w-full">
                     <TabsTrigger value="entities">Entities</TabsTrigger>
-                    <TabsTrigger value="notes">Notes</TabsTrigger>
+                    <TabsTrigger value="notes">
+                      Notes
+                      {/* Silent at zero, like the Library's Notes column. */}
+                      {(annotations?.length ?? 0) > 0 && (
+                        <span className="ml-1.5 text-xs font-normal tabular-nums text-muted-foreground">
+                          {annotations!.length}
+                        </span>
+                      )}
+                    </TabsTrigger>
                     <TabsTrigger value="info">Info</TabsTrigger>
                   </TabsList>
                 </div>
