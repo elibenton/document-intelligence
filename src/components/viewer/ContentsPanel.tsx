@@ -11,6 +11,7 @@ import {
   buildSearchIndex,
   normalizeQuery,
   searchIndex,
+  type SearchHit,
 } from "./blockSearch";
 
 interface ContentsPanelProps {
@@ -27,6 +28,8 @@ interface ContentsPanelProps {
   hitTime?: (hit: { blockId: string; blockOffset: number }) => number | undefined;
   /** Recordings: index of the TOC section the playhead is in (-1 = none). */
   activeSection?: number;
+  /** Web clips: jump to a search hit's own text instead of a page. */
+  onJumpToHit?: (hit: SearchHit) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
   /** The query came from clicking an entity in the details panel. */
@@ -49,6 +52,7 @@ export function ContentsPanel({
   onSeek,
   hitTime,
   activeSection,
+  onJumpToHit,
   searchQuery,
   onSearchChange,
   isEntitySearch,
@@ -96,6 +100,7 @@ export function ContentsPanel({
             onNavigate={onNavigate}
             onSeek={onSeek}
             hitTime={hitTime}
+            onJumpToHit={onJumpToHit}
           />
         ) : (
           <TableOfContents

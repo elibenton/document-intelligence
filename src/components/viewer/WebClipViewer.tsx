@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
 import { AlertCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -16,6 +24,7 @@ import { SelectionActions } from "./SelectionActions";
 import {
   ANNOTATION_COLORS,
   DEFAULT_ANNOTATION_COLOR,
+  annotationColor,
   type AnnotationColor,
 } from "./annotationColors";
 import { useHighlightUndo } from "./useHighlightUndo";
@@ -24,9 +33,16 @@ import {
   buildTextIndex,
   quoteFromRange,
   rangeFromQuote,
+  rangeFromSearchText,
   type QuoteAnchor,
   type TextIndex,
 } from "./webClipAnchoring";
+
+export interface WebClipViewerRef {
+  /** Scroll the archive to the passage matching a search hit. Candidates are
+   *  tried in order — the hit's snippet first, then its bare match text. */
+  scrollToText: (candidates: string[]) => void;
+}
 
 interface WebClipViewerProps {
   documentId: Id<"documents">;
@@ -41,6 +57,7 @@ interface WebClipViewerProps {
   penColor?: AnnotationColor | null;
   activeAnnotation?: ActiveAnnotation | null;
   onActiveAnnotationChange?: (next: ActiveAnnotation | null) => void;
+  ref?: Ref<WebClipViewerRef>;
 }
 
 // Not every stored blob is a styled single-file archive: older clippers
@@ -78,7 +95,10 @@ const HIGHLIGHT_CSS =
   ANNOTATION_COLORS.map(
     (c) => `::highlight(haystack-${c.key}) { background-color: ${c.fill}; }`
   ).join("\n") +
-  "\n::highlight(haystack-active) { text-decoration: underline 2px; }";
+  "\n::highlight(haystack-active) { text-decoration: underline 2px; }" +
+  // The transient flash a search-hit jump paints, so the eye lands on the
+  // passage and not just its neighborhood.
+  `\n::highlight(haystack-search) { background-color: ${annotationColor(DEFAULT_ANNOTATION_COLOR).fill}; }`;
 
 /** A drag's selection, awaiting the offer popover's verdict. */
 interface PendingNote {
@@ -122,6 +142,7 @@ export function WebClipViewer({
   penColor = null,
   activeAnnotation = null,
   onActiveAnnotationChange,
+  ref,
 }: WebClipViewerProps) {
   const [state, setState] = useState<
     { html: string } | { error: string } | null
@@ -192,6 +213,37 @@ export function WebClipViewer({
     () => (annotations ?? []).filter((a) => a.quote),
     [annotations]
   );
+
+  // Jump the archive to a search hit's passage: re-find the text (normalized,
+  // because block text and archive DOM spell whitespace differently), scroll
+  // to it, and flash it so the eye lands on the match and not just its
+  // neighborhood. The flash uses the same ::highlight machinery as the
+  // annotation stripes, cleared after a beat.
+  const searchFlashTimer = useRef(0);
+  const scrollToText = useCallback((candidates: string[]) => {
+    const frame = iframeRef.current;
+    const doc = frame?.contentDocument;
+    const win = frame?.contentWindow as
+      | (Window & typeof globalThis)
+      | null
+      | undefined;
+    if (!doc?.body || !win) return;
+    if (!indexRef.current) indexRef.current = buildTextIndex(doc);
+    const range = rangeFromSearchText(doc, indexRef.current, candidates);
+    const passage = range?.startContainer.parentElement;
+    if (!range || !passage) return;
+    smoothScrollIntoView(passage, { block: "start" });
+    const registry = win.CSS?.highlights;
+    if (registry) {
+      registry.set("haystack-search", new win.Highlight(range));
+      window.clearTimeout(searchFlashTimer.current);
+      searchFlashTimer.current = window.setTimeout(
+        () => registry.delete("haystack-search"),
+        2000
+      );
+    }
+  }, []);
+  useImperativeHandle(ref, () => ({ scrollToText }), [scrollToText]);
 
   // Once per load, before the text index is built: clear captured popups and
   // scroll locks. Declared ahead of the paint effect so removal has already

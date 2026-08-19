@@ -7,6 +7,8 @@
  * and the W3C annotation model use.
  */
 
+import { KEEP } from "../../../convex/nameMatch";
+
 export interface QuoteAnchor {
   exact: string;
   prefix?: string;
@@ -94,6 +96,53 @@ function positionAt(index: TextIndex, offset: number): { node: Text; offset: num
 /** Re-find a stored quote in the document and build a Range over it, or null
  *  when the text is no longer present (a different archive was stored, or the
  *  passage sat in content the index skips). */
+/** Lowercase-alphanumeric view of a string (blockSearch's normalization),
+ *  with each kept character mapped back to its source offset. Per-character
+ *  NFKC keeps that map exact when a ligature expands. */
+function normalizeChars(source: string): { norm: string; map: number[] } {
+  let norm = "";
+  const map: number[] = [];
+  for (let i = 0; i < source.length; i++) {
+    for (const char of source[i].normalize("NFKC")) {
+      if (!KEEP.test(char)) continue;
+      norm += char.toLowerCase();
+      map.push(i);
+    }
+  }
+  return { norm, map };
+}
+
+/**
+ * Find a passage by *normalized* text — for jumping to a search hit. The
+ * search panel's hits come from the extracted block text, whose whitespace
+ * and entity spellings drift from the archive DOM's, so the exact matching
+ * rangeFromQuote does would miss; here both sides reduce to lowercase
+ * alphanumerics first, the same normalization blockSearch matched with.
+ * Candidates are tried in order (snippet first — long enough to be unique —
+ * then the bare match text); the first one found wins.
+ */
+export function rangeFromSearchText(
+  doc: Document,
+  index: TextIndex,
+  candidates: string[]
+): Range | null {
+  const { norm, map } = normalizeChars(index.text);
+  for (const candidate of candidates) {
+    const wanted = normalizeChars(candidate).norm;
+    if (!wanted) continue;
+    const at = norm.indexOf(wanted);
+    if (at < 0) continue;
+    const from = positionAt(index, map[at]);
+    const to = positionAt(index, map[at + wanted.length - 1] + 1);
+    if (!from || !to) continue;
+    const range = doc.createRange();
+    range.setStart(from.node, from.offset);
+    range.setEnd(to.node, to.offset);
+    return range;
+  }
+  return null;
+}
+
 export function rangeFromQuote(
   doc: Document,
   index: TextIndex,

@@ -20,6 +20,9 @@ interface DocumentSearchProps {
   /** Recordings: the second a hit is spoken (word-accurate). With `onSeek`,
    *  switches the list to a flat, timestamp-addressed view. */
   hitTime?: (hit: SearchHit) => number | undefined;
+  /** Web clips: jump to the hit's own text instead of a page — the archive
+   *  is one nominal page, so page navigation has nowhere to go. */
+  onJumpToHit?: (hit: SearchHit) => void;
 }
 
 /**
@@ -34,6 +37,7 @@ export function DocumentSearch({
   onNavigate,
   onSeek,
   hitTime,
+  onJumpToHit,
 }: DocumentSearchProps) {
   // Hits arrive in reading order (searchBlocks), so a page's matches are
   // contiguous — grouping is a fold, not a sort.
@@ -106,7 +110,9 @@ export function DocumentSearch({
             {group.hits.map((hit) => (
               <button
                 key={hit.key}
-                onClick={() => onNavigate(displayPage)}
+                onClick={() =>
+                  onJumpToHit ? onJumpToHit(hit) : onNavigate(displayPage)
+                }
                 className="w-full px-3 py-1 text-left text-xs transition-colors hover:bg-accent"
               >
                 <p className="line-clamp-3 leading-relaxed text-foreground">

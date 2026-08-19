@@ -1,10 +1,13 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router";
 import {
+  ArrowLeft,
   ExternalLink,
   FileText,
-  Folder,
+  Film,
   Globe,
+  Image as ImageIcon,
+  Mic,
   RotateCw,
   Sparkles,
 } from "lucide-react";
@@ -17,7 +20,10 @@ import {
   type PdfViewerRef,
 } from "@/components/viewer/PdfViewer";
 import { ImageViewer } from "@/components/viewer/ImageViewer";
-import { WebClipViewer } from "@/components/viewer/WebClipViewer";
+import {
+  WebClipViewer,
+  type WebClipViewerRef,
+} from "@/components/viewer/WebClipViewer";
 import { CsvViewer } from "@/components/viewer/CsvViewer";
 import { TranslatedDocumentView } from "@/components/viewer/TranslatedDocumentView";
 import {
@@ -168,6 +174,7 @@ export default function DocumentPage({ id }: { id: string }) {
   );
   const viewerRef = useRef<PdfViewerRef | null>(null);
   const recordingRef = useRef<RecordingViewRef | null>(null);
+  const webClipRef = useRef<WebClipViewerRef | null>(null);
 
   const handleVisiblePageChange = useCallback((page: number) => {
     setCurrentPage(page);
@@ -815,6 +822,19 @@ export default function DocumentPage({ id }: { id: string }) {
                 onSeek={isRecording ? seekTo : undefined}
                 hitTime={segmentByBlockId ? hitTime : undefined}
                 activeSection={isRecording ? activeSection : undefined}
+                // The archive is one nominal page, so a hit jumps to its own
+                // text in the iframe rather than to a page. Snippet first —
+                // long enough to be unique — then the bare match; the
+                // normalized matcher ignores the ellipses.
+                onJumpToHit={
+                  isWebClip
+                    ? (hit) =>
+                        webClipRef.current?.scrollToText([
+                          hit.snippet,
+                          hit.matchText,
+                        ])
+                    : undefined
+                }
                 searchQuery={searchQuery}
                 onSearchChange={(q) => {
                   setSearchQuery(q);
@@ -851,6 +871,7 @@ export default function DocumentPage({ id }: { id: string }) {
             ) : url ? (
               isWebClip ? (
                 <WebClipViewer
+                  ref={webClipRef}
                   documentId={documentId}
                   url={url}
                   textUrl={document.textUrl}
