@@ -260,29 +260,9 @@ export default defineSchema({
         })
       )
     ),
-    // What the PDF file itself declares — Info-dictionary title/author and the
-    // document outline — committed at upload by nativeText.finishNativeIngest,
-    // already junk-filtered (pdfNativeMetadata.ts) and sanitized. Ground truth
-    // the model is then not asked to re-derive: understandingRequest omits the
-    // covered fields from the Analyze schema, and saveMetadataResult reads the
-    // values from here instead. Absent means the file declared nothing usable.
-    pdfMetadata: v.optional(
-      v.object({
-        title: v.optional(v.string()),
-        author: v.optional(v.string()),
-        tableOfContents: v.optional(
-          v.array(
-            v.object({
-              title: v.string(),
-              level: v.number(),
-              page: v.number(),
-            })
-          )
-        ),
-      })
-    ),
-    // What the FILE or SOURCE itself declared, for every media type —
-    // pdfMetadata generalized (that field is migrating into this one).
+    // What the FILE or SOURCE itself declared, for every media type — a
+    // PDF's Info title/author/CreationDate and outline, a clip's scraped
+    // byline/published date/site facts, a recording's container date.
     // Written once at ingest (or by the backfill), already sanitized; never
     // touched by Analyze or by a human edit, so it survives every override
     // and the edit UI can always offer the original back as a candidate.

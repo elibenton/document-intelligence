@@ -184,8 +184,7 @@ async function understandingRequest(
     /** Recording rather than paged document: the table of contents is asked
      *  for by start time in seconds instead of page number. */
     audio?: boolean;
-    /** What the file/source itself declared (documents.sourceMetadata; the
-     * legacy pdfMetadata is assignable during the migration window). Fields
+    /** What the file/source itself declared (documents.sourceMetadata). Fields
      * it covers are removed from the request — ground truth over inference;
      * saveMetadataResult reads them back in when persisting. */
     sourceMetadata?: Doc<"documents">["sourceMetadata"];
@@ -404,7 +403,7 @@ export const runAnalyze = internalAction({
         bypassCache: args.bypassCache,
         promptOverride: args.promptOverride,
         fileName: document.name,
-        sourceMetadata: document.sourceMetadata ?? document.pdfMetadata,
+        sourceMetadata: document.sourceMetadata,
         omitTableOfContents: document.mediaType === "webScrape",
         askCreatedDate:
           document.mediaType === "webScrape" &&
@@ -554,7 +553,7 @@ export const runPipeline = internalAction({
             log,
             bypassCache: args.bypassCache,
             fileName: document.name,
-            sourceMetadata: document.sourceMetadata ?? document.pdfMetadata,
+            sourceMetadata: document.sourceMetadata,
           });
           await ctx.runMutation(internal.processing.updateJobStatus, {
             documentId: args.documentId,
@@ -581,7 +580,7 @@ export const runPipeline = internalAction({
           audio: isRecording,
           // A partially-native PDF still preempts the fields its own file
           // metadata answers, even though the text goes through OCR.
-          sourceMetadata: document.sourceMetadata ?? document.pdfMetadata,
+          sourceMetadata: document.sourceMetadata,
           omitTableOfContents: document.mediaType === "webScrape",
           askCreatedDate:
             document.mediaType === "webScrape" &&

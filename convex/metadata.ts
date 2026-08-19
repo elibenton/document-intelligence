@@ -55,13 +55,12 @@ export const saveMetadataResult = internalMutation({
 
     const kindName = (parsed.primary_kind ?? "").trim().toLowerCase();
 
-    // What the file/source itself declared (documents.sourceMetadata; the
-    // legacy pdfMetadata during the migration window) outranks the model on
-    // the fields it covers — those fields were omitted from the request
-    // schema (NativeMetadataOmissions in analyzePrompt.ts), so the parsed
-    // response legitimately lacks them and the native value is the only one
-    // there is. Stored sanitized at commit, so it is used as-is here.
-    const native = document.sourceMetadata ?? document.pdfMetadata;
+    // What the file/source itself declared (documents.sourceMetadata)
+    // outranks the model on the fields it covers — those fields were omitted
+    // from the request schema (NativeMetadataOmissions in analyzePrompt.ts),
+    // so the parsed response legitimately lacks them and the native value is
+    // the only one there is. Stored sanitized at commit, so used as-is here.
+    const native = document.sourceMetadata;
 
     const toc = native?.tableOfContents?.length
       ? native.tableOfContents

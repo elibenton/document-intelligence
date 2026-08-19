@@ -163,7 +163,7 @@ const CITATION_RULE_TAIL =
  * title preempts display_title and the metadata title, an Info author preempts
  * the author field and citation contributors. Ground truth over inference, and
  * fewer billed output tokens. saveMetadataResult reads the native values back
- * in from documents.pdfMetadata, so the stored result stays complete.
+ * in from documents.sourceMetadata, so the stored result stays complete.
  *
  * With nothing omitted, both the prompt and the schema are byte-identical to
  * the shapes they have always had — they are vcache inputs, and a byte of
@@ -715,7 +715,7 @@ export function buildDocumentUnderstandingSchema(
   // declaration order encodes is untouched. `title` (the metadata blob's
   // "as written" title) travels with the Info title, and `contributors`
   // travels with the Info author — saveMetadataResult fills all of them back
-  // in from documents.pdfMetadata.
+  // in from documents.sourceMetadata.
   const properties = schema.properties as Record<string, unknown>;
   const dropped = new Set<string>();
   if (omit?.tableOfContents) {

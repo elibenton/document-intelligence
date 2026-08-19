@@ -380,38 +380,3 @@ export const backfillRelationshipProjectIds = internalMutation({
     return null;
   },
 });
-
-/**
- * Copy the legacy pdfMetadata block into the generalized sourceMetadata for
- * rows written before it existed. Pure DB copy — the storage-reading and
- * clip-re-run backfills live in backfillNode.ts / backfill.ts.
- *
- *   npx convex run migrations:backfillSourceMetadataFromPdf
- *
- * Rows whose displayName came from the native title cannot be re-stamped
- * "native" retroactively — a pre-widen native title stamped "ai" and is
- * indistinguishable from model output. Accepted; new ingests stamp correctly.
- */
-export const backfillSourceMetadataFromPdf = internalMutation({
-  args: { cursor: v.optional(v.union(v.string(), v.null())) },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("documents")
-      .paginate({ cursor: args.cursor ?? null, numItems: 200 });
-
-    for (const doc of page.page) {
-      if (!doc.pdfMetadata || doc.sourceMetadata) continue;
-      await ctx.db.patch(doc._id, { sourceMetadata: doc.pdfMetadata });
-    }
-
-    if (!page.isDone) {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.migrations.backfillSourceMetadataFromPdf,
-        { cursor: page.continueCursor }
-      );
-    }
-    return null;
-  },
-});

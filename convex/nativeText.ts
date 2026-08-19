@@ -202,7 +202,7 @@ export const finishNativeIngest = authedMutation({
     const author = cleanPdfAuthor(args.metadata?.author);
     const createdDate = cleanPdfDate(args.metadata?.creationDate, Date.now());
     // Page mode always sets `page`; the `?? 1` only narrows the type back to
-    // the page-required shape pdfMetadata declares.
+    // the page-required shape sourceMetadata declares.
     const tableOfContents = sanitizeTableOfContents(
       args.metadata?.tableOfContents,
       document.pageCount
@@ -212,17 +212,14 @@ export const finishNativeIngest = authedMutation({
       page: entry.page ?? 1,
     }));
     if (title || author || createdDate || tableOfContents.length > 0) {
-      const declared = {
-        title,
-        author,
-        tableOfContents:
-          tableOfContents.length > 0 ? tableOfContents : undefined,
-      };
       await ctx.db.patch(args.documentId, {
-        // Double-written until the pdfMetadata → sourceMetadata migration
-        // lands and the legacy field is stripped.
-        pdfMetadata: declared,
-        sourceMetadata: { ...declared, createdDate: createdDate ?? undefined },
+        sourceMetadata: {
+          title,
+          author,
+          tableOfContents:
+            tableOfContents.length > 0 ? tableOfContents : undefined,
+          createdDate: createdDate ?? undefined,
+        },
         ...(tableOfContents.length > 0 ? { tableOfContents } : {}),
         ...(createdDate
           ? {
