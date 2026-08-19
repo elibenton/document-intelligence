@@ -26,6 +26,7 @@ import { PdfPageCanvas } from "./PdfPageCanvas";
 import {
   AnnotationComment,
   AnnotationLayer,
+  HighlightActions,
   type ViewerAnnotation,
 } from "./AnnotationLayer";
 import {
@@ -246,6 +247,31 @@ interface HighlightSelection {
   /** Page units. */
   rects: TextBox[];
   blockIds: string[];
+  /**
+   * Existing highlights this selection overlaps. When set, text/rects/blockIds
+   * are already the union, and the commit folds into the first id instead of
+   * creating a second highlight over the same words.
+   */
+  mergeWith?: string[];
+}
+
+/**
+ * Which highlight has a popover open, and which one: the small add-note/delete
+ * offer (`note: false`), or the full comment card (`note: true`).
+ */
+export interface ActiveAnnotation {
+  id: string;
+  note: boolean;
+}
+
+/** Strict overlap — merely touching boxes don't count as the same highlight. */
+function rectsIntersect(a: TextBox, b: TextBox): boolean {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
 }
 
 function uniqueBlockIds(spans: Array<{ blockId: string }>): string[] {
@@ -275,9 +301,9 @@ interface PdfViewerProps {
    * `annotations.sectionTitle`.
    */
   sectionTitleForPage?: (pageNumber: number) => string | undefined;
-  /** The highlight whose comment box is open. Shared with the notes panel. */
-  activeAnnotationId?: string | null;
-  onActiveAnnotationChange?: (id: string | null) => void;
+  /** The highlight with a popover open. Shared with the notes panel. */
+  activeAnnotation?: ActiveAnnotation | null;
+  onActiveAnnotationChange?: (next: ActiveAnnotation | null) => void;
   /**
    * The armed highlighter color (HighlighterTool). While set, a selection
    * commits as a highlight of this color with no comment card afterwards.
@@ -296,7 +322,7 @@ export function PdfViewer({
   onVisiblePageChange,
   renderOverlay,
   sectionTitleForPage,
-  activeAnnotationId = null,
+  activeAnnotation: activeState = null,
   onActiveAnnotationChange,
   penColor = null,
   ref,
@@ -326,11 +352,12 @@ export function PdfViewer({
   }, [annotations]);
 
   const activeAnnotation =
-    annotations?.find((a) => a._id === activeAnnotationId) ?? null;
+    annotations?.find((a) => a._id === activeState?.id) ?? null;
 
+  // A click on a highlight opens the small actions offer, not the full card.
   const handleActivate = useCallback(
     (id: string | null) => {
-      onActiveAnnotationChange?.(id);
+      onActiveAnnotationChange?.(id ? { id, note: false } : null);
     },
     [onActiveAnnotationChange]
   );
@@ -345,30 +372,46 @@ export function PdfViewer({
   );
   const recordCreated = useHighlightUndo(undoRemove);
 
-  // A finished selection commits straight to a highlight. With the pen armed
-  // that is the whole gesture; a normal drag also opens the comment card on
-  // the fresh highlight, so a note is one drag and typing away. The native
-  // selection is left standing so ⌘C still copies what was just dragged.
+  // A finished selection commits straight to a highlight — folded into an
+  // existing one when it overlaps, created fresh otherwise. With the pen armed
+  // that is the whole gesture; a normal drag also opens the add-note/delete
+  // offer on the result. The native selection is left standing so ⌘C still
+  // copies what was just dragged.
+  const mergeAnnotations = useMutation(api.annotations.merge);
   const handleSelection = useCallback(
     (selection: HighlightSelection) => {
       onActiveAnnotationChange?.(null);
       void (async () => {
-        const id = await createAnnotation({
-          documentId,
-          pageNumber: selection.pageNumber - 1,
-          color: penColor ?? DEFAULT_ANNOTATION_COLOR,
-          text: selection.text,
-          sectionTitle: sectionTitleForPage?.(selection.pageNumber - 1),
-          rects: selection.rects,
-          blockIds: selection.blockIds,
-        });
-        recordCreated(id);
-        if (!penColor) onActiveAnnotationChange?.(id);
+        let id: string;
+        if (selection.mergeWith?.length) {
+          id = await mergeAnnotations({
+            id: selection.mergeWith[0] as Id<"annotations">,
+            absorb: selection.mergeWith.slice(1) as Id<"annotations">[],
+            text: selection.text,
+            rects: selection.rects,
+            blockIds: selection.blockIds,
+          });
+        } else {
+          id = await createAnnotation({
+            documentId,
+            pageNumber: selection.pageNumber - 1,
+            color: penColor ?? DEFAULT_ANNOTATION_COLOR,
+            text: selection.text,
+            sectionTitle: sectionTitleForPage?.(selection.pageNumber - 1),
+            rects: selection.rects,
+            blockIds: selection.blockIds,
+          });
+          // Only fresh highlights join the ⌘Z stack: undoing a merge would
+          // delete the survivor outright, losing the pre-merge highlight too.
+          recordCreated(id);
+        }
+        if (!penColor) onActiveAnnotationChange?.({ id, note: false });
       })();
     },
     [
       createAnnotation,
       documentId,
+      mergeAnnotations,
       onActiveAnnotationChange,
       penColor,
       recordCreated,
@@ -609,7 +652,7 @@ export function PdfViewer({
                     }
                     onMarqueeSelectionChange={setMarqueeSelection}
                     annotations={annotationsByPage.get(pageNumber - 1) ?? []}
-                    activeAnnotationId={activeAnnotationId}
+                    activeAnnotationId={activeState?.id ?? null}
                     onActivateAnnotation={handleActivate}
                     onSelect={handleSelection}
                   />
@@ -626,8 +669,24 @@ export function PdfViewer({
         })}
       </div>
 
-      {/* Portalled out, so it escapes the page surface's zoom and rotation. */}
-      {activeAnnotation && (
+      {/* Portalled out, so they escape the page surface's zoom and rotation. */}
+      {activeAnnotation && !activeState?.note && (
+        <HighlightActions
+          key={activeAnnotation._id}
+          annotation={activeAnnotation}
+          onNote={() =>
+            onActiveAnnotationChange?.({ id: activeAnnotation._id, note: true })
+          }
+          onDelete={() => {
+            void removeAnnotation({
+              id: activeAnnotation._id as Id<"annotations">,
+            });
+            onActiveAnnotationChange?.(null);
+          }}
+          onDismiss={() => onActiveAnnotationChange?.(null)}
+        />
+      )}
+      {activeAnnotation && activeState?.note && (
         <AnnotationComment
           // Remount per highlight: the comment draft is seeded from the row.
           key={activeAnnotation._id}
@@ -806,6 +865,39 @@ function PageTextLayer({
     [localPoint, marqueeSelection, onMarqueeSelectionChange]
   );
 
+  /**
+   * The union of a selection with any existing highlights it overlaps, or
+   * null when it touches none. Overlap works at token granularity: the
+   * covered set is every token the selection or an overlapped highlight
+   * reaches, re-serialized in reading order — so a drag across the edge of
+   * a highlight grows it instead of stacking a second stripe on top.
+   */
+  const overlapUnion = useCallback(
+    (selectedIds: Set<string>) => {
+      const selectedBoxes = tokens.filter((token) => selectedIds.has(token.id));
+      const overlapped = annotations.filter((annotation) =>
+        annotation.rects.some((rect) =>
+          selectedBoxes.some((token) => rectsIntersect(rect, token.bbox))
+        )
+      );
+      if (overlapped.length === 0) return null;
+      const covered = tokens.filter(
+        (token) =>
+          selectedIds.has(token.id) ||
+          overlapped.some((annotation) =>
+            annotation.rects.some((rect) => rectsIntersect(rect, token.bbox))
+          )
+      );
+      return {
+        text: serializeTokens(covered),
+        rects: mergeSelectionRects(covered.map((token) => token.bbox)),
+        blockIds: uniqueBlockIds(covered),
+        mergeWith: overlapped.map((annotation) => annotation._id),
+      };
+    },
+    [annotations, tokens]
+  );
+
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const origin = dragOriginRef.current;
@@ -865,18 +957,24 @@ function PageTextLayer({
         text,
       });
       // A marquee is a text selection too, so it commits the same way.
-      onSelect({
-        pageNumber,
-        text,
-        rects: mergeSelectionRects(selected.map((token) => token.bbox)),
-        blockIds: uniqueBlockIds(selected),
-      });
+      const union = overlapUnion(new Set(selected.map((token) => token.id)));
+      onSelect(
+        union
+          ? { pageNumber, ...union }
+          : {
+              pageNumber,
+              text,
+              rects: mergeSelectionRects(selected.map((token) => token.bbox)),
+              blockIds: uniqueBlockIds(selected),
+            }
+      );
     },
     [
       localPoint,
       onActivateAnnotation,
       onSelect,
       onMarqueeSelectionChange,
+      overlapUnion,
       pageNumber,
       tokens,
     ]
@@ -922,14 +1020,21 @@ function PageTextLayer({
     const text = selectedPdfText(layer, selection);
     if (!text?.trim()) return false;
 
-    onSelect({
-      pageNumber,
-      text,
-      rects: mergeSelectionRects(spans.map((span) => span.pageRect)),
-      blockIds: uniqueBlockIds(spans),
-    });
+    // On overlap the union wins — including its whole-token boundaries, which
+    // beat keeping a partial word once two drags cover the same stretch.
+    const union = overlapUnion(new Set(spans.map((span) => span.id)));
+    onSelect(
+      union
+        ? { pageNumber, ...union }
+        : {
+            pageNumber,
+            text,
+            rects: mergeSelectionRects(spans.map((span) => span.pageRect)),
+            blockIds: uniqueBlockIds(spans),
+          }
+    );
     return true;
-  }, [onSelect, pageNumber, tokens]);
+  }, [onSelect, overlapUnion, pageNumber, tokens]);
 
   /** The highlight under a point, in page units. Topmost (newest) wins. */
   const annotationAt = useCallback(

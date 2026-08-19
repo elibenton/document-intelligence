@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  HANDLE_WIDTH,
   LEFT_MIN_WIDTH,
   SIDEBAR_MIN_WIDTH,
   resolvePanels,
@@ -20,12 +19,11 @@ const BASE = {
 const at = (containerWidth: number, overrides = {}) =>
   resolvePanels({ ...BASE, containerWidth, ...overrides });
 
-const GUTTERS = HANDLE_WIDTH * 2;
-/** Narrowest window that still fits both panels at their preferred widths. */
-const ROOMY = VIEWER_MIN_WIDTH + 300 + 380 + GUTTERS;
+/** Narrowest window that still fits both panels at their preferred widths.
+ *  The resize handles are overlays, so no gutters enter the math. */
+const ROOMY = VIEWER_MIN_WIDTH + 300 + 380;
 /** Narrowest window that still fits both panels at their minimums. */
-const BOTH_AT_MIN =
-  VIEWER_MIN_WIDTH + LEFT_MIN_WIDTH + SIDEBAR_MIN_WIDTH + GUTTERS;
+const BOTH_AT_MIN = VIEWER_MIN_WIDTH + LEFT_MIN_WIDTH + SIDEBAR_MIN_WIDTH;
 
 describe("resolvePanels", () => {
   it("leaves both panels at their preferred widths when there is room", () => {
@@ -37,7 +35,7 @@ describe("resolvePanels", () => {
       sidebarCollapsed: false,
       zoomFloor: 1,
     });
-    expect(layout.viewerWidth).toBe(ROOMY + 400 - GUTTERS - 680);
+    expect(layout.viewerWidth).toBe(ROOMY + 400 - 680);
   });
 
   it("holds the page at 100% before shrinking the panels", () => {
@@ -79,22 +77,21 @@ describe("resolvePanels", () => {
   });
 
   it("folds the right panel away next, and only then lets the page shrink", () => {
-    const stillFits = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH + GUTTERS);
+    const stillFits = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH);
     expect(stillFits.sidebarCollapsed).toBe(false);
     expect(stillFits.zoomFloor).toBe(1);
 
-    const layout = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH + GUTTERS - 1);
+    const layout = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH - 1);
     expect(layout.leftCollapsed).toBe(true);
     expect(layout.sidebarCollapsed).toBe(true);
     expect(layout.sidebarForced).toBe(true);
     expect(layout.zoomFloor).toBe(MIN_ZOOM);
-    // Everything but the two gutters.
     expect(layout.viewerWidth).toBe(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH - 1);
   });
 
   it("hands every remaining pixel to the viewer once both panels are folded", () => {
     const layout = at(600);
-    expect(layout.viewerWidth).toBe(600 - GUTTERS);
+    expect(layout.viewerWidth).toBe(600);
     expect(layout.zoomFloor).toBe(MIN_ZOOM);
   });
 
@@ -106,7 +103,7 @@ describe("resolvePanels", () => {
   });
 
   it("re-opens a pinned panel at its minimum and lets the viewer overflow", () => {
-    const width = VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH + GUTTERS;
+    const width = VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH;
     const layout = at(width, { leftPinned: true });
     expect(layout.leftCollapsed).toBe(false);
     expect(layout.leftWidth).toBe(LEFT_MIN_WIDTH);
@@ -127,7 +124,7 @@ describe("resolvePanels", () => {
   });
 
   it("runs the same ladder with no left panel at all", () => {
-    const layout = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH + HANDLE_WIDTH - 1, {
+    const layout = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH - 1, {
       hasLeft: false,
     });
     expect(layout.leftWidth).toBe(0);

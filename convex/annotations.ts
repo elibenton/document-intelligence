@@ -31,6 +31,22 @@ function normalizeComment(comment: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function assertValidTimeRange(
+  timeRange: { start: number; end: number } | undefined
+) {
+  if (
+    timeRange !== undefined &&
+    !(
+      Number.isFinite(timeRange.start) &&
+      Number.isFinite(timeRange.end) &&
+      timeRange.start >= 0 &&
+      timeRange.end > timeRange.start
+    )
+  ) {
+    throw new Error("A time range must be a forward span of seconds");
+  }
+}
+
 /**
  * Every annotation on the document, in page order. The viewer groups by page
  * and the notes panel groups by section, so one document-wide subscription
@@ -72,17 +88,7 @@ export const create = authedMutation({
     if (args.rects.length === 0 && args.timeRange === undefined) {
       throw new Error("An annotation needs a rect or a time range to anchor to");
     }
-    if (
-      args.timeRange !== undefined &&
-      !(
-        Number.isFinite(args.timeRange.start) &&
-        Number.isFinite(args.timeRange.end) &&
-        args.timeRange.start >= 0 &&
-        args.timeRange.end > args.timeRange.start
-      )
-    ) {
-      throw new Error("A time range must be a forward span of seconds");
-    }
+    assertValidTimeRange(args.timeRange);
 
     const now = Date.now();
     return await ctx.db.insert("annotations", {
@@ -122,6 +128,60 @@ export const update = authedMutation({
         : { comment: normalizeComment(args.comment) }),
       updatedAt: Date.now(),
     });
+  },
+});
+
+/**
+ * Fold overlapping highlights into one. The survivor keeps its color and
+ * createdAt; absorbed comments are appended to its own so nothing typed is
+ * lost. The unioned geometry and text arrive from the viewer, which owns the
+ * pixels-to-page conversion — same contract as `create`.
+ */
+export const merge = authedMutation({
+  args: {
+    id: v.id("annotations"),
+    absorb: v.array(v.id("annotations")),
+    text: v.string(),
+    rects: v.array(rectValidator),
+    blockIds: v.array(v.string()),
+    timeRange: v.optional(v.object({ start: v.number(), end: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    const survivor = await requireAnnotation(ctx, args.id);
+    if (args.rects.length === 0 && args.timeRange === undefined) {
+      throw new Error("An annotation needs a rect or a time range to anchor to");
+    }
+    assertValidTimeRange(args.timeRange);
+
+    const comments = [survivor.comment];
+    for (const id of new Set(args.absorb)) {
+      if (id === args.id) {
+        throw new Error("A highlight cannot absorb itself");
+      }
+      const absorbed = await requireAnnotation(ctx, id);
+      // Rects are page-local coordinates, so a cross-page merge would leave
+      // the survivor's pageNumber describing another page's geometry.
+      if (
+        absorbed.documentId !== survivor.documentId ||
+        absorbed.pageNumber !== survivor.pageNumber
+      ) {
+        throw new Error("Merged highlights must share a page");
+      }
+      comments.push(absorbed.comment);
+      await ctx.db.delete(id);
+    }
+
+    await ctx.db.patch(args.id, {
+      text: args.text,
+      rects: args.rects,
+      blockIds: args.blockIds,
+      // Unconditional: the args are the complete new anchor (the XOR above
+      // asserts as much), and patching undefined clears a stale range.
+      timeRange: args.timeRange,
+      comment: normalizeComment(comments.filter(Boolean).join("\n")),
+      updatedAt: Date.now(),
+    });
+    return args.id;
   },
 });
 

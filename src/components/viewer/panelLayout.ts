@@ -18,7 +18,11 @@ import { MIN_ZOOM, VIEWER_MIN_WIDTH } from "./zoom";
 export const LEFT_MIN_WIDTH = 200;
 export const SIDEBAR_MIN_WIDTH = 260;
 
-/** The gutter between a floating panel and the viewer, and its drag target. */
+/**
+ * Hit-target width of the resize handle. The handle is an absolutely
+ * positioned overlay straddling the panel's hairline border, so it takes no
+ * layout width of its own — panels and viewer sit flush against each other.
+ */
 export const HANDLE_WIDTH = 10;
 
 export interface PanelLayoutInput {
@@ -126,8 +130,7 @@ export function resolvePanels(input: PanelLayoutInput): ResolvedPanels {
     };
   }
 
-  const gutters = ((hasLeft ? 1 : 0) + 1) * HANDLE_WIDTH;
-  const budget = Math.max(0, containerWidth - gutters);
+  const budget = Math.max(0, containerWidth);
   const panelBudget = budget - viewerMinWidth;
 
   let leftForced = false;

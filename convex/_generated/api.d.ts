@@ -52,6 +52,7 @@ import type * as nativeText from "../nativeText.js";
 import type * as ocrChecks from "../ocrChecks.js";
 import type * as ownership from "../ownership.js";
 import type * as pages from "../pages.js";
+import type * as pdfNativeMetadata from "../pdfNativeMetadata.js";
 import type * as processing from "../processing.js";
 import type * as processingControl from "../processingControl.js";
 import type * as processingJobs from "../processingJobs.js";
@@ -125,6 +126,7 @@ declare const fullApi: ApiFromModules<{
   ocrChecks: typeof ocrChecks;
   ownership: typeof ownership;
   pages: typeof pages;
+  pdfNativeMetadata: typeof pdfNativeMetadata;
   processing: typeof processing;
   processingControl: typeof processingControl;
   processingJobs: typeof processingJobs;

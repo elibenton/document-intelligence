@@ -23,6 +23,7 @@ import { SpeakerNamingDialog } from "./SpeakerNamingDialog";
 import { transcriptSignature } from "../../../convex/speakerSignature";
 import {
   AnnotationComment,
+  HighlightActions,
   type SelectionAnchor,
 } from "@/components/viewer/AnnotationLayer";
 import {
@@ -227,12 +228,15 @@ export const RecordingView = forwardRef<
   const createAnnotation = useMutation(api.annotations.create);
   const updateAnnotation = useMutation(api.annotations.update);
   const removeAnnotation = useMutation(api.annotations.remove);
-  // The comment card open on a just-created highlight. Transcript runs render
-  // inside each turn with no anchor node, so the card hangs from the
-  // selection's own viewport rect instead.
+  const mergeAnnotations = useMutation(api.annotations.merge);
+  // The popover open on a just-created highlight — the add-note/delete offer
+  // first, the comment card once asked for. Transcript runs render inside
+  // each turn with no anchor node, so both hang from the selection's own
+  // viewport rect instead.
   const [notePopup, setNotePopup] = useState<{
     id: string;
     anchor: SelectionAnchor;
+    note: boolean;
   } | null>(null);
 
   // ⌘Z deletes the last highlight this visit created; the catch swallows the
@@ -332,16 +336,60 @@ export const RecordingView = forwardRef<
         (_, i) => `transcript_seg${a.seg + i}`,
       ),
     };
-    // The selection commits straight to a highlight. Armed, the pen's color is
-    // the whole gesture; a normal drag also opens the comment card on the
-    // fresh highlight, anchored where the selection ended.
+    // The selection commits straight to a highlight — folded into any
+    // highlight whose time range it overlaps, created fresh otherwise. Armed,
+    // the pen's color is the whole gesture; a normal drag also opens the
+    // add-note/delete offer, anchored where the selection ended.
+    const overlapped = (annotations ?? []).filter(
+      (a) =>
+        a.timeRange &&
+        a.timeRange.start < note.timeRange.end &&
+        a.timeRange.end > note.timeRange.start
+    );
     void (async () => {
-      const id = await commitNote(note, penColor ?? DEFAULT_ANNOTATION_COLOR);
-      recordCreated(id);
+      let id: string;
+      if (overlapped.length > 0) {
+        // The union re-reads the words inside the merged span, so the stored
+        // text matches the widened anchor exactly.
+        const merged = {
+          start: Math.min(
+            note.timeRange.start,
+            ...overlapped.map((a) => a.timeRange!.start)
+          ),
+          end: Math.max(
+            note.timeRange.end,
+            ...overlapped.map((a) => a.timeRange!.end)
+          ),
+        };
+        const parts: string[] = [];
+        const segIds: string[] = [];
+        segments.forEach((seg, si) => {
+          const words = seg.words.filter(
+            (w) => w.end > merged.start && w.start < merged.end
+          );
+          if (words.length > 0) {
+            parts.push(words.map((w) => w.word).join(" "));
+            segIds.push(`transcript_seg${si}`);
+          }
+        });
+        id = await mergeAnnotations({
+          id: overlapped[0]._id,
+          absorb: overlapped.slice(1).map((a) => a._id),
+          text: parts.join(" "),
+          rects: [],
+          blockIds: segIds,
+          timeRange: merged,
+        });
+      } else {
+        id = await commitNote(note, penColor ?? DEFAULT_ANNOTATION_COLOR);
+        // Only fresh highlights join the ⌘Z stack: undoing a merge would
+        // delete the survivor outright, losing the pre-merge highlight too.
+        recordCreated(id);
+      }
       if (penColor) selection.removeAllRanges();
-      else setNotePopup({ id, anchor: note.anchor });
+      else setNotePopup({ id, anchor: note.anchor, note: false });
     })();
-  }, [segments, penColor, commitNote, recordCreated]);
+  }, [segments, annotations, penColor, commitNote, mergeAnnotations, recordCreated]);
 
   useImperativeHandle(ref, () => ({ seekTo }), [seekTo]);
 
@@ -543,6 +591,21 @@ export const RecordingView = forwardRef<
           if (!annotation) return null;
           const id = annotation._id;
           const dismiss = () => setNotePopup(null);
+          if (!notePopup.note) {
+            return (
+              <HighlightActions
+                key={id}
+                annotation={annotation}
+                anchorRect={notePopup.anchor}
+                onNote={() => setNotePopup({ ...notePopup, note: true })}
+                onDelete={() => {
+                  void removeAnnotation({ id });
+                  dismiss();
+                }}
+                onDismiss={dismiss}
+              />
+            );
+          }
           return (
             <AnnotationComment
               // Remount per highlight: the comment draft is seeded from the row.

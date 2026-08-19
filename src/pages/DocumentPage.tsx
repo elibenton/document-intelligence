@@ -6,6 +6,7 @@ import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
 import {
   PdfViewer,
+  type ActiveAnnotation,
   type PdfViewerRef,
 } from "@/components/viewer/PdfViewer";
 import { ImageViewer } from "@/components/viewer/ImageViewer";
@@ -103,11 +104,11 @@ export default function DocumentPage({ id }: { id: string }) {
     "translated"
   );
   const [hoveredEntity, setHoveredEntity] = useState<EntityHover | null>(null);
-  // Which highlight has its comment box open. Lives here because both the page
-  // and the notes list drive it — clicking a note opens the box on the page.
-  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(
-    null
-  );
+  // Which highlight has a popover open (and which one — the add-note/delete
+  // offer or the full comment card). Lives here because both the page and the
+  // notes list drive it — clicking a note opens the card on the page.
+  const [activeAnnotation, setActiveAnnotation] =
+    useState<ActiveAnnotation | null>(null);
   // The armed highlighter color, or null when the pen is away. Lives here
   // because the tool floats in the layout while the commit happens inside
   // whichever viewer (PDF or transcript) is mounted.
@@ -625,8 +626,8 @@ export default function DocumentPage({ id }: { id: string }) {
                   onVisiblePageChange={handleVisiblePageChange}
                   renderOverlay={renderOverlay}
                   sectionTitleForPage={sectionTitleForPage}
-                  activeAnnotationId={activeAnnotationId}
-                  onActiveAnnotationChange={setActiveAnnotationId}
+                  activeAnnotation={activeAnnotation}
+                  onActiveAnnotationChange={setActiveAnnotation}
                   penColor={penColor}
                 />
               ) : null
@@ -923,8 +924,12 @@ export default function DocumentPage({ id }: { id: string }) {
                 <div className="flex flex-col gap-4">
                   <NotesPanel
                     documentId={documentId}
-                    activeId={activeAnnotationId}
-                    onActivate={setActiveAnnotationId}
+                    activeId={activeAnnotation?.id ?? null}
+                    // From the notes list the intent is the note itself, so
+                    // activation opens the card, not the add-note offer.
+                    onActivate={(id) =>
+                      setActiveAnnotation(id ? { id, note: true } : null)
+                    }
                     onNavigate={scrollToPage}
                     onSeek={
                       isRecording

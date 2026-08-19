@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
-import { MessageSquare, Trash2 } from "lucide-react";
+import { MessageSquare, MessageSquarePlus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import { ANNOTATION_COLORS, annotationColor } from "./annotationColors";
 import type { AnnotationColor } from "./annotationColors";
@@ -114,6 +115,100 @@ export function AnnotationLayer({
 }
 
 /**
+ * Where a highlight's popovers hang from: its own `data-annotation-anchor`
+ * node, or a static viewport rect for highlights that have none (transcript
+ * runs render inside each turn, not in an AnnotationLayer). The DOM anchor is
+ * resolved lazily on every measurement because the span unmounts when its page
+ * leaves the viewer's proximity window; `data-anchor-hidden` covers that case.
+ */
+function useAnnotationAnchor(annotationId: string, anchorRect?: SelectionAnchor) {
+  const domAnchor = useCallback(
+    () =>
+      window.document.querySelector<HTMLElement>(
+        `[data-annotation-anchor="${annotationId}"]`
+      ),
+    [annotationId]
+  );
+  const virtualAnchor = useMemo(
+    () =>
+      anchorRect && {
+        getBoundingClientRect: () =>
+          new DOMRect(
+            anchorRect.left,
+            anchorRect.top,
+            anchorRect.right - anchorRect.left,
+            anchorRect.bottom - anchorRect.top
+          ),
+      },
+    [anchorRect]
+  );
+  return virtualAnchor ?? domAnchor;
+}
+
+/**
+ * The small offer that follows a highlight: add a note, or delete it. Shown
+ * after a fresh drag and on a click over an existing highlight — the full
+ * comment card only opens once the reader asks for the note, so a bare
+ * highlight stays a one-gesture act.
+ *
+ * `initialFocus={false}` for the same reason the old selection menu had it:
+ * stealing focus after every drag would collapse the text selection the
+ * reader may still want to ⌘C.
+ */
+export function HighlightActions({
+  annotation,
+  anchorRect,
+  onNote,
+  onDelete,
+  onDismiss,
+}: {
+  annotation: ViewerAnnotation;
+  anchorRect?: SelectionAnchor;
+  onNote: () => void;
+  onDelete: () => void;
+  onDismiss: () => void;
+}) {
+  const anchor = useAnnotationAnchor(annotation._id, anchorRect);
+  return (
+    <Popover
+      open
+      onOpenChange={(next) => {
+        if (!next) onDismiss();
+      }}
+    >
+      <PopoverContent
+        anchor={anchor}
+        side="bottom"
+        align="center"
+        sideOffset={8}
+        initialFocus={false}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.preventDefault()}
+        className="overflow-visible rounded-lg border bg-popover p-1.5 shadow-xl data-[anchor-hidden]:invisible"
+        aria-label="Highlight actions"
+      >
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={onNote} className="h-6 px-2">
+            <MessageSquarePlus className="size-3.5" />
+            {annotation.comment ? "Edit note" : "Add note"}
+          </Button>
+          <span className="h-5 w-px bg-border" aria-hidden="true" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onDelete}
+            className="h-6 px-2 text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 className="size-3.5" />
+            Delete
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
  * The comment box beside a highlight.
  *
  * Anchored to the highlight's own DOM node and portalled out: the page surface
@@ -147,34 +242,7 @@ export function AnnotationComment({
   const [draft, setDraft] = useState(annotation.comment ?? "");
 
   const annotationId = annotation._id;
-  // Resolved lazily on every measurement, because the anchor span unmounts
-  // when its page leaves the viewer's proximity window. `data-anchor-hidden`
-  // handles that case now; previously it was a null check plus a manual
-  // reposition on capture-phase scroll (the viewer scrolls inside its own
-  // container, so scroll never reaches window) and on resize — about 45 lines,
-  // re-run on every keystroke because `draft` was in the dependency array.
-  // floating-ui's autoUpdate covers all of it.
-  const domAnchor = useCallback(
-    () =>
-      window.document.querySelector<HTMLElement>(
-        `[data-annotation-anchor="${annotationId}"]`
-      ),
-    [annotationId]
-  );
-  const virtualAnchor = useMemo(
-    () =>
-      anchorRect && {
-        getBoundingClientRect: () =>
-          new DOMRect(
-            anchorRect.left,
-            anchorRect.top,
-            anchorRect.right - anchorRect.left,
-            anchorRect.bottom - anchorRect.top
-          ),
-      },
-    [anchorRect]
-  );
-  const anchor = virtualAnchor ?? domAnchor;
+  const anchor = useAnnotationAnchor(annotationId, anchorRect);
 
   const dirty = draft.trim() !== (annotation.comment ?? "").trim();
 
