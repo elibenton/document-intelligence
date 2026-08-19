@@ -4,6 +4,7 @@ import { Scissors } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
@@ -49,10 +50,10 @@ export default function ClipperTokenSettings() {
           </label>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Connect from the extension&rsquo;s options page — it signs you in
-            here and picks up its token automatically. Clips land in the
-            project chosen below, and their processing bills to your account.
-            Changing the project or revoking disconnects the extension until
-            you reconnect it.
+            here and picks up its token automatically. The popup picks a
+            project per clip; the one chosen below is its default. Processing
+            bills to your account. Changing the default or revoking
+            disconnects the extension until you reconnect it.
           </p>
           {projects.length === 0 ? (
             <p className="mt-3 text-xs text-muted-foreground">
@@ -61,20 +62,16 @@ export default function ClipperTokenSettings() {
           ) : (
             <>
               <div className="mt-3 flex max-w-md items-center gap-2">
-                <select
+                <Select
                   id="clipper-project"
-                  value={selectedProject ?? ""}
-                  onChange={(event) =>
-                    setProjectDraft(event.target.value as Id<"projects">)
-                  }
-                  className="h-9 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/30"
-                >
-                  {projects.map((project) => (
-                    <option key={project._id} value={project._id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
+                  value={selectedProject}
+                  onValueChange={setProjectDraft}
+                  items={projects.map((project) => ({
+                    value: project._id,
+                    label: project.name,
+                  }))}
+                  className="flex-1"
+                />
                 {token && (
                   <Button
                     size="sm"
@@ -83,7 +80,7 @@ export default function ClipperTokenSettings() {
                       void run(() => mint({ projectId: selectedProject! }))
                     }
                   >
-                    Move clips here
+                    Make default
                   </Button>
                 )}
                 {token && (

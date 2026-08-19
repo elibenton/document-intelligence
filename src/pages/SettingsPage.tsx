@@ -6,6 +6,7 @@ import { api } from "../../convex/_generated/api";
 import ClipperTokenSettings from "@/components/settings/ClipperTokenSettings";
 import ProviderAlert from "@/components/settings/ProviderAlert";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
 import { PageShell, SectionHeading } from "@/components/ui/page-shell";
@@ -70,18 +71,16 @@ export default function SettingsPage() {
                 <Skeleton className="mt-3 h-9 w-full max-w-sm" />
               ) : (
                 <div className="mt-3 flex max-w-md items-center gap-2">
-                  <select
+                  <Select
                     id="default-language"
                     value={languageDraft}
-                    onChange={(event) => setLanguageDraft(event.target.value)}
-                    className="h-9 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/30"
-                  >
-                    {INTERFAZE_LANGUAGES.map((language) => (
-                      <option key={language.code} value={language.code}>
-                        {language.name} ({language.code})
-                      </option>
-                    ))}
-                  </select>
+                    onValueChange={setLanguageDraft}
+                    items={INTERFAZE_LANGUAGES.map((language) => ({
+                      value: language.code,
+                      label: `${language.name} (${language.code})`,
+                    }))}
+                    className="flex-1"
+                  />
                   <Button
                     size="sm"
                     disabled={

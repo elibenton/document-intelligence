@@ -33,6 +33,7 @@ export default [
     ]),
     route("documents/:id", "pages/DocumentRoute.tsx"),
   ]),
+  route("__select-test", "pages/SelectKeyboardTestPage.tsx"),
   layout("layouts/SignedOutOnly.tsx", [
     route("signin", "pages/SignInPage.tsx"),
     route("signup", "pages/SignUpPage.tsx"),

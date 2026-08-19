@@ -5,6 +5,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { PageShell } from "@/components/ui/page-shell";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
@@ -95,7 +96,7 @@ export default function ClipperConnectPage() {
   return (
     <PageShell
       title="Connect the clipper"
-      subtitle="Link the browser extension to your account. Clips land in the project you pick, and their processing bills to you."
+      subtitle="Link the browser extension to your account. The project picked here is the default — the popup lets you choose per clip. Processing bills to you."
       width="prose"
     >
       {!extensionId ? (
@@ -119,23 +120,19 @@ export default function ClipperConnectPage() {
       ) : (
         <div className="max-w-md">
           <label htmlFor="connect-project" className="text-sm font-medium">
-            Clips go to
+            Default project
           </label>
           <div className="mt-2 flex items-center gap-2">
-            <select
+            <Select
               id="connect-project"
-              value={selectedProject ?? ""}
-              onChange={(event) =>
-                setProjectDraft(event.target.value as Id<"projects">)
-              }
-              className="h-9 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/30"
-            >
-              {projects.map((project) => (
-                <option key={project._id} value={project._id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+              value={selectedProject}
+              onValueChange={setProjectDraft}
+              items={projects.map((project) => ({
+                value: project._id,
+                label: project.name,
+              }))}
+              className="flex-1"
+            />
             <Button
               size="sm"
               disabled={state.phase === "working"}
