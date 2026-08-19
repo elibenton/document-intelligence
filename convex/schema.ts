@@ -12,10 +12,15 @@ import { v } from "convex/values";
  * object rather than a union of every value type; the property def that owns
  * the id parses them back.
  */
-const viewConfigValidator = v.object({
+// Exported so projectViews.ts validates against the same shape instead of
+// keeping a drifting copy.
+export const viewConfigValidator = v.object({
   visibleProperties: v.array(v.string()),
   groupBy: v.optional(v.string()),
-  groupSort: v.optional(v.string()), // "asc" | "desc" | "count"
+  groupSort: v.optional(v.string()), // "asc" | "desc" | "count" | "manual"
+  // Group keys, top to bottom — the order the user dragged the headings
+  // into. Read only while groupSort is "manual".
+  groupOrder: v.optional(v.array(v.string())),
   hideEmptyGroups: v.optional(v.boolean()),
   filters: v.array(
     v.object({

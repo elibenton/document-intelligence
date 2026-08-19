@@ -290,9 +290,21 @@ export function applyView<T>(
     .filter((group) => !hideEmpty || group.rows.length > 0);
 
   const groupSort = config.groupSort ?? "asc";
+  const manualOrder = config.groupOrder ?? [];
   groups = groups.sort((a, b) => {
     // The no-value bucket is not a value; it sits at the bottom regardless.
     if (a.isEmpty !== b.isEmpty) return a.isEmpty ? 1 : -1;
+    if (groupSort === "manual") {
+      // Placed groups keep the user's order; groups that appeared since the
+      // last drag follow them alphabetically rather than landing at random.
+      const aAt = manualOrder.indexOf(a.key);
+      const bAt = manualOrder.indexOf(b.key);
+      if (aAt !== -1 || bAt !== -1) {
+        if (aAt === -1) return 1;
+        if (bAt === -1) return -1;
+        return aAt - bAt;
+      }
+    }
     if (groupSort === "count") return b.rows.length - a.rows.length;
     const result = a.label.localeCompare(b.label, undefined, { numeric: true });
     return groupSort === "desc" ? -result : result;

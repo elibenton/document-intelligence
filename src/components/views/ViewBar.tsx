@@ -205,6 +205,7 @@ function GroupPanel<T>({
               { value: "asc", label: "A → Z" },
               { value: "desc", label: "Z → A" },
               { value: "count", label: "Most rows first" },
+              { value: "manual", label: "Manual — drag the headings" },
             ]}
           />
           <label className="mt-2 flex cursor-pointer items-center gap-1.5 rounded px-1 py-1 text-xs hover:bg-accent">

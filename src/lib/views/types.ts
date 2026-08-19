@@ -182,14 +182,21 @@ export interface SortDirective {
   direction: "asc" | "desc";
 }
 
-/** How the groups themselves are ordered. */
-export type GroupSort = "asc" | "desc" | "count";
+/** How the groups themselves are ordered. "manual" is the order the user
+ * dragged the headings into (see `groupOrder`). */
+export type GroupSort = "asc" | "desc" | "count" | "manual";
 
 export interface ViewConfig {
   /** Ordered — this is also the left-to-right order of the chips on a row. */
   visibleProperties: string[];
   groupBy?: string;
   groupSort?: GroupSort;
+  /**
+   * Group keys, top to bottom — written by dragging the group headings. Read
+   * only while `groupSort` is "manual", and deliberately kept when the user
+   * switches to another order, so returning to Manual restores their layout.
+   */
+  groupOrder?: string[];
   /**
    * Groups with no rows are dropped by default. Turning this off surfaces the
    * full set of buckets, which is how you see that nothing is "Government"

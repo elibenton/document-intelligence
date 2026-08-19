@@ -226,6 +226,59 @@ describe("applyView — grouping", () => {
     expect(result.groups.map((g) => g.key)).toEqual(["sf", "urgent", EMPTY_GROUP_KEY]);
   });
 
+  it("orders groups manually by groupOrder, empties still last", () => {
+    const result = applyView(
+      rows,
+      DEFS,
+      config({
+        groupBy: "tags",
+        groupSort: "manual",
+        groupOrder: ["urgent", "sf"],
+      })
+    );
+    expect(result.groups.map((g) => g.key)).toEqual([
+      "urgent",
+      "sf",
+      EMPTY_GROUP_KEY,
+    ]);
+  });
+
+  it("appends groups the manual order never placed, alphabetically", () => {
+    const result = applyView(
+      rows,
+      DEFS,
+      config({
+        groupBy: "tags",
+        groupSort: "manual",
+        groupOrder: ["urgent"],
+      })
+    );
+    // "sf" appeared after the last drag: it follows the placed groups
+    // rather than landing somewhere surprising.
+    expect(result.groups.map((g) => g.key)).toEqual([
+      "urgent",
+      "sf",
+      EMPTY_GROUP_KEY,
+    ]);
+  });
+
+  it("ignores groupOrder unless groupSort is manual", () => {
+    const result = applyView(
+      rows,
+      DEFS,
+      config({
+        groupBy: "tags",
+        groupSort: "asc",
+        groupOrder: ["urgent", "sf"],
+      })
+    );
+    expect(result.groups.map((g) => g.key)).toEqual([
+      "sf",
+      "urgent",
+      EMPTY_GROUP_KEY,
+    ]);
+  });
+
   it("sorts within groups, not just across them", () => {
     const unsorted = [
       row("a", { category: "legal", pages: 9 }),

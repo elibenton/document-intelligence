@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type HTMLAttributes, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   readDisclosure,
@@ -25,6 +25,7 @@ export function ListGroup({
   onToggle,
   children,
   footer,
+  dragHandle,
 }: {
   label: string;
   count: number;
@@ -37,6 +38,16 @@ export function ListGroup({
   children: ReactNode;
   /** Rendered under a collapsed group — the starred-entity peek. */
   footer?: ReactNode;
+  /**
+   * Drag-to-reorder wiring from a parent sortable context. `summaryProps`
+   * spread onto the heading so a press-and-drag lifts the whole group (a
+   * plain click still toggles — the sensor's distance constraint separates
+   * the two); `grip` is the keyboard-operable handle at the heading's edge.
+   */
+  dragHandle?: {
+    summaryProps?: HTMLAttributes<HTMLElement>;
+    grip?: ReactNode;
+  };
 }) {
   // `defaultOpen` used to be passed straight into the controlled `open`
   // attribute, so a group that started open could never be closed. Hold the
@@ -63,12 +74,18 @@ export function ListGroup({
           onToggle?.(event.currentTarget.open);
         }}
       >
-        <summary className="flex cursor-pointer list-none items-center justify-between rounded-md px-1 py-1.5 -mx-1 transition-colors hover:bg-accent/50 [&::-webkit-details-marker]:hidden">
+        <summary
+          {...dragHandle?.summaryProps}
+          className="group/heading flex cursor-pointer list-none items-center justify-between rounded-md px-1 py-1.5 -mx-1 transition-colors hover:bg-accent/50 [&::-webkit-details-marker]:hidden"
+        >
           <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
             <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
             <span className="truncate">{label}</span>
           </span>
-          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{count}</span>
+          <span className="flex shrink-0 items-center gap-1">
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">{count}</span>
+            {dragHandle?.grip}
+          </span>
         </summary>
         <div className="flex flex-col pl-4">{children}</div>
       </details>

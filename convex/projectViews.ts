@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { authedMutation, authedQuery } from "./authz";
 import { requireProject } from "./ownership";
+import { viewConfigValidator } from "./schema";
 
 /**
  * Per-project list configuration: the Library and Entities views, and the
@@ -12,27 +13,6 @@ import { requireProject } from "./ownership";
  * sync, and a stale id is already handled gracefully (applyView skips filters
  * and sorts naming a property it doesn't recognize).
  */
-
-const viewConfigValidator = v.object({
-  visibleProperties: v.array(v.string()),
-  groupBy: v.optional(v.string()),
-  groupSort: v.optional(v.string()),
-  hideEmptyGroups: v.optional(v.boolean()),
-  filters: v.array(
-    v.object({
-      property: v.string(),
-      operator: v.string(),
-      value: v.optional(v.string()),
-      values: v.optional(v.array(v.string())),
-    })
-  ),
-  sorts: v.array(
-    v.object({
-      property: v.string(),
-      direction: v.string(),
-    })
-  ),
-});
 
 /** Null when the project has never been customized — the client uses defaults. */
 export const get = authedQuery({

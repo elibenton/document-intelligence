@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { useMutation, useQuery } from "convex/react";
 import { readDisclosure } from "@/hooks/usePersistedDisclosure";
 import { Link } from "react-router";
@@ -28,6 +35,7 @@ import {
 import SearchBar from "@/components/search/SearchBar";
 import { useSearchHotkey } from "@/components/search/useSearchHotkey";
 import { ListGroup } from "@/components/views/ListGroup";
+import { SortableGroupList } from "@/components/views/SortableGroupList";
 import { PropertyChips, type ChipCommit } from "@/components/views/PropertyChips";
 import { ViewBar } from "@/components/views/ViewBar";
 import { applyView, type ViewGroup } from "@/lib/views/applyView";
@@ -285,6 +293,7 @@ function EntityGroup({
   defs,
   forceOpen,
   grouped,
+  dragHandle,
 }: {
   group: ViewGroup<EntityRowType>;
   suggestions: MergeSuggestion[];
@@ -293,6 +302,7 @@ function EntityGroup({
   defs: PropertyDef<EntityRowType>[];
   forceOpen: boolean;
   grouped: boolean;
+  dragHandle?: ComponentProps<typeof ListGroup>["dragHandle"];
 }) {
   // Seeded from the persisted caret so the starred-peek footer agrees with
   // the ListGroup's restored state on first paint.
@@ -326,6 +336,7 @@ function EntityGroup({
       forceOpen={forceOpen}
       storageKey={`entities:${group.key}`}
       onToggle={setOpen}
+      dragHandle={dragHandle}
       footer={
         !forceOpen && !open && starred.length > 0 ? (
           <div className="flex flex-col pl-4">
@@ -575,6 +586,8 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
 
   const libraryGrouped = !!views.library.groupBy;
   const entitiesGrouped = !!views.entities.groupBy;
+
+
   // Filtering already narrowed the list to what was asked for; collapsing on
   // top of that would hide the answer.
   const libraryNarrowed =
@@ -727,24 +740,35 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                   </p>
                 ) : (
                   <div className="flex flex-col">
-                    {libraryResult.groups.map((group) =>
-                      libraryGrouped ? (
-                        <ListGroup
-                          key={group.key}
-                          label={group.label}
-                          count={group.rows.length}
-                          forceOpen={libraryNarrowed}
-                          storageKey={`library:${group.key}`}
-                          defaultOpen
-                        >
-                          {renderLibraryRows(group)}
-                        </ListGroup>
-                      ) : (
-                        <div key={group.key} className="flex flex-col">
-                          {renderLibraryRows(group)}
-                        </div>
-                      )
-                    )}
+                    <SortableGroupList
+                      groups={libraryResult.groups}
+                      enabled={libraryGrouped}
+                      onReorder={(groupOrder) =>
+                        views.setLibrary({
+                          ...views.library,
+                          groupSort: "manual",
+                          groupOrder,
+                        })
+                      }
+                      renderGroup={(group, dragHandle) =>
+                        libraryGrouped ? (
+                          <ListGroup
+                            label={group.label}
+                            count={group.rows.length}
+                            forceOpen={libraryNarrowed}
+                            storageKey={`library:${group.key}`}
+                            defaultOpen
+                            dragHandle={dragHandle}
+                          >
+                            {renderLibraryRows(group)}
+                          </ListGroup>
+                        ) : (
+                          <div className="flex flex-col">
+                            {renderLibraryRows(group)}
+                          </div>
+                        )
+                      }
+                    />
                   </div>
                 )}
               </div>
@@ -781,18 +805,29 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                   </p>
                 ) : (
                   <div className="flex flex-col gap-1">
-                    {entityResult.groups.map((group) => (
-                      <EntityGroup
-                        key={group.key}
-                        group={group}
-                        suggestions={suggestionsByGroup.get(group.key) ?? []}
-                        projectId={projectId}
-                        visibleProperties={views.entities.visibleProperties}
-                        defs={entityDefs}
-                        forceOpen={entitiesNarrowed}
-                        grouped={entitiesGrouped}
-                      />
-                    ))}
+                    <SortableGroupList
+                      groups={entityResult.groups}
+                      enabled={entitiesGrouped}
+                      onReorder={(groupOrder) =>
+                        views.setEntities({
+                          ...views.entities,
+                          groupSort: "manual",
+                          groupOrder,
+                        })
+                      }
+                      renderGroup={(group, dragHandle) => (
+                        <EntityGroup
+                          group={group}
+                          suggestions={suggestionsByGroup.get(group.key) ?? []}
+                          projectId={projectId}
+                          visibleProperties={views.entities.visibleProperties}
+                          defs={entityDefs}
+                          forceOpen={entitiesNarrowed}
+                          grouped={entitiesGrouped}
+                          dragHandle={dragHandle}
+                        />
+                      )}
+                    />
                   </div>
                 )}
               </div>
