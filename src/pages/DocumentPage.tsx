@@ -1,6 +1,13 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router";
-import { ExternalLink, FileText, Folder, Globe, Sparkles } from "lucide-react";
+import {
+  ExternalLink,
+  FileText,
+  Folder,
+  Globe,
+  RotateCw,
+  Sparkles,
+} from "lucide-react";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
@@ -30,8 +37,6 @@ import { ContentsPanel } from "@/components/viewer/ContentsPanel";
 import { NotesPanel } from "@/components/viewer/NotesPanel";
 import { buildTocHeaders, sectionForPage } from "@/components/viewer/tocHeaders";
 import { ZoomControl } from "@/components/viewer/ZoomControl";
-import { HighlighterTool } from "@/components/viewer/HighlighterTool";
-import type { AnnotationColor } from "@/components/viewer/annotationColors";
 import { useViewerZoom } from "@/components/viewer/useViewerZoom";
 import { PageOverlays } from "@/components/viewer/PageOverlays";
 import {
@@ -139,11 +144,6 @@ export default function DocumentPage({ id }: { id: string }) {
   // notes list drive it — clicking a note opens the card on the page.
   const [activeAnnotation, setActiveAnnotation] =
     useState<ActiveAnnotation | null>(null);
-  // The armed highlighter color, or null when the pen is away. Lives here
-  // because the tool floats in the layout while the commit happens inside
-  // whichever viewer (PDF or transcript) is mounted.
-  const [penColor, setPenColor] = useState<AnnotationColor | null>(null);
-
   // Drag-to-merge in the entity sidebar: dropping one row on another opens
   // the same survivor picker the merge queue uses. Shared machinery with the
   // project page's Entities panel (useEntityMergeDnd).
@@ -512,6 +512,18 @@ export default function DocumentPage({ id }: { id: string }) {
 
   const titles = documentTitles(document);
   const titleFacts = buildDocumentFacts(document).title;
+  // Web archives lead with the parsed title, and the address itself sits on
+  // the secondary line — host + path, without scheme/query noise.
+  const clipShortUrl = (() => {
+    if (!isWebClip || !document.sourceUrl) return null;
+    try {
+      const parsed = new URL(document.sourceUrl);
+      const path = parsed.pathname.replace(/\/$/, "");
+      return parsed.hostname.replace(/^www\./, "") + path;
+    } catch {
+      return null;
+    }
+  })();
   const hasBlocks = blocks && blocks.some((b) => b.bbox);
   const isParsed =
     document.status === "parsed" ||
@@ -528,6 +540,77 @@ export default function DocumentPage({ id }: { id: string }) {
   // Build the overlay render function
   const activeSearch = searchQuery.trim().length >= 2 ? searchQuery.trim() : null;
   const overlayTerm = activeSearch;
+
+  // The view-controls chip floating at the viewer's bottom center — zoom and
+  // the page counter, the clip's archive/text toggle, rotate, and the block
+  // overlay: everything that changes how the page is drawn, nothing that
+  // changes the document. Undefined when a media type has none, so the chip
+  // itself doesn't render.
+  const viewerTools =
+    isPdfDocument || (isWebClip && document.textUrl) ? (
+      <>
+        {isPdfDocument && (
+          <ZoomControl
+            zoom={zoom}
+            onZoomChange={chooseZoom}
+            onFitWidth={fitToWidth}
+            currentPage={currentPage}
+            totalPages={totalPages ?? 0}
+          />
+        )}
+        {isWebClip && document.textUrl && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              setClipView((v) => (v === "archive" ? "text" : "archive"))
+            }
+          >
+            {clipView === "archive" ? (
+              <>
+                <FileText className="size-3.5" />
+                Text view
+              </>
+            ) : (
+              <>
+                <Globe className="size-3.5" />
+                Archive view
+              </>
+            )}
+          </Button>
+        )}
+        {isPdfDocument && (
+          <>
+            <span className="h-4 w-px bg-border" aria-hidden="true" />
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Rotate all pages"
+              onClick={() =>
+                void rotateDocument({ id: documentId, degrees: 90 })
+              }
+            >
+              <RotateCw className="size-3.5" />
+              Rotate
+            </Button>
+            {hasBlocks && (
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-pressed={showBlocks}
+                title={
+                  showBlocks ? "Hide detected blocks" : "Show detected blocks"
+                }
+                onClick={() => setShowBlocks((v) => !v)}
+                className={cn(showBlocks && "bg-accent text-foreground")}
+              >
+                Blocks
+              </Button>
+            )}
+          </>
+        )}
+      </>
+    ) : undefined;
 
   // Each rendered page fetches its own full blocks (with word-level boxes)
   // inside PageOverlays — the page-level `blocks` subscription stays light.
@@ -577,8 +660,11 @@ export default function DocumentPage({ id }: { id: string }) {
         onClose={mergeDnd.closeDialog}
       />
       {/* The underline is inset from both edges, matching the home page's
-          divider rules rather than running the full window width. */}
-      <header className="relative flex h-14 shrink-0 items-center gap-3 px-3 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
+          divider rules rather than running the full window width. Two rows:
+          the title row, then the source's own metadata line (ViewerMetaBar)
+          — the page-view tools float over the viewer's bottom edge instead. */}
+      <header className="relative flex shrink-0 flex-col justify-center gap-1 px-3 py-2 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
+        <div className="flex items-center gap-3">
         <Link
           to={projectSlug ? `/p/${projectSlug}` : "/"}
           title="Back to project"
@@ -610,9 +696,11 @@ export default function DocumentPage({ id }: { id: string }) {
                 }
               />
             </h1>
-            {titles.original && (
+            {/* Web archives show their address beneath the parsed title;
+                everything else shows the original filename after a rename. */}
+            {(clipShortUrl ?? titles.original) && (
               <p className="truncate text-xs leading-tight text-muted-foreground">
-                {titles.original}
+                {clipShortUrl ?? titles.original}
               </p>
             )}
           </div>
@@ -625,31 +713,6 @@ export default function DocumentPage({ id }: { id: string }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {/* The working tools live here now rather than floating over the
-              viewer: highlighter, then zoom + page counter, quietly right of
-              the title. Pipeline status lives at the top of the Details
-              column, where a step list has the room a header bar doesn't. */}
-          {isWebClip && document.textUrl && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() =>
-                setClipView((v) => (v === "archive" ? "text" : "archive"))
-              }
-            >
-              {clipView === "archive" ? (
-                <>
-                  <FileText className="size-3.5" />
-                  Text view
-                </>
-              ) : (
-                <>
-                  <Globe className="size-3.5" />
-                  Archive view
-                </>
-              )}
-            </Button>
-          )}
           {isWebClip && document.sourceUrl && (
             <a
               href={document.sourceUrl}
@@ -659,18 +722,6 @@ export default function DocumentPage({ id }: { id: string }) {
             >
               View original <ExternalLink className="size-3" />
             </a>
-          )}
-          {(isPdfDocument || isRecording || isWebClip) && (
-            <HighlighterTool color={penColor} onChange={setPenColor} />
-          )}
-          {isPdfDocument && (
-            <ZoomControl
-              zoom={zoom}
-              onZoomChange={chooseZoom}
-              onFitWidth={fitToWidth}
-              currentPage={currentPage}
-              totalPages={totalPages ?? 0}
-            />
           )}
           {translationInProgress && (
             <span className="text-xs text-muted-foreground">Translating…</span>
@@ -717,6 +768,8 @@ export default function DocumentPage({ id }: { id: string }) {
             </div>
           )}
         </div>
+        </div>
+        <ViewerMetaBar document={document} />
       </header>
 
       <div className="min-h-0 flex-1 overflow-hidden">
@@ -729,6 +782,7 @@ export default function DocumentPage({ id }: { id: string }) {
           // for them — remembered separately from the paged-document layout.
           storageKey={isWebClip ? "viewer-layout-webclip" : undefined}
           defaultLeftCollapsed={isWebClip}
+          tools={viewerTools}
           left={
             showContentsTab ? (
               <div className="h-full overflow-hidden">
@@ -758,9 +812,7 @@ export default function DocumentPage({ id }: { id: string }) {
             // justify-center pane, and without a width it collapses to its
             // content's intrinsic width — an iframe's is 300px, which
             // rendered archived pages at their mobile breakpoint.
-            <div className="flex h-full w-full min-w-0 flex-col">
-              <ViewerMetaBar document={document} />
-              <div className="min-h-0 flex-1">
+            <div className="h-full w-full min-w-0">
             {isRecording ? (
               <RecordingView
                 ref={recordingRef}
@@ -769,7 +821,7 @@ export default function DocumentPage({ id }: { id: string }) {
                 showTranslation={
                   hasTranslatedContent && languageView === "translated"
                 }
-                penColor={penColor}
+                penColor={null}
                 sectionTimes={sectionTimes}
                 onActiveSectionChange={setActiveSection}
                 searchTerm={activeSearch ?? undefined}
@@ -783,7 +835,7 @@ export default function DocumentPage({ id }: { id: string }) {
                   url={url}
                   textUrl={document.textUrl}
                   view={clipView}
-                  penColor={penColor}
+                  penColor={null}
                   activeAnnotation={activeAnnotation}
                   onActiveAnnotationChange={setActiveAnnotation}
                 />
@@ -808,7 +860,7 @@ export default function DocumentPage({ id }: { id: string }) {
                   sectionTitleForPage={sectionTitleForPage}
                   activeAnnotation={activeAnnotation}
                   onActiveAnnotationChange={setActiveAnnotation}
-                  penColor={penColor}
+                  penColor={null}
                 />
               ) : null
             ) : (
@@ -817,31 +869,19 @@ export default function DocumentPage({ id }: { id: string }) {
                 <p className="text-sm text-muted-foreground">Loading document…</p>
               </div>
             )}
-              </div>
             </div>
           }
           sidebar={
             <div className="flex h-full flex-col overflow-hidden">
-              {/* Pipeline status while the document is still cooking (and any
-                  failure needing a retry). Compact renders the bare step
-                  list — no card — and nothing at all once processing is
-                  cleanly done; empty:hidden folds the section away with it. */}
-              <div className="shrink-0 border-b px-4 py-3 empty:hidden">
-                <PipelineProgress document={document} compact />
-              </div>
-              {/* The description is the only thing pinned above the tabs now —
-                  identity (name, kind) moved to the title bar's pill + ⋮ menu,
-                  and tags/extracted-metadata detail moved into the Info tab.
-                  DocumentSummary owns its own border/padding and renders
-                  nothing at all once there's no summary to show. */}
-              <DocumentSummary document={document} />
-
               <Tabs
                 defaultValue="entities"
                 className="flex min-h-0 flex-1 flex-col gap-0"
               >
-                <div className="shrink-0 px-4 pt-3">
-                  <TabsList className="w-full">
+                {/* The tabs sit at the very top of the column, drawn as a
+                    line of labels over a hairline rule rather than the
+                    segmented pill — the same quiet chrome as the header. */}
+                <div className="shrink-0 border-b px-2 pt-1.5">
+                  <TabsList variant="line" className="w-full">
                     <TabsTrigger value="entities">Entities</TabsTrigger>
                     <TabsTrigger value="notes">
                       Notes
@@ -854,6 +894,14 @@ export default function DocumentPage({ id }: { id: string }) {
                     </TabsTrigger>
                     <TabsTrigger value="info">Info</TabsTrigger>
                   </TabsList>
+                </div>
+                {/* Pipeline status while the document is still cooking (and
+                    any failure needing a retry) — pinned under the tab bar so
+                    it stays visible whichever tab is open. Compact renders
+                    the bare step list, and nothing once processing is cleanly
+                    done; empty:hidden folds the section away with it. */}
+                <div className="shrink-0 border-b px-4 py-3 empty:hidden">
+                  <PipelineProgress document={document} compact />
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <TabsContent value="entities">
@@ -1210,6 +1258,7 @@ export default function DocumentPage({ id }: { id: string }) {
               </TabsContent>
               <TabsContent value="info">
                 <div className="flex flex-col gap-4">
+                  <DocumentSummary document={document} />
                   {document && (
                     <div className="flex items-center justify-between rounded-md border px-2.5 py-1.5">
                       <span className="text-xs text-muted-foreground">
@@ -1275,48 +1324,6 @@ export default function DocumentPage({ id }: { id: string }) {
                   )}
 
                   <DocumentUsage documentId={documentId} />
-
-
-                  {/* Page-level view controls: not document properties, so
-                      they sit at the bottom rather than beside Name/Media. */}
-                  {isPdfDocument && (
-                    <div className="flex flex-col gap-1.5 border-t pt-3">
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        View
-                      </h4>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            void rotateDocument({ id: documentId, degrees: 90 })
-                          }
-                        >
-                          ↻ Rotate all pages
-                        </Button>
-                        {hasBlocks && (
-                          <Button
-                            variant={showBlocks ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => setShowBlocks((v) => !v)}
-                          >
-                            <svg
-                              width="16"
-                              height="16"
-                              viewBox="0 0 16 16"
-                              fill="none"
-                              className="mr-1.5"
-                            >
-                              <rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
-                              <rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
-                              <rect x="1" y="9" width="14" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" strokeDasharray={showBlocks ? undefined : "2 1.5"} />
-                            </svg>
-                            Blocks
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </div>
               </TabsContent>
                 </div>
@@ -1635,17 +1642,15 @@ function useExtractedMetadata(document: Doc<"documents">) {
 }
 
 /**
- * The only thing pinned above the tabs: Analyze's own description of the
- * document. Renders nothing — not even its border — until there is one, so a
- * document still being analyzed doesn't show an empty strip.
+ * Analyze's own description of the document, at the top of the Info tab.
+ * Renders nothing until there is one, so a document still being analyzed
+ * doesn't show an empty section.
  */
 function DocumentSummary({ document }: { document: Doc<"documents"> }) {
   const meta = useExtractedMetadata(document);
   if (!meta?.summary) return null;
   return (
-    // Never scrolls: a long description pushes the tabs down and the panel's
-    // own scroll area absorbs the difference.
-    <div className="shrink-0 border-b px-4 pt-3 pb-3">
+    <div>
       <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-foreground">
         Document Description
       </h2>

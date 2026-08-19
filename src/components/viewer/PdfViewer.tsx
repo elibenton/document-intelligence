@@ -309,8 +309,10 @@ interface PdfViewerProps {
   activeAnnotation?: ActiveAnnotation | null;
   onActiveAnnotationChange?: (next: ActiveAnnotation | null) => void;
   /**
-   * The armed highlighter color (HighlighterTool). While set, a selection
-   * commits as a highlight of this color with no comment card afterwards.
+   * An armed highlighter color. While set, a selection commits as a
+   * highlight of this color with no comment card afterwards. Nothing arms
+   * one today — the highlighter tool was retired; selections highlight
+   * through the selection popover instead.
    */
   penColor?: AnnotationColor | null;
   ref?: Ref<PdfViewerRef>;

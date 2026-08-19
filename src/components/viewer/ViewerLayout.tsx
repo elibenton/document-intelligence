@@ -15,6 +15,12 @@ interface ViewerLayoutProps {
   /** Label for the floating button that restores the left panel. */
   leftLabel?: string;
   viewer: React.ReactNode;
+  /**
+   * Page-view controls (zoom, view toggles) shown as a chip floating at the
+   * viewer's bottom center — the same surface as the minimized-panel chips
+   * that share that edge. Omitted, no chip renders.
+   */
+  tools?: React.ReactNode;
   sidebar: React.ReactNode;
   /** Label for the floating button that restores the right panel. */
   sidebarLabel?: string;
@@ -93,6 +99,7 @@ export function ViewerLayout({
   left,
   leftLabel = "Contents",
   viewer,
+  tools,
   sidebar,
   sidebarLabel = "Details",
   onViewerMetrics,
@@ -324,6 +331,18 @@ export function ViewerLayout({
           straight on the background. */}
       <div className="relative flex flex-1 min-w-0 justify-center overflow-hidden">
         {viewer}
+        {/* Page-view controls, centered on the viewer pane itself (not the
+            whole row) so they stay under the document as panels resize. */}
+        {tools && (
+          <div
+            className={cn(
+              FLOATING_SURFACE,
+              "absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-full px-1.5 py-1"
+            )}
+          >
+            {tools}
+          </div>
+        )}
       </div>
 
       {/* Sidebar — right. Same flat column, mirrored. */}
@@ -385,7 +404,7 @@ function FloatingPanelButton({
       aria-label={`Show ${label.toLowerCase()} panel`}
       className={cn(
         FLOATING_SURFACE,
-        "absolute top-3 z-30 flex items-center gap-2 rounded-full py-2.5",
+        "absolute bottom-3 z-30 flex items-center gap-2 rounded-full py-2.5",
         "text-sm font-medium text-foreground transition-colors hover:bg-accent",
         "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring",
         side === "left" ? "left-3 pl-3 pr-4" : "right-3 pl-4 pr-3"

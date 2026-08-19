@@ -12,12 +12,13 @@ import { formatDated } from "@/lib/documentDate";
 import { formatDuration } from "@/lib/duration";
 
 /**
- * The one metadata strip above every viewer: what the source says about
- * itself — byline, published/recorded/taken/created date, duration, pages —
- * every value hover-editable in place (editable.tsx), with provenance and
- * the retained native/AI candidates inside the open editor. Replaces the
- * per-viewer one-off bars; the values come from buildDocumentFacts, so the
- * bar never substitutes uploadedAt for a date the source didn't state.
+ * The one metadata line for every document: what the source says about
+ * itself — byline, published/recorded/taken/created date, the "about" date,
+ * duration, pages — every value hover-editable in place (editable.tsx), with
+ * provenance and the retained native/AI candidates inside the open editor.
+ * Rendered as the page header's second row (DocumentPage), so it carries no
+ * chrome of its own; the values come from buildDocumentFacts, so the line
+ * never substitutes uploadedAt for a date the source didn't state.
  */
 export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
   const setField = useMutation(api.documents.setField);
@@ -45,31 +46,43 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
         precision: next.precision ?? undefined,
       });
 
-  const dateFact = facts.createdDate;
-  const dateEditor = (
+  // The two dates share one editor shape: createdDate wears its per-media
+  // verb ("published", "recorded"…) and documentDate is always "about" —
+  // the same distinction the Info panel's microcopy spells out.
+  const labeledDateEditor = (
+    field: "createdDate" | "documentDate",
+    fact: MetadataFact,
+    label: string
+  ) => (
     <EditableDate
-      value={dateFact.value}
+      value={fact.value}
       display={
-        dateFact.value ? (
+        fact.value ? (
           <span>
-            {createdDateLabel(media).toLowerCase()}{" "}
+            {label}{" "}
             <span className="text-foreground">
               {formatDated({
-                value: dateFact.value,
-                precision: dateFact.precision ?? "day",
+                value: fact.value,
+                precision: fact.precision ?? "day",
               })}
             </span>
           </span>
         ) : null
       }
-      placeholder={`${createdDateLabel(media).toLowerCase()} —`}
-      label={`Edit ${createdDateLabel(media).toLowerCase()} date`}
-      provenance={dateFact.provenance}
-      candidates={dateFact.candidates}
+      placeholder={`${label} —`}
+      label={`Edit ${label === "about" ? "document" : label} date`}
+      provenance={fact.provenance}
+      candidates={fact.candidates}
       clearMode="clear"
-      onCommit={commitDate("createdDate")}
+      onCommit={commitDate(field)}
     />
   );
+  const dateEditor = labeledDateEditor(
+    "createdDate",
+    facts.createdDate,
+    createdDateLabel(media).toLowerCase()
+  );
+  const aboutEditor = labeledDateEditor("documentDate", facts.documentDate, "about");
 
   const authorEditor = (fact: MetadataFact) => (
     <EditableText
@@ -85,27 +98,20 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
   );
 
   const dot = <span aria-hidden="true">·</span>;
-  const domain = (() => {
-    if (!document.sourceUrl) return null;
-    try {
-      return new URL(document.sourceUrl).hostname.replace(/^www\./, "");
-    } catch {
-      return null;
-    }
-  })();
   const duration = formatDuration(document.durationSeconds);
 
   let icon = <FileText className="size-3.5 shrink-0" aria-hidden="true" />;
   let line: React.ReactNode = null;
   if (media === "webScrape") {
+    // No domain here — the header's secondary title line shows the URL.
     icon = <Globe className="size-3.5 shrink-0" aria-hidden="true" />;
     line = (
       <>
-        {domain && <span className="truncate">{domain}</span>}
-        {domain && dot}
         {authorEditor(facts.author)}
         {dot}
         {dateEditor}
+        {dot}
+        {aboutEditor}
       </>
     );
   } else if (media === "audio" || media === "video") {
@@ -118,13 +124,21 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
     line = (
       <>
         {dateEditor}
+        {dot}
+        {aboutEditor}
         {duration && dot}
         {duration && <span>{duration}</span>}
       </>
     );
   } else if (media === "image") {
     icon = <ImageIcon className="size-3.5 shrink-0" aria-hidden="true" />;
-    line = dateEditor;
+    line = (
+      <>
+        {dateEditor}
+        {dot}
+        {aboutEditor}
+      </>
+    );
   } else {
     // pdf and anything paged
     line = (
@@ -132,6 +146,8 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
         {authorEditor(facts.author)}
         {dot}
         {dateEditor}
+        {dot}
+        {aboutEditor}
         {document.pageCount ? (
           <>
             {dot}
@@ -145,7 +161,7 @@ export function ViewerMetaBar({ document }: { document: Doc<"documents"> }) {
   }
 
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
+    <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
       {icon}
       <div className="flex min-w-0 flex-1 items-center gap-2">{line}</div>
     </div>
