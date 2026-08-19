@@ -124,6 +124,27 @@ export const confirm = authedMutation({
   },
 });
 
+/**
+ * Forget a label's human name — the undo of an inline rename that had no
+ * prior name. The transcript shows the machine label again. The answered
+ * signature stays: un-naming is itself an answer, not a reason to re-ask.
+ */
+export const unname = authedMutation({
+  args: { documentId: v.id("documents"), label: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
+    const row = await ctx.db
+      .query("documentSpeakers")
+      .withIndex("by_document", (q) =>
+        q.eq("documentId", args.documentId).eq("label", args.label)
+      )
+      .unique();
+    if (row) await ctx.db.delete(row._id);
+    return null;
+  },
+});
+
 const SELF_INTRO =
   /\b(?:i'?m|i am|my name is|this is|speaking with you[,]? )\s*$/i;
 

@@ -31,7 +31,7 @@ import {
   type AnnotationColor,
 } from "@/components/viewer/annotationColors";
 import { SelectionActions } from "@/components/viewer/SelectionActions";
-import { useHighlightUndo } from "@/components/viewer/useHighlightUndo";
+import { useUndoStack } from "@/components/viewer/useHighlightUndo";
 import { useConfirm } from "@/components/ui/use-confirm";
 
 export interface RecordingViewRef {
@@ -107,17 +107,39 @@ export const RecordingView = forwardRef<
   const speakerRows = useQuery(api.documentSpeakers.byDocument, {
     documentId: doc._id,
   });
+  // One ⌘Z stack for everything this visit changes by hand — highlights,
+  // renames, label merges — popped in reverse order of doing.
+  const pushUndo = useUndoStack();
+
   const confirmSpeakers = useMutation(api.documentSpeakers.confirm);
+  const unnameSpeaker = useMutation(api.documentSpeakers.unname);
   // Inline rename from a turn's header — one assignment through the same
   // mutation the naming dialog uses, so the library/entity side effects and
-  // the answered-signature stay identical.
+  // the answered-signature stay identical. The inverse restores the prior
+  // human name, or un-names the label if it had none.
   const renameSpeaker = useCallback(
-    (label: string, name: string) =>
-      confirmSpeakers({
+    (label: string, name: string) => {
+      const prior =
+        speakerRows?.find((r) => r.label === label && r.source === "human")
+          ?.name ?? null;
+      const result = confirmSpeakers({
         documentId: doc._id,
         assignments: [{ label, name }],
-      }),
-    [confirmSpeakers, doc._id]
+      });
+      void result.then(() =>
+        pushUndo(() => {
+          const revert = prior
+            ? confirmSpeakers({
+                documentId: doc._id,
+                assignments: [{ label, name: prior }],
+              })
+            : unnameSpeaker({ documentId: doc._id, label });
+          void revert.catch(() => {});
+        })
+      );
+      return result;
+    },
+    [confirmSpeakers, unnameSpeaker, doc._id, speakerRows, pushUndo]
   );
   // The rename popover's option lists, fetched only once an editor has
   // actually been opened — most visits never rename anyone.
@@ -186,17 +208,27 @@ export const RecordingView = forwardRef<
       const displayOf = (i: number) =>
         nameByLabel.get(segments[i].speaker) ?? segments[i].speaker;
       const runName = displayOf(si);
-      const ids = [];
+      const run = [];
       for (let i = si; i < segments.length && displayOf(i) === runName; i++) {
-        ids.push(segments[i]._id);
+        run.push(segments[i]);
       }
+      // Captured before the merge: the run may span labels the same name
+      // had already unified, and undo must restore each one.
+      const restore = run.map((s) => ({ segmentId: s._id, speaker: s.speaker }));
+      const target = segments[si - 1].speaker;
       void reassignSpeaker({
         documentId: doc._id,
-        segmentIds: ids,
-        speaker: segments[si - 1].speaker,
-      });
+        assignments: run.map((s) => ({ segmentId: s._id, speaker: target })),
+      }).then(() =>
+        pushUndo(() => {
+          void reassignSpeaker({
+            documentId: doc._id,
+            assignments: restore,
+          }).catch(() => {});
+        })
+      );
     },
-    [segments, nameByLabel, reassignSpeaker, doc._id]
+    [segments, nameByLabel, reassignSpeaker, doc._id, pushUndo]
   );
 
   // Two diarizer labels given the same human name are the same person:
@@ -263,6 +295,42 @@ export const RecordingView = forwardRef<
     });
     return map;
   }, [searchTerm, segments]);
+
+  // Consecutive segments by the same display speaker render as ONE turn —
+  // a single header and one flowing paragraph. Recomputed only when the
+  // transcript or the names change, never per tick.
+  const runs = useMemo(() => {
+    if (!segments) return [];
+    const out: { start: number; segments: typeof segments }[] = [];
+    segments.forEach((seg, si) => {
+      const name = nameByLabel.get(seg.speaker) ?? seg.speaker;
+      const last = out[out.length - 1];
+      const lastName = last
+        ? nameByLabel.get(last.segments[0].speaker) ?? last.segments[0].speaker
+        : null;
+      if (last && lastName === name) last.segments.push(seg);
+      else out.push({ start: si, segments: [seg] });
+    });
+    return out;
+  }, [segments, nameByLabel]);
+
+  // Per-run slices of the per-segment maps, with stable identities so a
+  // timeupdate tick doesn't re-render every run. (The highlight slice lives
+  // below, after highlightsBySegment is built.)
+  const runSearchWords = useMemo(
+    () =>
+      runs.map((run) => {
+        const slice = run.segments.map((_, rel) =>
+          searchWordsBySegment?.get(run.start + rel)
+        );
+        return slice.some(Boolean) ? slice : undefined;
+      }),
+    [runs, searchWordsBySegment]
+  );
+
+  const setActiveWordEl = useCallback((el: HTMLSpanElement | null) => {
+    if (el) activeWordRef.current = el;
+  }, []);
 
   // Keep the active word in view during playback — unless the user has
   // scrolled away, in which case following pauses until they ask for it back
@@ -407,7 +475,10 @@ export const RecordingView = forwardRef<
     },
     [removeAnnotation]
   );
-  const recordCreated = useHighlightUndo(undoRemove);
+  const recordCreated = useCallback(
+    (id: string) => pushUndo(() => undoRemove(id)),
+    [pushUndo, undoRemove]
+  );
 
   const highlightsBySegment = useMemo(() => {
     const map = new Map<number, { start: number; end: number; fill: string }[]>();
@@ -427,6 +498,18 @@ export const RecordingView = forwardRef<
     }
     return map;
   }, [segments, annotations]);
+
+  // The highlight half of the per-run slices (see runSearchWords above).
+  const runHighlights = useMemo(
+    () =>
+      runs.map((run) => {
+        const slice = run.segments.map((_, rel) =>
+          highlightsBySegment.get(run.start + rel)
+        );
+        return slice.some(Boolean) ? slice : undefined;
+      }),
+    [runs, highlightsBySegment]
+  );
 
   const commitNote = useCallback(
     async (note: PendingNote, color: AnnotationColor) => {
@@ -708,32 +791,31 @@ export const RecordingView = forwardRef<
           </div>
         ) : (
           <div className="mx-auto w-full max-w-3xl flex flex-col">
-            {segments.map((seg, si) => {
-              const name = nameByLabel.get(seg.speaker) ?? seg.speaker;
-              const prev = segments[si - 1];
-              const prevName = prev
-                ? nameByLabel.get(prev.speaker) ?? prev.speaker
-                : null;
+            {runs.map((run, ri) => {
+              const name =
+                nameByLabel.get(run.segments[0].speaker) ??
+                run.segments[0].speaker;
+              const activeInRun =
+                active.segment >= run.start &&
+                active.segment < run.start + run.segments.length
+                  ? { segment: active.segment - run.start, word: active.word }
+                  : null;
               return (
-              <TranscriptTurn
-                key={seg._id}
-                segment={seg}
-                index={si}
-                speakerName={name}
-                colorClass={colorByName.get(name)}
-                showHeader={name !== prevName}
-                searchWords={searchWordsBySegment?.get(si)}
-                rename={rename}
-                onMergeUp={mergeTurnUp}
-                isActive={active.segment === si}
-                activeWordIndex={active.segment === si ? active.word : -1}
-                showTranslation={showTranslation}
-                highlights={highlightsBySegment.get(si)}
-                onSeek={seekTo}
-                activeWordRef={(el) => {
-                  if (el) activeWordRef.current = el;
-                }}
-              />
+                <TranscriptTurn
+                  key={run.segments[0]._id}
+                  segments={run.segments}
+                  startIndex={run.start}
+                  speakerName={name}
+                  colorClass={colorByName.get(name)}
+                  activeInRun={activeInRun}
+                  showTranslation={showTranslation}
+                  highlights={runHighlights[ri]}
+                  searchWords={runSearchWords[ri]}
+                  rename={rename}
+                  onMergeUp={mergeTurnUp}
+                  onSeek={seekTo}
+                  activeWordRef={setActiveWordEl}
+                />
               );
             })}
           </div>

@@ -47,16 +47,22 @@ export const byDocument = authedQuery({
 export const reassignSpeaker = authedMutation({
   args: {
     documentId: v.id("documents"),
-    segmentIds: v.array(v.id("transcriptSegments")),
-    speaker: v.string(),
+    // Per-segment, so an undo can restore a merged run whose segments
+    // carried different labels before the merge.
+    assignments: v.array(
+      v.object({
+        segmentId: v.id("transcriptSegments"),
+        speaker: v.string(),
+      })
+    ),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireDocument(ctx, args.documentId);
-    for (const id of args.segmentIds) {
-      const row = await ctx.db.get(id);
+    for (const { segmentId, speaker } of args.assignments) {
+      const row = await ctx.db.get(segmentId);
       if (!row || row.documentId !== args.documentId) continue;
-      await ctx.db.patch(id, { speaker: args.speaker });
+      await ctx.db.patch(segmentId, { speaker });
     }
     const segments = await ctx.db
       .query("transcriptSegments")
