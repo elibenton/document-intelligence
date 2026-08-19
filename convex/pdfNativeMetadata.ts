@@ -9,6 +9,12 @@
  * reader would otherwise get from analysis.
  */
 
+import {
+  pdfDateToIso,
+  sanitizeNativeDate,
+  type NativeDate,
+} from "./nativeDate";
+
 /** Authoring-tool residue that shows up in Info.Title. */
 const TITLE_JUNK = [
   /^untitled/i,
@@ -47,6 +53,11 @@ export function cleanPdfTitle(
   const lower = title.toLowerCase();
   if (lower === name || lower === stem) return undefined;
   return title;
+}
+
+/** The document's own stated creation date, or nothing. */
+export function cleanPdfDate(raw: unknown, now: number): NativeDate | null {
+  return sanitizeNativeDate(pdfDateToIso(raw), now);
 }
 
 /** The document's own credited author, or nothing. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanPdfAuthor, cleanPdfTitle } from "./pdfNativeMetadata";
+import { cleanPdfAuthor, cleanPdfDate, cleanPdfTitle } from "./pdfNativeMetadata";
 
 describe("cleanPdfTitle", () => {
   it("keeps a real stated title", () => {
@@ -51,5 +51,26 @@ describe("cleanPdfAuthor", () => {
     for (const junk of ["user", "Admin", "unknown", "Adobe Acrobat", "Microsoft Office Word", "", "j"]) {
       expect(cleanPdfAuthor(junk)).toBeUndefined();
     }
+  });
+});
+
+describe("cleanPdfDate", () => {
+  const NOW = Date.UTC(2026, 7, 19);
+
+  it("keeps a stated creation date at its stated precision", () => {
+    expect(cleanPdfDate("D:20190314102201+02'00'", NOW)).toEqual({
+      value: "2019-03-14",
+      precision: "day",
+    });
+    expect(cleanPdfDate("D:201903", NOW)).toEqual({
+      value: "2019-03",
+      precision: "month",
+    });
+  });
+
+  it("drops garbage and future dates", () => {
+    expect(cleanPdfDate("last Tuesday", NOW)).toBeNull();
+    expect(cleanPdfDate("D:20991231", NOW)).toBeNull();
+    expect(cleanPdfDate(undefined, NOW)).toBeNull();
   });
 });
