@@ -754,7 +754,11 @@ export default function DocumentPage({ id }: { id: string }) {
             ) : undefined
           }
           viewer={
-            <div className="flex h-full min-w-0 flex-col">
+            // w-full is load-bearing: this is a flex item in ViewerLayout's
+            // justify-center pane, and without a width it collapses to its
+            // content's intrinsic width — an iframe's is 300px, which
+            // rendered archived pages at their mobile breakpoint.
+            <div className="flex h-full w-full min-w-0 flex-col">
               <ViewerMetaBar document={document} />
               <div className="min-h-0 flex-1">
             {isRecording ? (

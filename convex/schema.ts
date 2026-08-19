@@ -998,6 +998,30 @@ export default defineSchema({
     typesSource: v.optional(v.string()),
     // User-curated entities stay visible beneath a closed type group.
     starred: v.optional(v.boolean()),
+    // AI-written bio lede, generated from the extracted fact rows only —
+    // never the documents — so it cannot assert more than the extraction
+    // did. Each sentence carries the fact rows that support it; a sentence
+    // the model could not support is dropped before storage. `factsHash`
+    // is the hash of the fact-row id set the text summarizes, so staleness
+    // is a comparison, not a timer. See convex/descriptions.ts.
+    description: v.optional(
+      v.object({
+        sentences: v.array(
+          v.object({
+            text: v.string(),
+            relationshipIds: v.array(v.id("relationships")),
+            roleIds: v.array(v.id("entityRoles")),
+          })
+        ),
+        factsHash: v.string(),
+        generatedAt: v.number(),
+      })
+    ),
+    // In-flight claim: the hash being generated and when it was queued, so a
+    // second page view neither double-schedules nor waits on a dead action
+    // forever (a claim older than the action lifetime is re-armable).
+    descriptionQueuedHash: v.optional(v.string()),
+    descriptionQueuedAt: v.optional(v.number()),
     // `slugify(name)`, stored so `/entity/:slug` is an index lookup rather
     // than a scan over search hits. Optional only because rows written before
     // this field existed carry no slug until the backfill runs; an entity's

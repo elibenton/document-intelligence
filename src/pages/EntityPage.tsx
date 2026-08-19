@@ -9,16 +9,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { EditableText } from "@/components/ui/editable";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/ui/empty-state";
 import { QuotePreview } from "@/components/entities/QuotePreview";
 import { MergeSuggestions } from "@/components/entities/MergeSuggestions";
 import { ProjectSearchDialog } from "@/components/search/ProjectSearchDialog";
 import {
-  ConnectionTimeline,
-  CounterpartyStrip,
-  GroupedConnections,
-} from "@/components/entities/EntityConnections";
+  BioLede,
+  BioTimeline,
+  ConnectedToList,
+  FactList,
+  GeneratedLede,
+} from "@/components/entities/EntityBio";
+import { buildBioModel, buildLede } from "@/lib/entityBio";
 import { DocTypePills } from "@/components/documents/DocTypePills";
 import { entitySlug } from "@/lib/entitySlug";
 import { formatDocumentDate, hasDocumentDate } from "@/lib/documentDate";
@@ -36,6 +38,9 @@ const TYPE_LABELS: Record<string, string> = {
   dates: "Date",
   other: "Other",
 };
+
+/** How many distinct roles lead the page before the rest fold into the infobox. */
+const LEDE_ROLES = 4;
 
 export default function EntityPage({ params }: Route.ComponentProps) {
   const { slug } = params;
@@ -76,6 +81,17 @@ export default function EntityPage({ params }: Route.ComponentProps) {
   );
 
   const renameEntity = useMutation(api.entities.rename);
+  const ensureDescription = useMutation(api.descriptions.ensure);
+  // Viewing an entity is what makes its description worth having: ensure()
+  // compares the stored description against the live fact set and schedules
+  // a regeneration only on mismatch — a no-op on the common path.
+  const entityId = entity?._id;
+  useEffect(() => {
+    if (!entityId) return;
+    ensureDescription({ entityId }).catch(() => {
+      // A missing description is a nicety the page renders fine without.
+    });
+  }, [entityId, ensureDescription]);
   const setStarred = useMutation(api.entities.setStarred);
   const addAlias = useMutation(api.entities.addAlias);
   const removeAlias = useMutation(api.entities.removeAlias);
@@ -113,16 +129,17 @@ export default function EntityPage({ params }: Route.ComponentProps) {
     );
   }
 
-  // One badge per role name, not one per (role, document): ten documents
-  // asserting "declarant" is one fact with ten sources, so the count folds
-  // in and the sources live in the title.
-  const roleGroups = new Map<string, string[]>();
+  // One entry per role name, most-asserted first: ten documents saying
+  // "owner" is one fact with weight, and the strongest roles make the lede.
+  const roleCounts = new Map<string, number>();
   for (const r of roles ?? []) {
-    const docs = roleGroups.get(r.role) ?? [];
-    if (r.document) docs.push(r.document.name);
-    roleGroups.set(r.role, docs);
+    roleCounts.set(r.role, (roleCounts.get(r.role) ?? 0) + 1);
   }
+  const rankedRoles = [...roleCounts.entries()].sort((a, b) => b[1] - a[1]);
+  const ledeRoles = rankedRoles.slice(0, LEDE_ROLES).map(([role]) => role);
 
+  const bio = buildBioModel(connections?.connections ?? []);
+  const lede = buildLede(bio.facts);
   const starred = entity.starred === true;
 
   return (
@@ -154,10 +171,15 @@ export default function EntityPage({ params }: Route.ComponentProps) {
           </span>
         }
         subtitle={
-          <span className="tabular-nums">
-            {counted(entity.mentionCount, "mention")} across{" "}
-            {counted(entity.documentCount, "document")}
-          </span>
+          // The lede: what this entity is, on its own terms, before any list.
+          ledeRoles.length > 0 ? (
+            <span className="capitalize">{ledeRoles.join(" · ")}</span>
+          ) : (
+            <span className="tabular-nums">
+              {counted(entity.mentionCount, "mention")} across{" "}
+              {counted(entity.documentCount, "document")}
+            </span>
+          )
         }
         actions={
           <button
@@ -175,59 +197,6 @@ export default function EntityPage({ params }: Route.ComponentProps) {
           </button>
         }
       >
-        {/* Identity strip: aliases (editable — every alias is a way this
-            entity gets found) and deduplicated roles. */}
-        <div className="mb-6 flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {entity.aliases.map((alias) => (
-              <Badge key={alias} variant="secondary" className="gap-1 text-xs">
-                {alias}
-                <button
-                  type="button"
-                  aria-label={`Remove alias ${alias}`}
-                  onClick={() => void removeAlias({ id: entity._id, alias })}
-                  className="grid size-3.5 place-items-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <X className="size-2.5" />
-                </button>
-              </Badge>
-            ))}
-            <Input
-              value={aliasDraft}
-              onChange={(e) => setAliasDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && aliasDraft.trim()) {
-                  e.preventDefault();
-                  void addAlias({ id: entity._id, alias: aliasDraft.trim() });
-                  setAliasDraft("");
-                }
-              }}
-              placeholder="Add alias…"
-              aria-label="Add alias"
-              className="h-6 w-28 text-xs"
-            />
-          </div>
-          {roleGroups.size > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {[...roleGroups.entries()].map(([role, docs]) => (
-                <Badge
-                  key={role}
-                  variant="secondary"
-                  className="capitalize"
-                  title={docs.length ? `${role} in: ${docs.join(", ")}` : role}
-                >
-                  {role}
-                  {docs.length > 1 && (
-                    <span className="ml-1 normal-case text-muted-foreground">
-                      ×{docs.length}
-                    </span>
-                  )}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </div>
-
         {/* A pending duplicate is the most actionable fact about an entity —
             it goes above the fold, not on another page. */}
         {suggestions && suggestions.length > 0 && (
@@ -236,130 +205,236 @@ export default function EntityPage({ params }: Route.ComponentProps) {
           </div>
         )}
 
-        <div>
-          {connections === undefined ? (
-            <div className="space-y-2 mb-6">
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-full" />
-            </div>
-          ) : connections.connections.length === 0 ? (
-            <EmptyState variant="inline" title="No mapped relationships yet." />
-          ) : (
-            <section className="mb-6">
-              <SectionHeading>Connections</SectionHeading>
-              {connections.counterparties.length > 1 && (
-                <div className="mb-3">
-                  <CounterpartyStrip
-                    counterparties={connections.counterparties}
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_16rem]">
+          {/* ——— Main column: the article ——— */}
+          <div className="min-w-0">
+            {/* The AI-written description leads when it exists; the
+                deterministic clause lede is the always-available fallback. */}
+            {entity.description && entity.description.sentences.length > 0 ? (
+              <div className="mb-8">
+                <GeneratedLede
+                  sentences={entity.description.sentences}
+                  citeByConnection={bio.citeByConnection}
+                  entityNames={[
+                    ...new Set(
+                      (connections?.connections ?? []).map(
+                        (c) => c.otherEntity.name
+                      )
+                    ),
+                  ]}
+                  entityLink={entityLink}
+                  highlight={entity.name}
+                />
+              </div>
+            ) : (
+              (lede.professional.length > 0 || lede.personal.length > 0) && (
+                <div className="mb-8">
+                  <BioLede
+                    lede={lede}
                     entityLink={entityLink}
+                    highlight={entity.name}
                   />
                 </div>
-              )}
-              {/* One render of the rows, two ways to read them — the old page
-                  drew the same connections three times in a column. */}
-              <Tabs defaultValue="relations">
-                <TabsList>
-                  <TabsTrigger value="relations">By relation</TabsTrigger>
-                  <TabsTrigger value="timeline">Timeline</TabsTrigger>
-                </TabsList>
-                <TabsContent value="relations">
-                  <GroupedConnections
-                    connections={connections.connections}
-                    subjectName={entity.name}
-                    entityLink={entityLink}
-                  />
-                </TabsContent>
-                <TabsContent value="timeline">
-                  <ConnectionTimeline
-                    connections={connections.connections}
-                    subjectName={entity.name}
-                    entityLink={entityLink}
-                  />
-                </TabsContent>
-              </Tabs>
-            </section>
-          )}
+              )
+            )}
+            {connections === undefined ? (
+              <div className="space-y-2 mb-8">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-full" />
+              </div>
+            ) : bio.facts.length === 0 ? (
+              <div className="mb-8">
+                <EmptyState variant="inline" title="No mapped relationships yet." />
+              </div>
+            ) : (
+              <section className="mb-8">
+                <SectionHeading>Relationships</SectionHeading>
+                <FactList
+                  facts={bio.facts}
+                  entityLink={entityLink}
+                  highlight={entity.name}
+                />
+              </section>
+            )}
 
-          <SectionHeading>Appears In</SectionHeading>
+            {connections && connections.connections.length > 0 && (
+              <section className="mb-8">
+                <SectionHeading>Timeline</SectionHeading>
+                <BioTimeline
+                  connections={connections.connections}
+                  citeByConnection={bio.citeByConnection}
+                  entityLink={entityLink}
+                  highlight={entity.name}
+                />
+              </section>
+            )}
 
-          {documents === undefined ? (
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-full" />
-            </div>
-          ) : documents.length === 0 ? (
-            <EmptyState variant="inline" title="No document mentions found." />
-          ) : (
-            <div className="flex flex-col gap-3">
-              {documents.map((doc) => {
-                const group = mentionGroups?.find(
-                  (g) => g.document._id === doc._id
-                );
-                const firstMention = group?.mentions[0];
-                const title = doc.displayName?.trim() || doc.name;
-                // Land on the first mention, highlighted — the page and
-                // bbox were always in hand, the link just never used them.
-                const href = firstMention
-                  ? `/documents/${doc._id}?page=${firstMention.pageNumber + 1}&highlight=${encodeURIComponent(entity.name)}`
-                  : `/documents/${doc._id}`;
-                return (
-                  <div key={doc._id} className="border rounded-md px-3 py-2">
-                    <Link
-                      to={href}
-                      className="flex items-center gap-3 rounded hover:bg-accent/50 transition-colors"
-                    >
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                        {title}
-                      </span>
-                      <DocTypePills
-                        projectId={doc.projectId}
-                        primaryCategory={doc.primaryCategory}
-                        primaryKind={doc.primaryKind}
-                        className="hidden sm:inline-flex"
-                      />
-                      {hasDocumentDate(doc) && (
-                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                          {formatDocumentDate(doc)}
-                        </span>
-                      )}
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {doc.mentionCount} mention{doc.mentionCount !== 1 && "s"}
-                      </span>
-                    </Link>
-                    {group && group.mentions.length > 0 && (
-                      <div className="mt-1.5 flex flex-col gap-1">
-                        {group.mentions.map((m, i) => (
-                          <QuotePreview
-                            key={i}
-                            target={{
-                              documentId: group.document._id,
-                              fileUrl: group.fileUrl,
-                              mediaType: group.document.mediaType,
-                              pageNumber: m.pageNumber,
-                              bbox: m.bbox,
-                              pageWidth: m.pageWidth,
-                              pageHeight: m.pageHeight,
-                            }}
-                            highlight={entity.name}
-                          >
-                            <Link
-                              to={`/documents/${doc._id}?page=${m.pageNumber + 1}&highlight=${encodeURIComponent(entity.name)}`}
-                              className="block text-xs text-muted-foreground pl-2 border-l-2 border-border hover:border-foreground/40 hover:text-foreground"
-                            >
-                              <span className="text-foreground/70 font-medium">
-                                p.{m.pageNumber + 1}
-                              </span>{" "}
-                              “{m.snippet}”
-                            </Link>
-                          </QuotePreview>
-                        ))}
+            <section>
+              <SectionHeading>Appears In</SectionHeading>
+              {documents === undefined ? (
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                </div>
+              ) : documents.length === 0 ? (
+                <EmptyState variant="inline" title="No document mentions found." />
+              ) : (
+                <div className="flex flex-col">
+                  {documents.map((doc) => {
+                    const group = mentionGroups?.find(
+                      (g) => g.document._id === doc._id
+                    );
+                    const firstMention = group?.mentions[0];
+                    const title = doc.displayName?.trim() || doc.name;
+                    // Land on the first mention, highlighted — the page and
+                    // bbox were always in hand, the link just never used them.
+                    const href = firstMention
+                      ? `/documents/${doc._id}?page=${firstMention.pageNumber + 1}&highlight=${encodeURIComponent(entity.name)}`
+                      : `/documents/${doc._id}`;
+                    return (
+                      <div
+                        key={doc._id}
+                        className="flex items-baseline gap-3 border-b border-border/60 py-2 last:border-b-0"
+                      >
+                        <Link
+                          to={href}
+                          className="min-w-0 flex-1 truncate text-sm font-medium hover:underline"
+                        >
+                          {title}
+                        </Link>
+                        {/* Mentions as page citations: the evidence is one
+                            hover away, not a paragraph on the page. */}
+                        {group && group.mentions.length > 0 && (
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {group.mentions.map((m, i) => (
+                              <QuotePreview
+                                key={i}
+                                target={{
+                                  documentId: group.document._id,
+                                  fileUrl: group.fileUrl,
+                                  mediaType: group.document.mediaType,
+                                  pageNumber: m.pageNumber,
+                                  bbox: m.bbox,
+                                  pageWidth: m.pageWidth,
+                                  pageHeight: m.pageHeight,
+                                }}
+                                highlight={entity.name}
+                              >
+                                <Link
+                                  to={`/documents/${doc._id}?page=${m.pageNumber + 1}&highlight=${encodeURIComponent(entity.name)}`}
+                                  title={`“${m.snippet}”`}
+                                  className="hover:text-primary hover:underline"
+                                >
+                                  {i > 0 && ", "}
+                                  p.{m.pageNumber + 1}
+                                </Link>
+                              </QuotePreview>
+                            ))}
+                          </span>
+                        )}
+                        <DocTypePills
+                          projectId={doc.projectId}
+                          primaryCategory={doc.primaryCategory}
+                          primaryKind={doc.primaryKind}
+                          className="hidden sm:inline-flex shrink-0"
+                        />
+                        {hasDocumentDate(doc) && (
+                          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                            {formatDocumentDate(doc)}
+                          </span>
+                        )}
                       </div>
-                    )}
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* ——— Infobox: identity at a glance ——— */}
+          <aside className="order-first lg:order-none">
+            <div className="rounded-lg border bg-card px-4 py-3 lg:sticky lg:top-4">
+              <dl className="flex flex-col gap-3">
+                <div>
+                  <dt className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Also known as
+                  </dt>
+                  <dd className="flex flex-wrap items-center gap-1.5">
+                    {entity.aliases.map((alias) => (
+                      <Badge key={alias} variant="secondary" className="gap-1 text-xs">
+                        {alias}
+                        <button
+                          type="button"
+                          aria-label={`Remove alias ${alias}`}
+                          onClick={() => void removeAlias({ id: entity._id, alias })}
+                          className="grid size-3.5 place-items-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <X className="size-2.5" />
+                        </button>
+                      </Badge>
+                    ))}
+                    <Input
+                      value={aliasDraft}
+                      onChange={(e) => setAliasDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && aliasDraft.trim()) {
+                          e.preventDefault();
+                          void addAlias({ id: entity._id, alias: aliasDraft.trim() });
+                          setAliasDraft("");
+                        }
+                      }}
+                      placeholder="Add alias…"
+                      aria-label="Add alias"
+                      className="h-6 w-28 text-xs"
+                    />
+                  </dd>
+                </div>
+
+                {rankedRoles.length > 0 && (
+                  <div>
+                    <dt className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Roles
+                    </dt>
+                    <dd className="text-sm leading-relaxed capitalize">
+                      {rankedRoles.map(([role, count], i) => (
+                        <span key={role}>
+                          {i > 0 && <span className="text-muted-foreground/60"> · </span>}
+                          {role}
+                          {count > 1 && (
+                            <span className="text-xs text-muted-foreground"> ×{count}</span>
+                          )}
+                        </span>
+                      ))}
+                    </dd>
                   </div>
-                );
-              })}
+                )}
+
+                {connections && connections.counterparties.length > 0 && (
+                  <div>
+                    <dt className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Connected to
+                    </dt>
+                    <dd>
+                      <ConnectedToList
+                        counterparties={connections.counterparties}
+                        entityLink={entityLink}
+                      />
+                    </dd>
+                  </div>
+                )}
+
+                <div>
+                  <dt className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    In this project
+                  </dt>
+                  <dd className="text-sm tabular-nums text-muted-foreground">
+                    {counted(entity.mentionCount, "mention")} across{" "}
+                    {counted(entity.documentCount, "document")}
+                  </dd>
+                </div>
+              </dl>
             </div>
-          )}
+          </aside>
         </div>
       </PageShell>
     </>
