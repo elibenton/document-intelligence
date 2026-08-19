@@ -744,6 +744,17 @@ export default defineSchema({
     // carry pageNumber 0 (the transcript IS page 0 in the mirror) and empty
     // rects; one anchor — geometry or time — is required (annotations.ts).
     timeRange: v.optional(v.object({ start: v.number(), end: v.number() })),
+    // Web clip highlights anchor by text quote: the archived page reflows
+    // with the pane width, so geometry is stale by construction. `exact` is
+    // re-found in the rendered archive at paint; prefix/suffix disambiguate
+    // repeated passages. Such rows carry pageNumber 0 and empty rects.
+    quote: v.optional(
+      v.object({
+        exact: v.string(),
+        prefix: v.optional(v.string()),
+        suffix: v.optional(v.string()),
+      })
+    ),
     color: v.union(
       v.literal("yellow"),
       v.literal("green"),

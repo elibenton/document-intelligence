@@ -79,16 +79,32 @@ export const create = authedMutation({
     rects: v.array(rectValidator),
     blockIds: v.array(v.string()),
     timeRange: v.optional(v.object({ start: v.number(), end: v.number() })),
+    quote: v.optional(
+      v.object({
+        exact: v.string(),
+        prefix: v.optional(v.string()),
+        suffix: v.optional(v.string()),
+      })
+    ),
   },
   handler: async (ctx, args) => {
     const document = await requireDocument(ctx, args.documentId);
-    // One anchor, geometry or time — never neither. The XOR keeps the PDF
-    // path failing loudly on empty rects while transcript highlights anchor
-    // by time alone.
-    if (args.rects.length === 0 && args.timeRange === undefined) {
-      throw new Error("An annotation needs a rect or a time range to anchor to");
+    // One anchor — geometry, time, or quote — never none. The check keeps
+    // the PDF path failing loudly on empty rects while transcript highlights
+    // anchor by time and web clip highlights by text quote.
+    if (
+      args.rects.length === 0 &&
+      args.timeRange === undefined &&
+      args.quote === undefined
+    ) {
+      throw new Error(
+        "An annotation needs a rect, a time range, or a quote to anchor to"
+      );
     }
     assertValidTimeRange(args.timeRange);
+    if (args.quote !== undefined && !args.quote.exact.trim()) {
+      throw new Error("A quote anchor needs non-empty text");
+    }
 
     const now = Date.now();
     return await ctx.db.insert("annotations", {
@@ -102,6 +118,7 @@ export const create = authedMutation({
       rects: args.rects,
       blockIds: args.blockIds,
       timeRange: args.timeRange,
+      quote: args.quote,
       createdAt: now,
       updatedAt: now,
     });

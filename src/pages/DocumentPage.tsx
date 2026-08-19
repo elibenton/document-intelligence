@@ -620,7 +620,7 @@ export default function DocumentPage({ id }: { id: string }) {
               View original <ExternalLink className="size-3" />
             </a>
           )}
-          {(isPdfDocument || isRecording) && (
+          {(isPdfDocument || isRecording || isWebClip) && (
             <HighlighterTool color={penColor} onChange={setPenColor} />
           )}
           {isPdfDocument && (
@@ -731,7 +731,13 @@ export default function DocumentPage({ id }: { id: string }) {
               <TranslatedDocumentView pages={translatedPages ?? []} />
             ) : url ? (
               isWebClip ? (
-                <WebClipViewer url={url} />
+                <WebClipViewer
+                  documentId={documentId}
+                  url={url}
+                  penColor={penColor}
+                  activeAnnotation={activeAnnotation}
+                  onActiveAnnotationChange={setActiveAnnotation}
+                />
               ) : isCsv ? (
                 <CsvViewer url={url} name={document.name} />
               ) : document.mediaType === "image" ? (
