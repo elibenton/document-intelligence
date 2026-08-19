@@ -13,6 +13,11 @@ import { UploadContext, type UploadItem } from "@/hooks/uploadContext";
 import { isSupportedUpload, UNSUPPORTED_REASON } from "@/lib/uploadTypes";
 import { isAudioUpload, preflightAudio } from "@/lib/audioPreflight";
 import { isPdfUpload, preflightPdf } from "@/lib/pdfPreflight";
+import {
+  batchNativePages,
+  extractPdfNativeText,
+  type NativePdfExtract,
+} from "@/lib/pdfNativeText";
 import { sha256Hex } from "@/lib/contentHash";
 import { fileKindOf, reportIssue } from "@/lib/reportIssue";
 
@@ -63,6 +68,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const convex = useConvex();
   const generateUploadUrl = useMutation(api.upload.generateUploadUrl);
   const createDocument = useMutation(api.upload.createDocument);
+  const ingestNativePages = useMutation(api.nativeText.ingestNativePages);
+  const finishNativeIngest = useMutation(api.nativeText.finishNativeIngest);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const timersRef = useRef<number[]>([]);
   /** Documents whose retirement timer is already queued. */
@@ -176,6 +183,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         }
 
         let uploadFile = file;
+        /** Runs while the bytes upload; resolves null for anything that still
+         * needs vision OCR (scans, searchable scans, mixed documents). */
+        let nativeTextPromise: Promise<NativePdfExtract | null> | null = null;
         const nameWarning = existing.sameName
           ? [`Another file here is also named "${existing.sameName.name}". Its contents differ, so this was uploaded as a separate document.`]
           : [];
@@ -201,6 +211,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
               ...preflight.warnings.map((warning) => warning.message),
             ],
           });
+          nativeTextPromise = extractPdfNativeText(file);
         } else if (isAudioUpload(file)) {
           const preflight = await preflightAudio(file);
           if (!preflight.ok) {
@@ -240,12 +251,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           (percent) => patchUpload(id, { progress: percent })
         );
         patchUpload(id, { progress: 100, status: "finalizing" });
+        const nativeText = nativeTextPromise ? await nativeTextPromise : null;
         const { documentId, duplicateOf } = await createDocument({
           projectId,
           name: uploadFile.name,
           storageId,
           mimeType: uploadFile.type,
           contentHash,
+          nativeTextPlanned: nativeText ? true : undefined,
         });
         // Lost a race with a concurrent upload of the same bytes; the server
         // kept the first row and discarded these.
@@ -259,6 +272,30 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             window.setTimeout(() => removeUpload(id), DUPLICATE_LINGER_MS)
           );
           return undefined;
+        }
+        // A digital-native PDF's own text layer is committed before parse is
+        // enqueued, so the pipeline can skip the OCR spend entirely. Both
+        // failure modes are safe: a partial commit just means the normal OCR
+        // path runs, and a missed finish is covered by the server's
+        // scheduled failsafe (upload.createDocument).
+        if (nativeText) {
+          patchUpload(id, { detail: "Storing the document's own text layer…" });
+          try {
+            for (const batch of batchNativePages(nativeText.pages)) {
+              await ingestNativePages({
+                documentId,
+                pageCount: nativeText.pageCount,
+                pages: batch,
+              });
+            }
+          } catch {
+            // Partial native pages are harmless; parse falls back to OCR.
+          }
+          try {
+            await finishNativeIngest({ documentId });
+          } catch {
+            // The failsafe starts parse without the finish call.
+          }
         }
         // Not "done": the bytes have landed but the pipeline hasn't run. The
         // card holds the file until `ingestStates` reports a terminal status.
@@ -288,6 +325,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       convex,
       generateUploadUrl,
       createDocument,
+      ingestNativePages,
+      finishNativeIngest,
       patchUpload,
       removeUpload,
       failUpload,
