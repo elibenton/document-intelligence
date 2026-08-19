@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { MessageSquare, MessageSquarePlus, Trash2 } from "lucide-react";
+import { usePopoverAfterGesture } from "./usePopoverAfterGesture";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent } from "@/components/ui/popover";
@@ -169,6 +170,7 @@ export function HighlightActions({
   onDismiss: () => void;
 }) {
   const anchor = useAnnotationAnchor(annotation._id, anchorRect);
+  if (!usePopoverAfterGesture()) return null;
   return (
     <Popover
       open
@@ -246,6 +248,7 @@ export function AnnotationComment({
 
   const dirty = draft.trim() !== (annotation.comment ?? "").trim();
 
+  if (!usePopoverAfterGesture()) return null;
   return (
     <Popover
       open
@@ -262,9 +265,8 @@ export function AnnotationComment({
       className="w-64 overflow-visible rounded-lg border bg-popover p-2 shadow-xl data-[anchor-hidden]:invisible"
       aria-label="Highlight comment"
     >
-      <p className="mb-2 line-clamp-3 border-l-2 pl-2 text-xs italic text-muted-foreground">
-        {annotation.text}
-      </p>
+      {/* No quote of the highlighted text here — the card opens anchored to
+          the highlight, so the text is already on screen right beside it. */}
       <textarea
         value={draft}
         onChange={(event) => setDraft(event.target.value)}

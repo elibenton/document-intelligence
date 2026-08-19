@@ -3,6 +3,7 @@ import { Highlighter, Link, MessageSquarePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import type { SelectionAnchor } from "./AnnotationLayer";
+import { usePopoverAfterGesture } from "./usePopoverAfterGesture";
 
 /**
  * The offer that follows a text drag while the highlighter pen is away.
@@ -40,6 +41,7 @@ export function SelectionActions({
     [anchor]
   );
 
+  if (!usePopoverAfterGesture()) return null;
   return (
     <Popover
       open
