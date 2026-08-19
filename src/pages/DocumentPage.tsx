@@ -25,6 +25,7 @@ import {
 import { MergeDropRow } from "@/components/entities/MergeDropRow";
 import { useEntityMergeDnd } from "@/components/entities/useEntityMergeDnd";
 import { ViewerLayout } from "@/components/viewer/ViewerLayout";
+import { ViewerMetaBar } from "@/components/viewer/ViewerMetaBar";
 import { ContentsPanel } from "@/components/viewer/ContentsPanel";
 import { NotesPanel } from "@/components/viewer/NotesPanel";
 import { buildTocHeaders, sectionForPage } from "@/components/viewer/tocHeaders";
@@ -738,7 +739,10 @@ export default function DocumentPage({ id }: { id: string }) {
             ) : undefined
           }
           viewer={
-            isRecording ? (
+            <div className="flex h-full min-w-0 flex-col">
+              <ViewerMetaBar document={document} />
+              <div className="min-h-0 flex-1">
+            {isRecording ? (
               <RecordingView
                 ref={recordingRef}
                 document={document}
@@ -793,7 +797,9 @@ export default function DocumentPage({ id }: { id: string }) {
                 <Spinner className="size-4 text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">Loading document…</p>
               </div>
-            )
+            )}
+              </div>
+            </div>
           }
           sidebar={
             <div className="flex h-full flex-col overflow-hidden">
