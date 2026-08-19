@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Trash2 } from "lucide-react";
+import { Link as LinkIcon, Trash2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
@@ -174,27 +174,53 @@ function NoteRow({
         </div>
       )}
 
-      {/* Footer: the address on the left, the quiet comment control on the
-          right. Siblings of the main button, so neither click navigates. */}
+      {/* Footer: the address on the left, the quiet controls on the right —
+          copy-with-link and comment. Siblings of the main button, so none
+          of these clicks navigate. */}
       <div className="flex items-center justify-between pb-1.5 pl-7 pr-2">
         <span className="text-2xs text-muted-foreground">
           {note.timeRange
             ? formatTime(note.timeRange.start)
             : `Page ${note.pageNumber + 1}`}
         </span>
-        <button
-          type="button"
-          onClick={() =>
-            draft === null ? setDraft(note.comment ?? "") : commit()
-          }
-          className={cn(
-            "rounded px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors",
-            "hover:bg-accent hover:text-foreground",
-            "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
-          )}
-        >
-          {draft !== null ? "Save" : note.comment ? "Edit" : "Comment"}
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => {
+              const url = new URL(
+                `/documents/${note.documentId}`,
+                window.location.origin
+              );
+              if (!note.timeRange) {
+                url.searchParams.set("page", String(note.pageNumber + 1));
+                url.searchParams.set("highlight", note.text.slice(0, 80));
+              }
+              void navigator.clipboard.writeText(`“${note.text}”\n${url.href}`);
+            }}
+            title="Copy quote with link"
+            aria-label="Copy quote with link"
+            className={cn(
+              "grid size-5 place-items-center rounded text-muted-foreground transition-colors",
+              "hover:bg-accent hover:text-foreground",
+              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+            )}
+          >
+            <LinkIcon className="size-3" />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              draft === null ? setDraft(note.comment ?? "") : commit()
+            }
+            className={cn(
+              "rounded px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors",
+              "hover:bg-accent hover:text-foreground",
+              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+            )}
+          >
+            {draft !== null ? "Save" : note.comment ? "Edit" : "Comment"}
+          </button>
+        </div>
       </div>
 
       <button

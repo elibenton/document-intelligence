@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Highlighter, Link, MessageSquarePlus } from "lucide-react";
+import { Highlighter, Link, MessageSquarePlus, PencilLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import type { SelectionAnchor } from "./AnnotationLayer";
@@ -8,8 +8,9 @@ import { usePopoverAfterGesture } from "./usePopoverAfterGesture";
 /**
  * The offer that follows a text drag while the highlighter pen is away.
  * Nothing is committed yet — the selection is just a selection until one of
- * these is chosen: highlight it, highlight it and open the note card, or copy
- * the text with a deep link back to this spot.
+ * these is chosen: highlight it, highlight it and open the note card, or the
+ * third slot — copy-with-link on documents, fix-the-transcript on
+ * recordings (`onFix` supplied means the caller can edit these words).
  *
  * `initialFocus={false}` because stealing focus would collapse the DOM
  * selection this menu exists to act on.
@@ -19,6 +20,7 @@ export function SelectionActions({
   onHighlight,
   onNote,
   onCopyLink,
+  onFix,
   onDismiss,
 }: {
   /** The selection's viewport rect, where the popover hangs. */
@@ -26,6 +28,9 @@ export function SelectionActions({
   onHighlight: () => void;
   onNote: () => void;
   onCopyLink: () => void;
+  /** Replaces the third option: open the transcript-correction editor for
+   *  the selected words. */
+  onFix?: () => void;
   onDismiss: () => void;
 }) {
   const virtualAnchor = useMemo(
@@ -76,15 +81,27 @@ export function SelectionActions({
             Add note
           </Button>
           <span className="h-5 w-px bg-border" aria-hidden="true" />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onCopyLink}
-            className="h-6 px-2"
-          >
-            <Link className="size-3.5" />
-            Copy with link
-          </Button>
+          {onFix ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onFix}
+              className="h-6 px-2"
+            >
+              <PencilLine className="size-3.5" />
+              Fix transcript
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onCopyLink}
+              className="h-6 px-2"
+            >
+              <Link className="size-3.5" />
+              Copy with link
+            </Button>
+          )}
         </div>
       </PopoverContent>
     </Popover>

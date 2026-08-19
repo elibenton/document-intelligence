@@ -81,6 +81,42 @@ const wordValidator = v.object({
   end: v.number(),
 });
 
+/**
+ * Replace a segment's words wholesale — the transcript-correction primitive.
+ * The client computes the corrected array (it owns the timing interpolation
+ * for inserted words) and sends the whole thing, which is also exactly what
+ * an undo needs to send back. The segment's text and its mirror block (the
+ * search index source) are rebuilt from the words, so search stays truthful.
+ */
+export const correctSegment = authedMutation({
+  args: {
+    documentId: v.id("documents"),
+    segmentId: v.id("transcriptSegments"),
+    words: v.array(wordValidator),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireDocument(ctx, args.documentId);
+    const row = await ctx.db.get(args.segmentId);
+    if (!row || row.documentId !== args.documentId) return null;
+    const text = args.words.map((w) => w.word).join(" ");
+    await ctx.db.patch(args.segmentId, { words: args.words, text });
+
+    // Transcript blocks all sit on page 0, one per segment, id-stamped at
+    // ingest (processingStages.ts).
+    const blockId = `transcript_seg${row.segmentIndex}`;
+    const blocks = await ctx.db
+      .query("blocks")
+      .withIndex("by_document", (q) =>
+        q.eq("documentId", args.documentId).eq("pageNumber", 0)
+      )
+      .collect();
+    const mirror = blocks.find((b) => b.blockId === blockId);
+    if (mirror) await ctx.db.patch(mirror._id, { text });
+    return null;
+  },
+});
+
 export const ingestTranscript = internalMutation({
   args: {
     documentId: v.id("documents"),

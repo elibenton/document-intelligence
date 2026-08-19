@@ -31,6 +31,8 @@ import {
   type AnnotationColor,
 } from "@/components/viewer/annotationColors";
 import { SelectionActions } from "@/components/viewer/SelectionActions";
+import { Popover, PopoverContent } from "@/components/ui/popover";
+import { usePopoverAfterGesture } from "@/components/viewer/usePopoverAfterGesture";
 import { useUndoStack } from "@/components/viewer/useHighlightUndo";
 import { useConfirm } from "@/components/ui/use-confirm";
 
@@ -43,6 +45,21 @@ interface PendingNote {
   timeRange: { start: number; end: number };
   text: string;
   blockIds: string[];
+  /** Word coordinates when the selection sits inside one segment — what the
+   *  "Fix transcript" offer edits. Cross-segment selections have none (a
+   *  single replacement string can't be split across segments sensibly), so
+   *  they fall back to copy-with-link in the third slot. */
+  range?: { seg: number; fromWord: number; toWord: number };
+}
+
+/** A transcript correction in progress: which words, and where the editor
+ *  popover hangs. */
+interface FixingWords {
+  seg: number;
+  fromWord: number;
+  toWord: number;
+  text: string;
+  anchor: SelectionAnchor;
 }
 
 export const RecordingView = forwardRef<
@@ -331,6 +348,77 @@ export const RecordingView = forwardRef<
   const setActiveWordEl = useCallback((el: HTMLSpanElement | null) => {
     if (el) activeWordRef.current = el;
   }, []);
+
+  // ----- Transcript correction ---------------------------------------------
+  const [fixing, setFixing] = useState<FixingWords | null>(null);
+  const correctSegment = useMutation(api.transcripts.correctSegment);
+
+  /** Replace words [fromWord..toWord] of a segment with the given text.
+   *  Inserted words split the replaced range's time span evenly; the whole
+   *  before/after word arrays ride the same ⌘Z stack as speaker edits, so
+   *  undo restores the exact prior words in sequence with everything else. */
+  const replaceWords = useCallback(
+    (segIndex: number, fromWord: number, toWord: number, replacement: string) => {
+      const seg = segments?.[segIndex];
+      if (!seg) return;
+      const tokens = replacement.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return;
+      const t0 = seg.words[fromWord]?.start ?? seg.startTime;
+      const t1 = seg.words[toWord]?.end ?? seg.endTime;
+      const span = Math.max(0, t1 - t0);
+      const replaced = tokens.map((word, i) => ({
+        word,
+        start: t0 + (span * i) / tokens.length,
+        end: t0 + (span * (i + 1)) / tokens.length,
+      }));
+      const prevWords = seg.words;
+      const nextWords = [
+        ...seg.words.slice(0, fromWord),
+        ...replaced,
+        ...seg.words.slice(toWord + 1),
+      ];
+      void correctSegment({
+        documentId: doc._id,
+        segmentId: seg._id,
+        words: nextWords,
+      }).then(() =>
+        pushUndo(() => {
+          void correctSegment({
+            documentId: doc._id,
+            segmentId: seg._id,
+            words: prevWords,
+          }).catch(() => {});
+        })
+      );
+    },
+    [segments, correctSegment, doc._id, pushUndo]
+  );
+
+  /** Double-click on a word: edit that one word in place. Clears the
+   *  browser's own double-click word selection and any pending offer, so
+   *  the editor is the only thing left standing from the gesture. */
+  const openFixWord = useCallback(
+    (segIndex: number, wordIndex: number, rect: DOMRect) => {
+      const word = segments?.[segIndex]?.words[wordIndex];
+      if (!word) return;
+      window.getSelection()?.removeAllRanges();
+      setPendingNote(null);
+      setNotePopup(null);
+      setFixing({
+        seg: segIndex,
+        fromWord: wordIndex,
+        toWord: wordIndex,
+        text: word.word,
+        anchor: {
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+        },
+      });
+    },
+    [segments]
+  );
 
   // Keep the active word in view during playback — unless the user has
   // scrolled away, in which case following pauses until they ask for it back
@@ -659,6 +747,10 @@ export const RecordingView = forwardRef<
         { length: b.seg - a.seg + 1 },
         (_, i) => `transcript_seg${a.seg + i}`,
       ),
+      range:
+        a.seg === b.seg
+          ? { seg: a.seg, fromWord: a.word, toWord: b.word }
+          : undefined,
     };
     // Armed, the pen commits on lift — that is the whole gesture. Otherwise
     // the selection is just a selection: the offer popover decides whether it
@@ -813,6 +905,7 @@ export const RecordingView = forwardRef<
                   searchWords={runSearchWords[ri]}
                   rename={rename}
                   onMergeUp={mergeTurnUp}
+                  onFixWord={openFixWord}
                   onSeek={seekTo}
                   activeWordRef={setActiveWordEl}
                 />
@@ -890,7 +983,28 @@ export const RecordingView = forwardRef<
           onHighlight={() => highlightPending(false)}
           onNote={() => highlightPending(true)}
           onCopyLink={copyPendingLink}
+          onFix={
+            pendingNote.range
+              ? () => {
+                  const { range, text, anchor } = pendingNote;
+                  window.getSelection()?.removeAllRanges();
+                  setPendingNote(null);
+                  setFixing({ ...range!, text, anchor });
+                }
+              : undefined
+          }
           onDismiss={() => setPendingNote(null)}
+        />
+      )}
+      {fixing && (
+        <TranscriptFixPopover
+          key={`${fixing.seg}:${fixing.fromWord}`}
+          fixing={fixing}
+          onCommit={(text) => {
+            replaceWords(fixing.seg, fixing.fromWord, fixing.toWord, text);
+            setFixing(null);
+          }}
+          onDismiss={() => setFixing(null)}
         />
       )}
       {notePopup &&
@@ -921,3 +1035,75 @@ export const RecordingView = forwardRef<
     </div>
   );
 });
+
+/**
+ * The transcript-correction editor: a small popover over the words being
+ * fixed, seeded with their current text. Enter commits the replacement,
+ * Escape abandons it. Deferred one tick (usePopoverAfterGesture) so the
+ * click or double-click that opened it can't also dismiss it.
+ */
+function TranscriptFixPopover({
+  fixing,
+  onCommit,
+  onDismiss,
+}: {
+  fixing: FixingWords;
+  onCommit: (text: string) => void;
+  onDismiss: () => void;
+}) {
+  const [draft, setDraft] = useState(fixing.text);
+  const virtualAnchor = useMemo(
+    () => ({
+      getBoundingClientRect: () =>
+        new DOMRect(
+          fixing.anchor.left,
+          fixing.anchor.top,
+          fixing.anchor.right - fixing.anchor.left,
+          fixing.anchor.bottom - fixing.anchor.top
+        ),
+    }),
+    [fixing.anchor]
+  );
+
+  if (!usePopoverAfterGesture()) return null;
+  return (
+    <Popover
+      open
+      onOpenChange={(next) => {
+        if (!next) onDismiss();
+      }}
+    >
+      <PopoverContent
+        anchor={virtualAnchor}
+        side="bottom"
+        align="center"
+        sideOffset={8}
+        onPointerDown={(event) => event.stopPropagation()}
+        className="w-72 overflow-visible rounded-lg border bg-popover p-2 shadow-xl"
+        aria-label="Fix transcript"
+      >
+        <textarea
+          value={draft}
+          autoFocus
+          rows={2}
+          aria-label="Corrected transcript text"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") onDismiss();
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              onCommit(draft);
+            }
+          }}
+          className={cn(
+            "w-full resize-none rounded-md border bg-background px-2 py-1.5 text-sm",
+            "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+          )}
+        />
+        <p className="mt-1 text-2xs text-muted-foreground">
+          Replaces the selected words. Enter saves · ⌘Z undoes.
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}

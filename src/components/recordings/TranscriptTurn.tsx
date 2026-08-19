@@ -168,6 +168,7 @@ const SegmentWords = memo(function SegmentWords({
   highlights,
   searchWords,
   onSeek,
+  onFixWord,
   activeWordRef,
 }: {
   segment: TurnSegment;
@@ -178,6 +179,8 @@ const SegmentWords = memo(function SegmentWords({
   highlights?: TurnHighlight[];
   searchWords?: Set<number>;
   onSeek: (time: number) => void;
+  /** Double-click on a word: open the transcript-correction editor on it. */
+  onFixWord?: (segIndex: number, wordIndex: number, rect: DOMRect) => void;
   activeWordRef: (el: HTMLSpanElement | null) => void;
 }) {
   return (
@@ -203,6 +206,16 @@ const SegmentWords = memo(function SegmentWords({
               data-word={wi}
               ref={wordActive ? activeWordRef : undefined}
               onClick={() => onSeek(w.start)}
+              // Several gestures share this span — click seeks, drag
+              // selects, double-click edits. The editor's opener clears the
+              // browser's double-click selection and any pending offer, so
+              // the layers don't stack.
+              onDoubleClick={
+                onFixWord
+                  ? (e) =>
+                      onFixWord(index, wi, e.currentTarget.getBoundingClientRect())
+                  : undefined
+              }
               // No horizontal padding: span padding is not painted by the
               // native selection, so padded words made a drag-selection
               // read as separate boxes instead of one continuous run.
@@ -254,6 +267,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   searchWords,
   rename,
   onMergeUp,
+  onFixWord,
   onSeek,
   activeWordRef,
 }: {
@@ -280,6 +294,8 @@ export const TranscriptTurn = memo(function TranscriptTurn({
    *  Stable across renders (keyed by `startIndex`) so the memo holds; the
    *  first run renders no × — there is nothing above to merge into. */
   onMergeUp?: (startIndex: number) => void;
+  /** Double-click a word to correct it (see SegmentWords). */
+  onFixWord?: (segIndex: number, wordIndex: number, rect: DOMRect) => void;
   onSeek: (time: number) => void;
   activeWordRef: (el: HTMLSpanElement | null) => void;
 }) {
@@ -358,6 +374,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
             highlights={highlights?.[rel]}
             searchWords={searchWords?.[rel]}
             onSeek={onSeek}
+            onFixWord={onFixWord}
             activeWordRef={activeWordRef}
           />
         ))}
