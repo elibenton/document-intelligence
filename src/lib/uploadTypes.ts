@@ -36,16 +36,4 @@ export function isSupportedUpload(file: File): boolean {
 export const UNSUPPORTED_REASON =
   "Unsupported file type — upload a PDF, CSV, image, audio, or video file. Convert .docx to PDF first. Web pages are captured with the browser clipper.";
 
-export function isCsvDocument(doc: {
-  mediaType?: string;
-  mimeType?: string;
-  name?: string;
-}): boolean {
-  const mime = doc.mimeType?.toLowerCase() ?? "";
-  return (
-    doc.mediaType === "csv" ||
-    mime === "text/csv" ||
-    mime === "application/csv" ||
-    doc.name?.toLowerCase().endsWith(".csv") === true
-  );
-}
+export { isCsvDocument } from "../../convex/mediaTypes";

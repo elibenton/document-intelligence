@@ -64,7 +64,6 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_slug", ["slug"])
-    .index("by_createdAt", ["createdAt"])
     .index("by_owner", ["ownerId"])
     .searchIndex("search_name", { searchField: "name" }),
 
@@ -556,7 +555,6 @@ export default defineSchema({
     translationVersion: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_document", ["documentId"])
     .index("by_document_and_target_and_page", [
       "documentId",
       "targetLanguageCode",
@@ -1171,8 +1169,7 @@ export default defineSchema({
     // project afterwards, and historic rows keep the owner who actually paid.
     ownerId: v.optional(v.string()),
   })
-    .index("by_document", ["documentId"])
-    .index("by_owner", ["ownerId"]),
+    .index("by_document", ["documentId"]),
 
   // Denormalized running totals (singleton) so the usage page never has to
   // scan/count the full log.

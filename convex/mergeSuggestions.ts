@@ -144,40 +144,6 @@ export const accept = authedMutation({
   },
 });
 
-/**
- * Merge two entities the heuristic never suggested — the only fix for the
- * pairs no string similarity reaches ("Smith, John", "IRS"). Records itself
- * as an accepted suggestion so the pair is never re-suggested and the
- * measurement sees it.
- */
-export const mergeManual = authedMutation({
-  args: {
-    sourceId: v.id("entities"),
-    targetId: v.id("entities"),
-  },
-  handler: async (ctx, args) => {
-    const source = await requireEntity(ctx, args.sourceId);
-    const target = await requireEntity(ctx, args.targetId);
-    if (source._id === target._id) throw new Error("Pick two different entities");
-    if (source.projectId !== target.projectId) {
-      throw new Error("Entities live in different projects");
-    }
-    const suggestionId = await ctx.db.insert("mergeSuggestions", {
-      sourceEntityId: source._id,
-      targetEntityId: target._id,
-      projectId: target.projectId,
-      reason: "Merged by hand",
-      status: "accepted",
-      confidence: 1,
-      resolvedAt: Date.now(),
-    });
-    const logId = await mergeEntities(ctx, { source, target, suggestionId });
-    if (target.projectId) {
-      await bumpDedupeCounter(ctx, target.projectId, "manualMerges");
-    }
-    return { mergeLogId: logId, survivorId: target._id };
-  },
-});
 
 /**
  * Undo a merge from its log row — best-effort by declaration: rows the

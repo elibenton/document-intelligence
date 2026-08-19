@@ -18,7 +18,7 @@ import {
   formatTokens,
 } from "@/lib/usageFormat";
 
-type StepStatus = "pending" | "running" | "completed" | "failed" | "waiting";
+type StepStatus = "pending" | "running" | "completed" | "failed";
 
 /**
  * A step's retry affordance, revealed on hover/focus in place of its marker.
@@ -64,13 +64,11 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * Live pipeline for a document, as a vertical list: Scan → Analyze → Extract.
+ * Live pipeline for a document, as a vertical list: Scan → Analyze.
  *
- * Those three are the product's vocabulary. Scan and Analyze are now separate
- * pooled stages (convex/processingStages.ts), so Analyze can sit queued behind
- * other documents rather than following Scan immediately. A queued Analyze
- * renders as running: "waiting" is reserved for waiting on the *user*, which
- * is what Extract does before a template is confirmed.
+ * Scan is the one understanding call (text, geometry, metadata, and the
+ * entity graph in a single request); Analyze is the text-in re-run that owns
+ * the editable-prompt retry. A queued step renders as running.
  *
  * Upload is not a step. By the time this renders the upload has succeeded, so a
  * permanently-checked box only added width. Translation is not a step either:
@@ -521,13 +519,6 @@ function StepIcon({ status }: { status: StepStatus }) {
     return (
       <span className="flex size-5 items-center justify-center rounded-full bg-red-600 text-white">
         <X className="size-3" strokeWidth={3} />
-      </span>
-    );
-  }
-  if (status === "waiting") {
-    return (
-      <span className="flex size-5 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-50 dark:bg-amber-950">
-        <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
       </span>
     );
   }

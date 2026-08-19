@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { adminMutation, adminQuery, authedQuery } from "./authz";
+import { adminMutation, adminQuery } from "./authz";
 
 /**
  * The per-account spend cap.
@@ -117,16 +117,6 @@ export async function chargeUsage(
   }
 }
 
-/** What the signed-in account has left, for the settings page and the banner. */
-export const mine = authedQuery({
-  args: {},
-  returns: v.object({
-    spentUsd: v.number(),
-    limitUsd: v.number(),
-    exhausted: v.boolean(),
-  }),
-  handler: async (ctx) => await budgetFor(ctx, ctx.user._id),
-});
 
 /**
  * Raise (or lower) an account's ceiling. The other half of "reach out to me":

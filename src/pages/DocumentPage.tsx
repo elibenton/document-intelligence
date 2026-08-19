@@ -45,6 +45,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { isAudioVideo } from "@/components/documents/docStatus";
 import { documentTitles } from "@/lib/documentTitle";
 import { isCsvDocument } from "@/lib/uploadTypes";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -192,22 +193,11 @@ export default function DocumentPage({ id }: { id: string }) {
    * once the file opens either way.
    */
   const totalPages = document?.pageCount ?? (pages?.length || undefined);
-  const isRecording = Boolean(
-    document &&
-      (document.mediaType === "audio" ||
-        document.mediaType === "video" ||
-        document.mimeType.startsWith("audio/") ||
-        document.mimeType.startsWith("video/"))
-  );
+  const isRecording = Boolean(document && isAudioVideo(document));
 
   // Recordings navigate via the transcript, so the page/section Contents tab
   // only applies to paged documents.
-  const showContentsTab = !isCsv && !(
-    document?.mediaType === "audio" ||
-    document?.mediaType === "video" ||
-    document?.mimeType.startsWith("audio/") ||
-    document?.mimeType.startsWith("video/")
-  );
+  const showContentsTab = !isCsv && !isRecording;
   useEffect(() => {
     if (!showContentsTab) return;
     const onKeyDown = (e: KeyboardEvent) => {

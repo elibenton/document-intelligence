@@ -44,6 +44,7 @@ import type * as issueFingerprint from "../issueFingerprint.js";
 import type * as issueState from "../issueState.js";
 import type * as issues from "../issues.js";
 import type * as kinds from "../kinds.js";
+import type * as mediaTypes from "../mediaTypes.js";
 import type * as mergeSuggestions from "../mergeSuggestions.js";
 import type * as metadata from "../metadata.js";
 import type * as migrations from "../migrations.js";
@@ -115,6 +116,7 @@ declare const fullApi: ApiFromModules<{
   issueState: typeof issueState;
   issues: typeof issues;
   kinds: typeof kinds;
+  mediaTypes: typeof mediaTypes;
   mergeSuggestions: typeof mergeSuggestions;
   metadata: typeof metadata;
   migrations: typeof migrations;

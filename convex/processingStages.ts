@@ -28,22 +28,13 @@ import {
   type CategoryDef,
 } from "./analyzePrompt";
 import { usageLogger } from "./apiLogs";
+import { isCsvDocument } from "./mediaTypes";
 import type { Doc, Id } from "./_generated/dataModel";
 import Papa from "papaparse";
 
 const CSV_INDEX_BYTES = 700_000;
 const CSV_INDEX_ROWS = 2_000;
 const CSV_ROWS_PER_PAGE = 100;
-
-function isCsvDocument(document: Doc<"documents">): boolean {
-  const mime = document.mimeType.toLowerCase();
-  return (
-    document.mediaType === "csv" ||
-    mime === "text/csv" ||
-    mime === "application/csv" ||
-    document.name.toLowerCase().endsWith(".csv")
-  );
-}
 
 /**
  * Build deterministic, bounded search pages for a CSV without trying to

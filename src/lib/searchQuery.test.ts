@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  incompleteTerm,
   parseQuery,
   serializeQuery,
   serializeTerm,
@@ -84,20 +83,6 @@ describe("parseQuery", () => {
   });
 });
 
-describe("incompleteTerm", () => {
-  it("detects a trailing bare prefix", () => {
-    expect(incompleteTerm("refund kind:")).toBe("kind");
-  });
-  it("detects a trailing open quote", () => {
-    expect(incompleteTerm('kind:"tax')).toBe("kind");
-  });
-  it("returns null for complete input", () => {
-    expect(incompleteTerm("kind:memo")).toBeNull();
-  });
-  it("returns null for unknown prefixes", () => {
-    expect(incompleteTerm("self:")).toBeNull();
-  });
-});
 
 describe("serialization", () => {
   it("quotes only when needed", () => {

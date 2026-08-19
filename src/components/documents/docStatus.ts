@@ -35,6 +35,8 @@ export function libraryStatus(doc: {
   analyzeStatus?: string | null;
 }): LibraryStatus | null {
   if (doc.status === "failed") return "Failed";
+  // Legacy rows only: nothing writes status "extracting" since the pipeline
+  // merged into one understanding call (2026-08-18).
   if (doc.status === "extracting") return "Extracting";
   // Queued and scanning are the same fact to a reader: the text isn't out yet.
   if (doc.status === "uploaded" || doc.status === "parsing") return "Scanning";

@@ -43,7 +43,7 @@ function endpoints(): Endpoint[] {
   // hand the handler a `ctx.user` and are reachable from outside, so an
   // endpoint of theirs that takes an id and skips the walk is the same bug.
   const decl =
-    /export const (\w+) = (authedQuery|authedMutation|authedAction|adminQuery|demoQuery|demoMutation)\(\{/g;
+    /export const (\w+) = (authedQuery|authedMutation|authedAction|adminQuery|adminMutation|demoQuery|demoMutation)\(\{/g;
   for (const file of fs.readdirSync(DIR)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
     const src = fs.readFileSync(path.join(DIR, file), "utf8");

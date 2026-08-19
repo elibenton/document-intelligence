@@ -1,5 +1,4 @@
 import { v } from "convex/values";
-import { internalMutation } from "./_generated/server";
 import { authedMutation, authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
 import { transcriptSignature } from "./speakerSignature";
@@ -249,47 +248,3 @@ export const suggestions = authedQuery({
   },
 });
 
-/**
- * AI-suggested names from textual clues, written by the pipeline (Analyze's
- * recording-gated `speakers` field). Never touches a human row — the same
- * human-wins rule every *Source field follows.
- */
-export const saveSuggestions = internalMutation({
-  args: {
-    documentId: v.id("documents"),
-    speakers: v.array(
-      v.object({
-        label: v.string(),
-        name: v.string(),
-        evidence: v.string(),
-      })
-    ),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    for (const suggestion of args.speakers) {
-      const row = await ctx.db
-        .query("documentSpeakers")
-        .withIndex("by_document", (q) =>
-          q.eq("documentId", args.documentId).eq("label", suggestion.label)
-        )
-        .unique();
-      if (row?.source === "human") continue;
-      if (row) {
-        await ctx.db.patch(row._id, {
-          name: suggestion.name,
-          evidence: suggestion.evidence,
-        });
-      } else {
-        await ctx.db.insert("documentSpeakers", {
-          documentId: args.documentId,
-          label: suggestion.label,
-          name: suggestion.name,
-          source: "ai",
-          evidence: suggestion.evidence,
-        });
-      }
-    }
-    return null;
-  },
-});

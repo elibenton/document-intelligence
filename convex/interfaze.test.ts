@@ -53,6 +53,13 @@ function ocrResult(pageTexts: string[], pageHeight = 1584, width = 1224) {
  * different groupings (six 2-page entries, then one 12-page entry), against a
  * real page of 1224x1584.
  */
+// NOTE (2026-08-18): production feeds ocrPrecontextToPages from two sources —
+// the task call (always exactly one entry) and the merged understanding
+// call's precontext, which came back single-entry in every probe so far but
+// historically returned duplicates and wrong entry counts (see the
+// reinstatement note on understandDocument in interfaze.ts). The multi-entry
+// cases below pin the defense for that historical behavior recurring; they
+// are a contingency contract, not evidence of current production traffic.
 function stackedResult(pageTexts: string[], pageHeight = 1584, width = 1224) {
   return {
     width,

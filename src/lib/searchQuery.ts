@@ -94,14 +94,6 @@ export function parseQuery(input: string): ParsedQuery {
   return { text, terms };
 }
 
-/** True when the trailing token is a prefix with no committed value yet
- * (`kind:` mid-typing) — the state prefix-value autocomplete keys on. */
-export function incompleteTerm(input: string): SearchPrefix | null {
-  const m = /([A-Za-z]+):("[^"“”]*)?$/.exec(input);
-  if (!m) return null;
-  const canonical = ALIASES[m[1].toLowerCase()] ?? m[1].toLowerCase();
-  return KNOWN.has(canonical) ? (canonical as SearchPrefix) : null;
-}
 
 const needsQuotes = (value: string) => value === "" || /\s/.test(value);
 

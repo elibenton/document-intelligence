@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { authedQuery } from "./authz";
 import { requireDocument } from "./ownership";
+import { isCsvDocument } from "./mediaTypes";
 
 /**
  * The Analyze instruction, in one place.
@@ -23,8 +24,6 @@ export interface CategoryDef {
 /** Off-taxonomy fallback: the honest bucket for a category the model
  *  invented. Never a `documentCategories` row — see convex/documentCategories.ts. */
 export const OTHER_CATEGORY = "other";
-
-export type PrimaryCategory = string;
 
 /**
  * How to pick one category, including what to do when several plausibly fit.
@@ -222,15 +221,6 @@ export function analyzeSystemPrompt(csv: boolean): string {
     : "You are a meticulous document-understanding system. Work only from the text provided. Be factual, never invent detail, and use Unknown when metadata is uncertain.";
 }
 
-function isCsv(name: string, mimeType: string, mediaType?: string): boolean {
-  const mime = mimeType.toLowerCase();
-  return (
-    mediaType === "csv" ||
-    mime === "text/csv" ||
-    mime === "application/csv" ||
-    name.toLowerCase().endsWith(".csv")
-  );
-}
 
 /** The prompt the next Analyze run would use, for the retry dialog to pre-fill. */
 export const forDocument = authedQuery({
@@ -255,7 +245,7 @@ export const forDocument = authedQuery({
           .collect()
       : [];
     return buildAnalyzePrompt({
-      csv: isCsv(document.name, document.mimeType, document.mediaType),
+      csv: isCsvDocument(document),
       fileName: document.name,
       kindNames: kinds.map((kind) => kind.name),
       categories: categories
