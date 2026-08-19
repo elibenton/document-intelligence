@@ -13,7 +13,15 @@ import { cn } from "@/lib/utils";
  * revealed as editable on hover/focus, saving on commit — Enter or an
  * outside-click dismissal while dirty — with Escape cancelling. One rule
  * everywhere (mirrors the schema's *Source contract): committing text stamps
- * the edit; committing empty clears the field and hands it back to the AI.
+ * the edit. What committing EMPTY means depends on `clearMode`: "refill"
+ * (default, the original contract) hands the field back to the AI; "clear"
+ * deletes it for good — the server leaves a human tombstone nothing refills.
+ * The hint under the field says which, so the UI never lies about a clear.
+ *
+ * `provenance` names where the current value came from, shown only inside
+ * the open editor (nothing at rest); `candidates` are the retained other
+ * answers — what the file itself declared, what analysis said — offered as
+ * one-click rows under the input.
  *
  * Three primitives, one file, all riding ui/popover.tsx — no hand-rolled
  * focus management anywhere (the fence in CLAUDE.md exists because that's
@@ -39,6 +47,77 @@ function errorText(e: unknown): string {
   return raw.split("Uncaught Error:").pop()?.trim() || "Couldn't save.";
 }
 
+export interface EditableProvenance {
+  source: "native" | "ai" | "human";
+  /** Overrides the generic label, e.g. "Published date from theatlantic.com". */
+  detail?: string;
+}
+
+/** A retained other answer for this field — offered back as a one-click row. */
+export interface EditableCandidate {
+  value: string;
+  source: "native" | "ai";
+  /** Display form when the raw value isn't it (a formatted date). */
+  label?: string;
+}
+
+const PROVENANCE_LABEL: Record<EditableProvenance["source"], string> = {
+  native: "From the source itself",
+  ai: "Suggested by analysis",
+  human: "Edited by you",
+};
+
+const CANDIDATE_SOURCE_LABEL: Record<EditableCandidate["source"], string> = {
+  native: "from the source",
+  ai: "analysis",
+};
+
+function ProvenanceFooter({
+  provenance,
+}: {
+  provenance: EditableProvenance | undefined;
+}) {
+  if (!provenance) return null;
+  return (
+    <p className="mt-1.5 px-0.5 text-xs text-muted-foreground">
+      {provenance.detail ?? PROVENANCE_LABEL[provenance.source]}
+    </p>
+  );
+}
+
+function CandidateRows({
+  candidates,
+  current,
+  onPick,
+}: {
+  candidates: EditableCandidate[] | undefined;
+  current: string;
+  onPick: (value: string) => void;
+}) {
+  const shown = (candidates ?? []).filter(
+    (candidate) => candidate.value && candidate.value !== current
+  );
+  if (shown.length === 0) return null;
+  return (
+    <div className="mt-1.5 border-t border-border pt-1">
+      {shown.map((candidate) => (
+        <button
+          key={`${candidate.source}:${candidate.value}`}
+          onClick={() => onPick(candidate.value)}
+          className="flex w-full items-baseline justify-between gap-2 rounded px-1.5 py-1 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="truncate">{candidate.label ?? candidate.value}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {CANDIDATE_SOURCE_LABEL[candidate.source]}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const CLEAR_HINT = "Clearing deletes it — analysis won't refill it.";
+
 export function EditableText({
   value,
   placeholder = "—",
@@ -48,6 +127,9 @@ export function EditableText({
   renderValue,
   allowEmpty = true,
   className,
+  provenance,
+  candidates,
+  clearMode = "refill",
 }: {
   value: string | null | undefined;
   /** Rendered when the value is absent — the fillable slot. A node, so the
@@ -61,6 +143,14 @@ export function EditableText({
   /** False for fields where empty is meaningless (an entity's name). */
   allowEmpty?: boolean;
   className?: string;
+  /** Where the current value came from — shown only inside the open editor. */
+  provenance?: EditableProvenance;
+  /** Retained other answers, offered as one-click rows under the input. */
+  candidates?: EditableCandidate[];
+  /** What committing empty means: "refill" re-opens the field to analysis
+   *  (the original contract); "clear" deletes it for good (server tombstone).
+   *  Display only — the semantics are enforced server-side. */
+  clearMode?: "clear" | "refill";
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -79,8 +169,8 @@ export function EditableText({
     setOpen(next);
   }
 
-  async function commit() {
-    const next = draft.trim();
+  async function commit(explicit?: string) {
+    const next = (explicit ?? draft).trim();
     if (saving) return;
     if (!next && !allowEmpty) {
       setError("This can't be empty.");
@@ -156,6 +246,17 @@ export function EditableText({
             className="h-8 text-sm"
           />
         )}
+        <CandidateRows
+          candidates={candidates}
+          current={current}
+          onPick={(picked) => void commit(picked)}
+        />
+        <ProvenanceFooter provenance={provenance} />
+        {clearMode === "clear" && current && allowEmpty && (
+          <p className="mt-1.5 px-0.5 text-xs text-muted-foreground">
+            {CLEAR_HINT}
+          </p>
+        )}
         {error && <p className="mt-1.5 text-xs text-destructive">{error}</p>}
         {saving && (
           <p className="mt-1.5 text-xs text-muted-foreground">Saving…</p>
@@ -181,6 +282,9 @@ export function EditableSelect({
   searchable = false,
   renderValue,
   className,
+  provenance,
+  candidates,
+  clearMode = "refill",
 }: {
   value: string | null | undefined;
   options: EditableOption[];
@@ -195,6 +299,10 @@ export function EditableSelect({
   searchable?: boolean;
   renderValue?: (value: string) => ReactNode;
   className?: string;
+  provenance?: EditableProvenance;
+  candidates?: EditableCandidate[];
+  /** See EditableText. "clear" relabels the None row to say it deletes. */
+  clearMode?: "clear" | "refill";
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -285,6 +393,11 @@ export function EditableSelect({
             </p>
           )}
         </div>
+        <CandidateRows
+          candidates={candidates}
+          current={current}
+          onPick={(picked) => void commit(picked)}
+        />
         {allowClear && current && (
           <>
             <div className="my-1 border-t border-border" />
@@ -292,10 +405,13 @@ export function EditableSelect({
               onClick={() => void commit("")}
               className="block w-full rounded px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              None — let analysis fill it
+              {clearMode === "clear"
+                ? "None — deletes it, analysis won't refill"
+                : "None — let analysis fill it"}
             </button>
           </>
         )}
+        <ProvenanceFooter provenance={provenance} />
         {allowCustom && (
           <>
             <div className="my-1 border-t border-border" />
@@ -335,6 +451,9 @@ export function EditableDate({
   placeholder,
   onCommit,
   className,
+  provenance,
+  candidates,
+  clearMode,
 }: {
   /** The raw ISO prefix, for editing. */
   value: string | null | undefined;
@@ -348,6 +467,10 @@ export function EditableDate({
     precision: "day" | "month" | "year" | null;
   }) => Promise<unknown>;
   className?: string;
+  provenance?: EditableProvenance;
+  /** Candidate values are ISO prefixes; give each a formatted `label`. */
+  candidates?: EditableCandidate[];
+  clearMode?: "clear" | "refill";
 }) {
   return (
     <EditableText
@@ -355,6 +478,9 @@ export function EditableDate({
       placeholder={placeholder ?? display ?? "Undated"}
       label={label}
       className={className}
+      provenance={provenance}
+      candidates={candidates}
+      clearMode={clearMode}
       renderValue={() => display ?? value ?? ""}
       onCommit={async (next) => {
         if (!next) {
