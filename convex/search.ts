@@ -33,6 +33,7 @@ import { chatCompletion } from "./interfaze";
 import { usageLogger } from "./apiLogs";
 import { healthReporter } from "./providerHealth";
 import { embeddingsApiKey, embedTexts } from "./embeddings";
+import { verifyAnswer } from "./answerVerification";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -478,6 +479,12 @@ export const update = internalMutation({
       )
     ),
     answer: v.optional(v.string()),
+    verification: v.optional(
+      v.object({
+        totalClaims: v.number(),
+        removedClaims: v.array(v.string()),
+      })
+    ),
     errorMessage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -921,7 +928,7 @@ const ANSWER_SCHEMA = {
     answer: {
       type: "string",
       description:
-        "Markdown answer to the question, grounded ONLY in the provided sources and known facts. Cite sources inline as [1], [2] ... matching the numbered source list. If the sources don't contain the answer, say so plainly.",
+        "Markdown answer to the question, containing ONLY facts the provided sources and known facts explicitly state — nothing from your own knowledge, nothing inferred or estimated. Use markdown structure where it helps the reader: bold key names, bulleted or numbered lists, ### headings for multi-part answers, tables for tabular facts. Every factual sentence ends with its citations as bare bracketed numbers matching the numbered source list, one number per bracket ([2][7], never [Source 2] or [2, 7]). If the sources answer the question only partially or not at all, say so plainly.",
     },
   },
   required: ["answer"],
@@ -1111,6 +1118,9 @@ export const execute = internalAction({
 
       // ---- 3. Synthesize --------------------------------------------------
       let answer = "";
+      let verification:
+        | { totalClaims: number; removedClaims: string[] }
+        | undefined;
       if (interfazeKey && (hydrated.length > 0 || entityResult.facts.length > 0)) {
         const sourcesBlock = hydrated
           .map(
@@ -1129,7 +1139,7 @@ export const execute = internalAction({
               operation: "search_answer",
             },
             systemPrompt:
-              "You answer questions about a private document corpus. Ground every claim in the numbered sources or the known facts — cite sources inline as [n]. Never use outside knowledge. If the material doesn't answer the question, say what's missing.",
+              "You answer questions about a private document corpus. Write ONLY what the numbered sources or the known facts explicitly state. You very likely know more about this topic than the sources do — that knowledge is forbidden here: never fill gaps, infer, estimate, or combine facts the sources do not state themselves. Never write a name, date, number, or percentage that you cannot point to in a source. An incomplete answer is correct; an answer completed from memory is worthless. Every sentence that states a fact must end with the citation(s) backing it, as bare bracketed numbers, one per bracket: [2][7], never [Source 2] or [2, 7]. If the sources answer only part of the question, answer that part and say plainly what the corpus does not establish.",
             content: [
               {
                 type: "text",
@@ -1140,6 +1150,20 @@ export const execute = internalAction({
             maxTokens: 2000,
           });
           answer = (JSON.parse(content) as { answer?: string }).answer ?? "";
+          // The deterministic gate behind the prompt above: every cited claim
+          // is checked against the pages it cites, and claims those pages
+          // don't support are removed before the answer is stored. Verified
+          // against the same text the model was shown.
+          const checked = verifyAnswer(
+            answer,
+            hydrated.map((h) => h.text),
+            entityResult.facts.join("\n")
+          );
+          answer = checked.answer;
+          verification = {
+            totalClaims: checked.totalClaims,
+            removedClaims: checked.removedClaims,
+          };
         } catch {
           // Synthesis failure still leaves useful ranked results.
         }
@@ -1153,6 +1177,7 @@ export const execute = internalAction({
           (results.length === 0
             ? "No matching content found in the corpus for this query."
             : ""),
+        verification,
       });
     } catch (e) {
       await ctx.runMutation(internal.search.update, {

@@ -11,6 +11,7 @@
 import type * as admin from "../admin.js";
 import type * as analyzePrompt from "../analyzePrompt.js";
 import type * as annotations from "../annotations.js";
+import type * as answerVerification from "../answerVerification.js";
 import type * as apiLogs from "../apiLogs.js";
 import type * as auth from "../auth.js";
 import type * as authz from "../authz.js";
@@ -89,6 +90,7 @@ declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   analyzePrompt: typeof analyzePrompt;
   annotations: typeof annotations;
+  answerVerification: typeof answerVerification;
   apiLogs: typeof apiLogs;
   auth: typeof auth;
   authz: typeof authz;

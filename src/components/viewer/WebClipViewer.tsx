@@ -17,7 +17,7 @@ export function WebClipViewer({ url, sourceUrl, clippedAt }: WebClipViewerProps)
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full w-full min-w-0">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-muted/50 text-xs text-muted-foreground shrink-0">
         <Globe className="size-3.5 shrink-0" />
         <span className="truncate">

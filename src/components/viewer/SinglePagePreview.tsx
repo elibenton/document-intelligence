@@ -15,9 +15,10 @@ import { PdfPageSkeleton } from "./PdfPageSkeleton";
  * showing the same document also share one fetch, one worker, and the browser's
  * HTTP cache.
  *
- * A DOCX has no drawable file, and a PDF that fails to open is not worth an
- * error card here — both fall back to the bare white page the geometry was
- * extracted against, with the overlay still exact.
+ * An image document is drawn directly with an <img>. A DOCX has no drawable
+ * file, and a PDF that fails to open is not worth an error card here — both
+ * fall back to the bare white page the geometry was extracted against, with
+ * the overlay still exact.
  *
  * Two coordinate spaces meet here, deliberately kept apart the same way
  * PdfViewer keeps them: the surface is sized from the page's true pdf.js
@@ -52,6 +53,7 @@ export function SinglePagePreview({
   overlay?: (scale: number) => React.ReactNode;
 }) {
   const isPdf = mediaType === "pdf";
+  const isImage = mediaType === "image";
   const { pdf, error } = usePdfDocument(isPdf ? fileUrl : null);
 
   // The page's true size as pdf.js reports it — the authority on aspect ratio.
@@ -101,7 +103,15 @@ export function SinglePagePreview({
           transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
         }}
       >
-        {pdf ? (
+        {isImage && fileUrl ? (
+          <img
+            src={fileUrl}
+            alt=""
+            width={surfaceWidth}
+            height={surfaceHeight}
+            className="block h-full w-full object-contain"
+          />
+        ) : pdf ? (
           <PdfPageCanvas
             pdf={pdf}
             pageNumber={pageNumber + 1}

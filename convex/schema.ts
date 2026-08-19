@@ -1036,6 +1036,16 @@ export default defineSchema({
       )
     ),
     answer: v.optional(v.string()), // markdown, cites sources as [n]
+    // Post-synthesis verification (convex/answerVerification.ts): every cited
+    // claim was checked for token overlap against the pages it cites; claims
+    // that failed were removed from `answer` and preserved here so the UI can
+    // disclose what was cut instead of silently shortening the answer.
+    verification: v.optional(
+      v.object({
+        totalClaims: v.number(),
+        removedClaims: v.array(v.string()),
+      })
+    ),
     errorMessage: v.optional(v.string()),
     createdAt: v.number(),
   })

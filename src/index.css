@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+/* Styles the search answer's rendered markdown (the only `prose` consumer).
+   Without it those classes compile to nothing and the answer renders as an
+   unstyled wall of text — no list markers, no paragraph spacing. */
+@plugin "@tailwindcss/typography";
 
 /* Base UI reports orientation as `data-orientation`; these map the readable
    `data-horizontal:` / `data-vertical:` variants onto it. Previously supplied

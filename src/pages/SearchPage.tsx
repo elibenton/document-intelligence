@@ -191,6 +191,7 @@ export default function SearchPage() {
                   answer={search.answer}
                   results={search.results ?? []}
                   projectId={projectId}
+                  verification={search.verification ?? null}
                 />
               ) : search?.status === "synthesizing" ? (
                 <div className="max-w-3xl space-y-2 mb-8">

@@ -8,10 +8,23 @@ import {
 import { Link } from "react-router";
 import { useQuery } from "convex/react";
 import ReactMarkdown from "react-markdown";
-import { ArrowUpRight, ChevronLeft, ChevronRight, FileText } from "lucide-react";
+// Answers are GFM markdown (the schema invites tables); core react-markdown
+// is CommonMark-only, and without this plugin a table renders as a wall of
+// literal pipes.
+import remarkGfm from "remark-gfm";
+import {
+  ArrowUpRight,
+  AudioLines,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  Globe,
+  ShieldAlert,
+  TriangleAlert,
+} from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { useCitations } from "@/lib/citation/useCitations";
-import type { Formatter } from "@/lib/citation/format";
+import { citationMarkdown, firstCitationNumber } from "@/lib/citation/markers";
 import type { CitationStyle } from "../../../convex/projectTemplates";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -42,19 +55,24 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function matchingBoxes(
-  blocks: Array<{
-    _id: string;
-    text: string;
-    bbox?: { x: number; y: number; width: number; height: number };
-  }>,
-  snippet: string
-): MatchBox[] {
+interface EvidenceBlock {
+  _id: string;
+  text: string;
+  bbox?: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * The blocks on the page that carry the cited snippet — the shared scoring
+ * behind both highlight styles: bbox blocks become boxes drawn on the page
+ * image, bboxless blocks (web clips, transcripts) become highlighted runs in
+ * the text excerpt.
+ */
+function matchingBlocks(blocks: EvidenceBlock[], snippet: string): EvidenceBlock[] {
   const target = normalizeText(snippet);
   if (!target) return [];
   const targetTokens = new Set(target.split(" "));
   const scored = blocks
-    .filter((block) => block.bbox && normalizeText(block.text))
+    .filter((block) => normalizeText(block.text))
     .map((block) => {
       const text = normalizeText(block.text);
       const tokens = text.split(" ");
@@ -72,47 +90,27 @@ function matchingBoxes(
     .sort((a, b) => b.score - a.score);
 
   const containedMatches = scored.filter(({ contained }) => contained);
-  let matches =
+  // No blind fallback: highlighting the "closest" block when nothing truly
+  // matches dressed fabricated citations up as corroborated ones. An empty
+  // result renders as an explicit "passage not found" instead.
+  const matches =
     containedMatches.length > 0
       ? containedMatches
       : scored.filter(({ score, shared }) => shared >= 3 && score >= 0.72);
-  if (matches.length === 0 && scored[0]?.score > 0) {
-    matches = [scored[0]];
-  }
 
-  return matches.slice(0, 6).map(({ block }) => ({
-    id: block._id,
-    x: block.bbox!.x,
-    y: block.bbox!.y,
-    width: block.bbox!.width,
-    height: block.bbox!.height,
-  }));
+  return matches.slice(0, 6).map(({ block }) => block);
 }
 
-/**
- * Turn the model's `[n]` markers into links to their evidence card, and — for a
- * project on a real citation style — replace the visible label with that
- * style's own in-text form.
- *
- * The anchor is always `#citation-n`, whatever the label says, because the
- * marker's *position* is what ties a claim to a page. The stored answer keeps
- * its plain `[n]` forever: style is applied here, at render, which is what lets
- * a project switch from numbered to Chicago and have every answer it already
- * has re-format instead of going stale.
- */
-function citationMarkdown(
-  answer: string,
-  formatter: Formatter | null,
-  inline: boolean
-) {
-  return answer.replace(/\[(\d+)](?!\()/g, (_match, digits: string) => {
-    const number = Number(digits);
-    const label = inline && formatter ? formatter.inText(number - 1) : `[${number}]`;
-    // The label can contain brackets of its own; an unescaped "]" would end the
-    // markdown link early and spill the rest into the paragraph.
-    const safe = label.replace(/([[\]])/g, "\\$1");
-    return `[${safe}](#citation-${number})`;
-  });
+function boxesOf(matches: EvidenceBlock[]): MatchBox[] {
+  return matches
+    .filter((block) => block.bbox)
+    .map((block) => ({
+      id: block._id,
+      x: block.bbox!.x,
+      y: block.bbox!.y,
+      width: block.bbox!.width,
+      height: block.bbox!.height,
+    }));
 }
 
 /**
@@ -180,6 +178,77 @@ function CitationButton({
   );
 }
 
+/**
+ * The extracted text of the cited page with the matched blocks highlighted —
+ * the evidence rendering for media with no drawable page: web clips,
+ * audio/video transcripts, DOCX. These used to render as a blank white
+ * rectangle, because the page renderer only knew how to draw PDFs.
+ */
+function TextExcerpt({
+  blocks,
+  matchedIds,
+  active,
+  fallback,
+}: {
+  blocks: EvidenceBlock[];
+  matchedIds: Set<string>;
+  active: boolean;
+  /** The result snippet, shown alone when the page has no stored blocks. */
+  fallback: string;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Bring the cited passage into view when this card becomes the selection.
+  // Scrolls the excerpt's own pane directly instead of scrollIntoView, which
+  // would also yank the window and the carousel.
+  useEffect(() => {
+    if (!active) return;
+    const container = containerRef.current;
+    const target = container?.querySelector<HTMLElement>(
+      "[data-citation-match]"
+    );
+    if (!container || !target) return;
+    container.scrollTop =
+      target.offsetTop - container.clientHeight / 2 + target.clientHeight / 2;
+  }, [active, matchedIds]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative max-h-[560px] overflow-y-auto bg-card px-6 py-5"
+    >
+      {blocks.length === 0 ? (
+        <p
+          className={`text-sm leading-relaxed ${
+            active ? "rounded-sm bg-amber-300/40" : ""
+          }`}
+        >
+          {fallback}
+        </p>
+      ) : (
+        blocks.map((block) => {
+          const hit = matchedIds.has(block._id);
+          return (
+            <p
+              key={block._id}
+              data-citation-match={hit || undefined}
+              className={`my-2 text-sm leading-relaxed ${
+                hit && active
+                  ? "-mx-1 rounded-sm bg-amber-300/40 px-1"
+                  : hit
+                    ? "-mx-1 rounded-sm bg-muted px-1"
+                    : "text-muted-foreground"
+              }`}
+            >
+              {block.text}
+            </p>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 function CitationPage({
   result,
   file,
@@ -202,10 +271,29 @@ function CitationPage({
     documentId: result.documentId,
     pageNumber: result.pageNumber,
   });
-  const boxes = useMemo(
-    () => matchingBoxes(blocks ?? [], result.snippet),
+  const matches = useMemo(
+    () => matchingBlocks(blocks ?? [], result.snippet),
     [blocks, result.snippet]
   );
+  const boxes = useMemo(() => boxesOf(matches), [matches]);
+  const matchedIds = useMemo(
+    () => new Set(matches.map((block) => block._id)),
+    [matches]
+  );
+
+  // Pages that exist as pixels are drawn; everything else shows its text.
+  const mediaType = file?.mediaType;
+  const drawable = mediaType === "pdf" || mediaType === "image";
+  const isTranscript = mediaType === "audio" || mediaType === "video";
+  const SourceIcon =
+    mediaType === "webScrape" ? Globe : isTranscript ? AudioLines : FileText;
+  const contextLabel = drawable
+    ? `Page ${result.pageNumber + 1}`
+    : mediaType === "webScrape"
+      ? "Web clip"
+      : isTranscript
+        ? "Transcript"
+        : "Excerpt";
 
   return (
     <article
@@ -224,16 +312,16 @@ function CitationPage({
         >
           {number}
         </span>
-        <FileText className="size-4 shrink-0 text-muted-foreground" />
+        <SourceIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
           {result.documentName}
         </span>
         <span className="shrink-0 text-xs text-muted-foreground">
-          Page {result.pageNumber + 1}
+          {contextLabel}
         </span>
-        {boxes.length > 1 && (
+        {matches.length > 1 && (
           <span className="shrink-0 rounded-full bg-amber-400/20 px-2 py-1 text-2xs font-medium text-amber-800 dark:text-amber-300">
-            {boxes.length} matches on this page
+            {matches.length} matches on this page
           </span>
         )}
         <Link
@@ -244,50 +332,85 @@ function CitationPage({
         </Link>
       </div>
 
-      <div className="bg-muted/50 p-5">
-        <div
-          className="mx-auto overflow-hidden rounded-sm bg-white shadow-lg"
-          style={{ width: PAGE_WIDTH }}
-        >
-          {/* The page itself, drawn by pdf.js from the original file, with the
-              citation boxed on it. A DOCX has no drawable file and keeps the
-              white page — the geometry is exact either way. */}
-          <SinglePagePreview
-            fileUrl={file?.url ?? null}
-            mediaType={file?.mediaType}
-            pageNumber={result.pageNumber}
-            width={PAGE_WIDTH}
-            pageWidth={pageDims?.width}
-            pageHeight={pageDims?.height}
-            rotation={pageDims?.rotation ?? 0}
-            overlay={(scale) => (
-              <>
-                {active &&
-                  boxes.map((box) => (
-                    <span
-                      key={box.id}
-                      data-citation-highlight
-                      className="absolute rounded-sm border-2 border-amber-500 bg-amber-300/40 shadow-[0_0_0_2px_rgba(255,255,255,0.7)]"
-                      style={{
-                        left: box.x * scale,
-                        top: box.y * scale,
-                        width: box.width * scale,
-                        height: box.height * scale,
-                      }}
-                    />
-                  ))}
-                {active && blocks !== undefined && boxes.length === 0 && (
-                  <span
-                    data-citation-highlight
-                    className="absolute inset-2 rounded-sm border-4 border-amber-500 shadow-[inset_0_0_0_2px_rgba(255,255,255,0.75)]"
-                    aria-hidden="true"
-                  />
-                )}
-              </>
-            )}
+      {/* Honesty over theater: when the retrieval snippet can't be located in
+          this page's stored blocks, say so instead of boxing the nearest
+          lookalike. Web clips are exempt — their card shows the snippet
+          itself, and the sandboxed iframe was never highlightable. */}
+      {mediaType !== "webScrape" &&
+        blocks !== undefined &&
+        matches.length === 0 && (
+          <div className="flex items-center gap-2 border-b bg-warning/10 px-4 py-2 text-xs text-muted-foreground">
+            <TriangleAlert className="size-3.5 shrink-0 text-warning" />
+            The cited passage couldn't be located on this page, so nothing is
+            highlighted.
+          </div>
+        )}
+
+      {drawable ? (
+        <div className="bg-muted/50 p-5">
+          <div
+            className="mx-auto overflow-hidden rounded-sm bg-white shadow-lg"
+            style={{ width: PAGE_WIDTH }}
+          >
+            {/* The page itself, drawn from the original file (pdf.js for a
+                PDF, the image itself for an image), with the citation boxed
+                on it. */}
+            <SinglePagePreview
+              fileUrl={file?.url ?? null}
+              mediaType={file?.mediaType}
+              pageNumber={result.pageNumber}
+              width={PAGE_WIDTH}
+              pageWidth={pageDims?.width}
+              pageHeight={pageDims?.height}
+              rotation={pageDims?.rotation ?? 0}
+              overlay={(scale) => (
+                <>
+                  {active &&
+                    boxes.map((box) => (
+                      <span
+                        key={box.id}
+                        data-citation-highlight
+                        className="absolute rounded-sm border-2 border-amber-500 bg-amber-300/40 shadow-[0_0_0_2px_rgba(255,255,255,0.7)]"
+                        style={{
+                          left: box.x * scale,
+                          top: box.y * scale,
+                          width: box.width * scale,
+                          height: box.height * scale,
+                        }}
+                      />
+                    ))}
+                </>
+              )}
+            />
+          </div>
+        </div>
+      ) : mediaType === "webScrape" && file?.url ? (
+        // The archived snapshot itself, as on the document page. Sandboxed and
+        // cross-origin, so the citation can't be highlighted inside it — the
+        // cited passage rides above the frame instead.
+        <div className="flex flex-col">
+          <blockquote
+            className={`border-b px-4 py-2.5 text-xs leading-relaxed ${
+              active ? "bg-amber-300/40" : "bg-muted/50 text-muted-foreground"
+            }`}
+          >
+            {result.snippet}
+          </blockquote>
+          <iframe
+            src={file.url}
+            title={`Archived snapshot: ${result.documentName}`}
+            sandbox=""
+            className="h-[480px] w-full border-0 bg-white"
           />
         </div>
-      </div>
+      ) : (
+        <TextExcerpt
+          blocks={blocks ?? []}
+          matchedIds={matchedIds}
+          active={active}
+          fallback={result.snippet}
+        />
+      )}
     </article>
   );
 }
@@ -296,11 +419,14 @@ export function ResearchAnswerWithEvidence({
   answer,
   results,
   projectId,
+  verification,
 }: {
   answer: string;
   results: ResearchResult[];
   /** Whose citation style to render in. Null falls back to numbered sources. */
   projectId: Id<"projects"> | null;
+  /** What the post-synthesis check removed (convex/answerVerification.ts). */
+  verification?: { totalClaims: number; removedClaims: string[] } | null;
 }) {
   // Deduped: the same document can supply two evidence pages, and a
   // bibliography lists a source once however often it is cited.
@@ -321,8 +447,7 @@ export function ResearchAnswerWithEvidence({
   );
   const inlineCitations = hasInlineCitations(style);
   const firstCitation = useMemo(() => {
-    const first = answer.match(/\[(\d+)]/);
-    const number = first ? Number(first[1]) : 1;
+    const number = firstCitationNumber(answer) ?? 1;
     return results[number - 1] ? number : 1;
   }, [answer, results]);
   const [activeCitation, setActiveCitation] = useState(firstCitation);
@@ -350,10 +475,23 @@ export function ResearchAnswerWithEvidence({
   function selectCitation(number: number) {
     if (!results[number - 1]) return;
     setActiveCitation(number);
+    // Clicking a citation should land the reader on its evidence page: bring
+    // the carousel into the viewport (a long answer pushes it below the fold),
+    // then center the card within it. Not in centerCard — the on-load
+    // auto-center must never scroll the window.
+    carouselRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     centerCard(number, "smooth");
   }
 
   const markdownComponents = {
+    // A wide table scrolls in its own pane instead of pushing the column out.
+    table({ children, ...props }: ComponentPropsWithoutRef<"table">) {
+      return (
+        <div className="overflow-x-auto">
+          <table {...props}>{children}</table>
+        </div>
+      );
+    },
     a({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
       const match = href?.match(/^#citation-(\d+)$/);
       if (!match) {
@@ -382,11 +520,48 @@ export function ResearchAnswerWithEvidence({
     <>
       <div className="max-w-3xl">
         <div className="prose prose-sm dark:prose-invert max-w-none mb-8 [&_p]:leading-relaxed">
-          <ReactMarkdown components={markdownComponents}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
             {citationMarkdown(answer, formatter, inlineCitations)}
           </ReactMarkdown>
         </div>
       </div>
+
+      {/* Disclosure of what the verification pass cut. Silence would read as
+          "this is the whole answer"; the removed text stays inspectable so a
+          wrongly-cut claim can be recognized and re-checked by a human. */}
+      {verification && verification.removedClaims.length > 0 && (
+        <div className="mb-8 max-w-3xl rounded-lg border border-warning/40 bg-warning/5 p-4 text-sm">
+          <div className="flex items-start gap-2">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div className="min-w-0">
+              <p className="font-medium">
+                {verification.removedClaims.length} of{" "}
+                {verification.totalClaims} cited{" "}
+                {verification.totalClaims === 1 ? "claim" : "claims"} removed
+              </p>
+              <p className="text-muted-foreground">
+                These sentences cited pages that don't contain what they say,
+                so they were cut from the answer rather than shown as fact.
+              </p>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                  Show removed text
+                </summary>
+                <ul className="mt-2 space-y-1.5">
+                  {verification.removedClaims.map((claim, i) => (
+                    <li
+                      key={i}
+                      className="text-xs leading-relaxed text-muted-foreground"
+                    >
+                      {claim}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* The bibliography, in the style's own order and format. Absent for a
           numbered project, where the evidence cards already are the list. */}
