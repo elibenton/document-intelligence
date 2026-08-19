@@ -3,7 +3,6 @@ import { Link } from "react-router";
 import { CircleAlert } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { DocTypeIcon } from "./DocTypeIcon";
-import { DocumentIdentityMenu } from "./DocumentIdentityMenu";
 import { libraryStatus } from "./docStatus";
 import { PropertyChips, type ChipCommit } from "@/components/views/PropertyChips";
 import type { PropertyOption } from "@/lib/views/types";
@@ -149,11 +148,9 @@ export function LibraryRow({
         )}
       </span>
 
+      {/* The ⋮ identity menu is retired: renaming is inline on the document
+          page, kinds edit there and via the category chip below. */}
       <span className="flex shrink-0 items-center gap-2">
-        <DocumentIdentityMenu
-          document={doc}
-          className="relative z-10 opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100"
-        />
         <PropertyChips
           row={doc}
           defs={DOCUMENT_PROPERTIES}

@@ -44,7 +44,8 @@ import { DocumentUsage } from "@/components/documents/DocumentUsage";
 import { DocumentActions } from "@/components/documents/DocumentActions";
 import { DocumentInfoPanel } from "@/components/documents/DocumentInfoPanel";
 import { formatDuration } from "@/lib/duration";
-import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
+import { EditableText } from "@/components/ui/editable";
+import { buildDocumentFacts } from "@/lib/documentFacts";
 import {
   EntityConnectionList,
   type DocumentConnection,
@@ -106,6 +107,7 @@ export default function DocumentPage({ id }: { id: string }) {
   });
   const retryTranslation = useMutation(api.translations.retry);
   const rotateDocument = useMutation(api.documents.rotateDocument);
+  const updateIdentity = useMutation(api.documents.updateIdentity);
   const runSuggestedExtraction = useAction(api.suggestedEntities.runExtraction);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -509,6 +511,7 @@ export default function DocumentPage({ id }: { id: string }) {
   }
 
   const titles = documentTitles(document);
+  const titleFacts = buildDocumentFacts(document).title;
   const hasBlocks = blocks && blocks.some((b) => b.bbox);
   const isParsed =
     document.status === "parsed" ||
@@ -584,14 +587,28 @@ export default function DocumentPage({ id }: { id: string }) {
         >
           <Folder className="size-4" />
         </Link>
-        {/* Renaming and re-typing the document lives behind the ⋮ menu next
-            to the type pills — the title itself is just a title. The menu
-            stays out of sight until you're over the title, so the type
-            pills aren't fighting a third element for room at rest. */}
-        <div className="group/title flex min-w-0 flex-1 items-center gap-3">
+        {/* The title edits in place (the EntityPage pattern) — the ⋮ identity
+            menu is retired; kinds edit in the Info panel and the library's
+            chips. Clearing the title tombstones it back to the filename. */}
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-base font-semibold leading-tight text-foreground">
-              {titles.primary}
+            <h1 className="min-w-0 text-base font-semibold leading-tight text-foreground">
+              <EditableText
+                value={titles.primary}
+                multiline
+                label="Edit title"
+                placeholder={document.name}
+                provenance={titleFacts.provenance}
+                candidates={titleFacts.candidates}
+                clearMode="clear"
+                className="max-w-full"
+                renderValue={(value) => (
+                  <span className="truncate">{value}</span>
+                )}
+                onCommit={(next) =>
+                  updateIdentity({ id: document._id, displayName: next })
+                }
+              />
             </h1>
             {titles.original && (
               <p className="truncate text-xs leading-tight text-muted-foreground">
@@ -604,10 +621,6 @@ export default function DocumentPage({ id }: { id: string }) {
             primaryCategory={document.primaryCategory}
             primaryKind={document.primaryKind}
             className="shrink-0"
-          />
-          <DocumentIdentityMenu
-            document={document}
-            className="shrink-0 opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100"
           />
         </div>
 
