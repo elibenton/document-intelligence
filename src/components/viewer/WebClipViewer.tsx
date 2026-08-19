@@ -38,11 +38,15 @@ export function WebClipViewer({ url, sourceUrl, clippedAt }: WebClipViewerProps)
           </a>
         )}
       </div>
+      {/* Scripts stay blocked; allow-popups lets the archive's
+          <base target="_blank"> links open the live page in a real tab,
+          escaping the sandbox so that tab runs normally. */}
       <iframe
         src={url}
         title="Archived web page"
-        sandbox=""
-        className="flex-1 w-full border-0 bg-white"
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        className="flex-1 min-h-0 w-full border-0 bg-white"
       />
     </div>
   );

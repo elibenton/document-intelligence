@@ -27,6 +27,11 @@ interface ClipPayload {
 }
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // skip inlining single images above this
+const MAX_CSS_ASSET_BYTES = 512 * 1024; // fonts / background images
+// The /clip endpoint rejects archives over 5M characters, so inlining gets
+// whatever this target leaves after the page's own HTML and CSS text; past
+// that, resources keep their absolute URL instead of sinking the whole clip.
+const ARCHIVE_TARGET_CHARS = 4_800_000;
 const FETCH_TIMEOUT_MS = 10_000;
 
 // ---------------------------------------------------------------------------
@@ -41,7 +46,10 @@ function absolutize(url: string, base: string): string {
   }
 }
 
-async function fetchAsDataUri(url: string): Promise<string | null> {
+async function fetchAsDataUri(
+  url: string,
+  maxBytes: number
+): Promise<string | null> {
   if (url.startsWith("data:")) return url;
   if (!/^https?:/.test(url)) return null;
   try {
@@ -51,7 +59,7 @@ async function fetchAsDataUri(url: string): Promise<string | null> {
     clearTimeout(timer);
     if (!res.ok) return null;
     const blob = await res.blob();
-    if (blob.size > MAX_IMAGE_BYTES) return null;
+    if (blob.size > maxBytes) return null;
     return await new Promise<string | null>((resolve) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
@@ -81,12 +89,51 @@ function imageElementToDataUri(img: HTMLImageElement): string | null {
 // CSS collection: concatenate all stylesheets, absolutizing url(...) refs
 // ---------------------------------------------------------------------------
 
+const CSS_URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+
 function rewriteCssUrls(css: string, baseUrl: string): string {
-  return css.replace(
-    /url\(\s*(['"]?)([^'")]+)\1\s*\)/g,
-    (match, _q, ref) =>
-      ref.startsWith("data:") ? match : `url("${absolutize(ref, baseUrl)}")`
+  return css.replace(CSS_URL_RE, (match, _q, ref) =>
+    ref.startsWith("data:") ? match : `url("${absolutize(ref, baseUrl)}")`
   );
+}
+
+/**
+ * Inline fonts and background images referenced from CSS, so typography and
+ * decoration survive the original going offline or refusing cross-origin
+ * loads. Refs the budget can't afford keep their absolute URL.
+ */
+async function inlineCssAssets(
+  css: string,
+  afford: (chars: number) => boolean
+): Promise<string> {
+  // A ref repeated across rules expands at every occurrence, so the budget
+  // must be charged per occurrence, not per unique URL.
+  const refCounts = new Map<string, number>();
+  for (const match of css.matchAll(CSS_URL_RE)) {
+    const ref = match[2];
+    if (/^https?:/.test(ref)) {
+      refCounts.set(ref, (refCounts.get(ref) ?? 0) + 1);
+    }
+  }
+  if (refCounts.size === 0) return css;
+
+  // Fetch in parallel; spend the budget in deterministic (document) order.
+  const fetched = await Promise.all(
+    Array.from(refCounts.keys(), async (ref) =>
+      [ref, await fetchAsDataUri(ref, MAX_CSS_ASSET_BYTES)] as const
+    )
+  );
+  const inlined = new Map<string, string>();
+  for (const [ref, dataUri] of fetched) {
+    if (dataUri && afford(dataUri.length * refCounts.get(ref)!)) {
+      inlined.set(ref, dataUri);
+    }
+  }
+  if (inlined.size === 0) return css;
+  return css.replace(CSS_URL_RE, (match, _q, ref) => {
+    const dataUri = inlined.get(ref);
+    return dataUri ? `url("${dataUri}")` : match;
+  });
 }
 
 async function collectCss(): Promise<string> {
@@ -120,10 +167,11 @@ async function collectCss(): Promise<string> {
 async function buildArchive(options: CaptureOptions): Promise<string> {
   const clone = document.documentElement.cloneNode(true) as HTMLElement;
 
-  // Strip active/executable content
+  // Strip active/executable content, self-navigation, and resource hints
+  // that would only dangle or phone home from an archive.
   clone
     .querySelectorAll(
-      "script, noscript, link[rel='preload'], link[rel='modulepreload'], link[rel='prefetch'], meta[http-equiv='Content-Security-Policy']"
+      "script, noscript, link[rel='preload'], link[rel='modulepreload'], link[rel='prefetch'], link[rel='preconnect'], link[rel='dns-prefetch'], link[rel='manifest'], meta[http-equiv='Content-Security-Policy' i], meta[http-equiv='refresh' i]"
     )
     .forEach((el) => el.remove());
   clone.querySelectorAll("iframe, frame, embed, object").forEach((el) => {
@@ -150,10 +198,31 @@ async function buildArchive(options: CaptureOptions): Promise<string> {
     a.setAttribute("href", absolutize(a.getAttribute("href")!, location.href));
   });
 
-  // Inline (or absolutize) images. Original and clone querySelectorAll orders
+  // A <picture>'s <source> list outranks its <img> src, so leaving the
+  // sources in would make the browser ignore the inlined copy below and go
+  // back to the network. The <img> already shows what the reader saw.
+  clone.querySelectorAll("picture > source").forEach((el) => el.remove());
+
+  // Audio/video stays streamable from the live URL (inlining media would
+  // dwarf the archive), but must neither autoplay nor preload on open.
+  clone.querySelectorAll("video, audio, source, track").forEach((el) => {
+    const src = el.getAttribute("src");
+    if (src) el.setAttribute("src", absolutize(src, location.href));
+    el.removeAttribute("autoplay");
+    if (el.tagName !== "SOURCE" && el.tagName !== "TRACK") {
+      el.setAttribute("preload", "none");
+    }
+  });
+
+  // Absolutize every image first. Original and clone querySelectorAll orders
   // match, so index-pair the live elements with their clones.
   const liveImgs = Array.from(document.querySelectorAll("img"));
   const cloneImgs = Array.from(clone.querySelectorAll("img"));
+  const inlineCandidates: {
+    cloneImg: HTMLImageElement;
+    liveImg: HTMLImageElement | undefined;
+    abs: string;
+  }[] = [];
   for (let i = 0; i < cloneImgs.length; i++) {
     const cloneImg = cloneImgs[i];
     const liveImg = liveImgs[i];
@@ -167,18 +236,40 @@ async function buildArchive(options: CaptureOptions): Promise<string> {
       "";
     if (!src) continue;
     const abs = absolutize(src, location.href);
-    if (options.inlineImages) {
-      const dataUri =
-        (await fetchAsDataUri(abs)) ??
-        (liveImg ? imageElementToDataUri(liveImg) : null);
-      cloneImg.setAttribute("src", dataUri ?? abs);
-    } else {
-      cloneImg.setAttribute("src", abs);
+    cloneImg.setAttribute("src", abs);
+    if (options.inlineImages) inlineCandidates.push({ cloneImg, liveImg, abs });
+  }
+
+  let css = await collectCss();
+
+  // Everything above is text the archive must carry; inlining only gets what
+  // that leaves under the /clip ceiling. A resource the budget can't afford
+  // keeps its absolute URL rather than sinking the whole clip as oversized.
+  let inlineBudget = Math.max(
+    0,
+    ARCHIVE_TARGET_CHARS - clone.outerHTML.length - css.length
+  );
+  const afford = (chars: number): boolean => {
+    if (chars > inlineBudget) return false;
+    inlineBudget -= chars;
+    return true;
+  };
+
+  // Content images first, then fonts and background images from what's left.
+  for (const { cloneImg, liveImg, abs } of inlineCandidates) {
+    if (inlineBudget <= 0) break;
+    const dataUri =
+      (await fetchAsDataUri(abs, MAX_IMAGE_BYTES)) ??
+      (liveImg ? imageElementToDataUri(liveImg) : null);
+    if (dataUri && afford(dataUri.length)) {
+      cloneImg.setAttribute("src", dataUri);
     }
+  }
+  if (options.inlineImages && inlineBudget > 0) {
+    css = await inlineCssAssets(css, afford);
   }
 
   // Replace all stylesheet links / style tags with one combined inline sheet
-  const css = await collectCss();
   clone
     .querySelectorAll("link[rel='stylesheet'], style")
     .forEach((el) => el.remove());
@@ -187,7 +278,15 @@ async function buildArchive(options: CaptureOptions): Promise<string> {
   styleEl.textContent = css;
   head.appendChild(styleEl);
 
-  // Ensure charset + canonical base metadata
+  // Every URL in the archive is absolute by now, so an original <base> only
+  // misleads; ours sends link clicks to a new tab on the live web — followed
+  // in place, a link would render scriptless inside the viewer's sandbox.
+  clone.querySelectorAll("base").forEach((el) => el.remove());
+  const baseEl = document.createElement("base");
+  baseEl.setAttribute("target", "_blank");
+  head.insertBefore(baseEl, head.firstChild);
+
+  // Ensure charset + canonical base metadata (charset must stay first)
   const metaCharset = document.createElement("meta");
   metaCharset.setAttribute("charset", "utf-8");
   head.insertBefore(metaCharset, head.firstChild);
