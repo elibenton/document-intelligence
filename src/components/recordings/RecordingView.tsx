@@ -23,7 +23,6 @@ import { SpeakerNamingDialog } from "./SpeakerNamingDialog";
 import { transcriptSignature } from "../../../convex/speakerSignature";
 import {
   AnnotationComment,
-  HighlightActions,
   type SelectionAnchor,
 } from "@/components/viewer/AnnotationLayer";
 import {
@@ -31,6 +30,7 @@ import {
   DEFAULT_ANNOTATION_COLOR,
   type AnnotationColor,
 } from "@/components/viewer/annotationColors";
+import { SelectionActions } from "@/components/viewer/SelectionActions";
 import { useHighlightUndo } from "@/components/viewer/useHighlightUndo";
 import { useConfirm } from "@/components/ui/use-confirm";
 
@@ -229,14 +229,12 @@ export const RecordingView = forwardRef<
   const updateAnnotation = useMutation(api.annotations.update);
   const removeAnnotation = useMutation(api.annotations.remove);
   const mergeAnnotations = useMutation(api.annotations.merge);
-  // The popover open on a just-created highlight — the add-note/delete offer
-  // first, the comment card once asked for. Transcript runs render inside
-  // each turn with no anchor node, so both hang from the selection's own
-  // viewport rect instead.
+  // The comment card open on a just-highlighted selection ("Add note" in the
+  // offer popover). Transcript runs render inside each turn with no anchor
+  // node, so the card hangs from the selection's own viewport rect instead.
   const [notePopup, setNotePopup] = useState<{
     id: string;
     anchor: SelectionAnchor;
-    note: boolean;
   } | null>(null);
 
   // ⌘Z deletes the last highlight this visit created; the catch swallows the
@@ -283,6 +281,87 @@ export const RecordingView = forwardRef<
     },
     [createAnnotation, doc._id],
   );
+
+  /** A drag's selection, awaiting the offer popover's verdict. */
+  const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
+
+  // Committing folds into any highlight whose time range the selection
+  // overlaps; the union re-reads the words inside the merged span, so the
+  // stored text matches the widened anchor exactly.
+  const commitPending = useCallback(
+    async (note: PendingNote, color: AnnotationColor) => {
+      const overlapped = (annotations ?? []).filter(
+        (a) =>
+          a.timeRange &&
+          a.timeRange.start < note.timeRange.end &&
+          a.timeRange.end > note.timeRange.start
+      );
+      if (overlapped.length === 0) {
+        const id = await commitNote(note, color);
+        // Only fresh highlights join the ⌘Z stack: undoing a merge would
+        // delete the survivor outright, losing the pre-merge highlight too.
+        recordCreated(id);
+        return id;
+      }
+      const merged = {
+        start: Math.min(
+          note.timeRange.start,
+          ...overlapped.map((a) => a.timeRange!.start)
+        ),
+        end: Math.max(
+          note.timeRange.end,
+          ...overlapped.map((a) => a.timeRange!.end)
+        ),
+      };
+      const parts: string[] = [];
+      const segIds: string[] = [];
+      (segments ?? []).forEach((seg, si) => {
+        const words = seg.words.filter(
+          (w) => w.end > merged.start && w.start < merged.end
+        );
+        if (words.length > 0) {
+          parts.push(words.map((w) => w.word).join(" "));
+          segIds.push(`transcript_seg${si}`);
+        }
+      });
+      return await mergeAnnotations({
+        id: overlapped[0]._id,
+        absorb: overlapped.slice(1).map((a) => a._id),
+        text: parts.join(" "),
+        rects: [],
+        blockIds: segIds,
+        timeRange: merged,
+      });
+    },
+    [annotations, commitNote, mergeAnnotations, recordCreated, segments]
+  );
+
+  const settlePending = useCallback(() => {
+    setPendingNote(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
+  const highlightPending = useCallback(
+    (openNote: boolean) => {
+      if (!pendingNote) return;
+      const note = pendingNote;
+      settlePending();
+      void (async () => {
+        const id = await commitPending(note, DEFAULT_ANNOTATION_COLOR);
+        if (openNote) setNotePopup({ id, anchor: note.anchor });
+      })();
+    },
+    [commitPending, pendingNote, settlePending]
+  );
+
+  const copyPendingLink = useCallback(() => {
+    if (!pendingNote) return;
+    // No time-coded deep link yet — the document URL is the closest anchor a
+    // transcript quote has.
+    const url = new URL(window.location.pathname, window.location.origin);
+    void navigator.clipboard.writeText(`“${pendingNote.text}”\n${url.href}`);
+    settlePending();
+  }, [pendingNote, settlePending]);
 
   const onTranscriptPointerUp = useCallback(() => {
     if (!segments) return;
@@ -336,60 +415,17 @@ export const RecordingView = forwardRef<
         (_, i) => `transcript_seg${a.seg + i}`,
       ),
     };
-    // The selection commits straight to a highlight — folded into any
-    // highlight whose time range it overlaps, created fresh otherwise. Armed,
-    // the pen's color is the whole gesture; a normal drag also opens the
-    // add-note/delete offer, anchored where the selection ended.
-    const overlapped = (annotations ?? []).filter(
-      (a) =>
-        a.timeRange &&
-        a.timeRange.start < note.timeRange.end &&
-        a.timeRange.end > note.timeRange.start
-    );
-    void (async () => {
-      let id: string;
-      if (overlapped.length > 0) {
-        // The union re-reads the words inside the merged span, so the stored
-        // text matches the widened anchor exactly.
-        const merged = {
-          start: Math.min(
-            note.timeRange.start,
-            ...overlapped.map((a) => a.timeRange!.start)
-          ),
-          end: Math.max(
-            note.timeRange.end,
-            ...overlapped.map((a) => a.timeRange!.end)
-          ),
-        };
-        const parts: string[] = [];
-        const segIds: string[] = [];
-        segments.forEach((seg, si) => {
-          const words = seg.words.filter(
-            (w) => w.end > merged.start && w.start < merged.end
-          );
-          if (words.length > 0) {
-            parts.push(words.map((w) => w.word).join(" "));
-            segIds.push(`transcript_seg${si}`);
-          }
-        });
-        id = await mergeAnnotations({
-          id: overlapped[0]._id,
-          absorb: overlapped.slice(1).map((a) => a._id),
-          text: parts.join(" "),
-          rects: [],
-          blockIds: segIds,
-          timeRange: merged,
-        });
-      } else {
-        id = await commitNote(note, penColor ?? DEFAULT_ANNOTATION_COLOR);
-        // Only fresh highlights join the ⌘Z stack: undoing a merge would
-        // delete the survivor outright, losing the pre-merge highlight too.
-        recordCreated(id);
-      }
-      if (penColor) selection.removeAllRanges();
-      else setNotePopup({ id, anchor: note.anchor, note: false });
-    })();
-  }, [segments, annotations, penColor, commitNote, mergeAnnotations, recordCreated]);
+    // Armed, the pen commits on lift — that is the whole gesture. Otherwise
+    // the selection is just a selection: the offer popover decides whether it
+    // becomes a highlight, a note, or a copied quote.
+    if (penColor) {
+      selection.removeAllRanges();
+      void commitPending(note, penColor);
+      return;
+    }
+    setNotePopup(null);
+    setPendingNote(note);
+  }, [segments, penColor, commitPending]);
 
   useImperativeHandle(ref, () => ({ seekTo }), [seekTo]);
 
@@ -585,27 +621,21 @@ export const RecordingView = forwardRef<
         />
       )}
 
+      {pendingNote && (
+        <SelectionActions
+          anchor={pendingNote.anchor}
+          onHighlight={() => highlightPending(false)}
+          onNote={() => highlightPending(true)}
+          onCopyLink={copyPendingLink}
+          onDismiss={() => setPendingNote(null)}
+        />
+      )}
       {notePopup &&
         (() => {
           const annotation = annotations?.find((a) => a._id === notePopup.id);
           if (!annotation) return null;
           const id = annotation._id;
           const dismiss = () => setNotePopup(null);
-          if (!notePopup.note) {
-            return (
-              <HighlightActions
-                key={id}
-                annotation={annotation}
-                anchorRect={notePopup.anchor}
-                onNote={() => setNotePopup({ ...notePopup, note: true })}
-                onDelete={() => {
-                  void removeAnnotation({ id });
-                  dismiss();
-                }}
-                onDismiss={dismiss}
-              />
-            );
-          }
           return (
             <AnnotationComment
               // Remount per highlight: the comment draft is seeded from the row.
