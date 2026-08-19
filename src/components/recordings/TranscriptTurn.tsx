@@ -1,8 +1,28 @@
-import { memo } from "react";
+import { memo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { languageDirection } from "@/lib/languages";
-import { EditableText } from "@/components/ui/editable";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Autocomplete } from "@/components/ui/autocomplete";
+import { Button } from "@/components/ui/button";
 import { formatTime } from "./speakerColors";
+
+export interface SpeakerNameOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+/** Everything renaming a speaker needs, bundled so the memoized turns get
+ *  one stable prop. `arm` starts the option queries on first open. */
+export interface SpeakerRename {
+  commit: (label: string, name: string) => Promise<unknown>;
+  getOptions: (label: string) => SpeakerNameOption[];
+  arm: () => void;
+}
 
 export interface TurnHighlight {
   start: number;
@@ -23,6 +43,118 @@ export interface TurnSegment {
 }
 
 /**
+ * Click-to-rename on a turn's speaker label: a popover holding an
+ * autocomplete of the available names — the AI's suggested identity for
+ * this voice, names already assigned in this recording, and the user's
+ * speaker library. Free text is equally valid; the options suggest, they
+ * never constrain.
+ */
+function SpeakerNameEditor({
+  machineLabel,
+  name,
+  colorClass,
+  rename,
+}: {
+  machineLabel: string;
+  name: string;
+  colorClass: string | undefined;
+  rename: SpeakerRename;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  // Enter can select an option and submit in the same keystroke — the ref
+  // sees the just-selected value where the closure would see the old one.
+  const draftRef = useRef("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const setDraftBoth = (next: string) => {
+    draftRef.current = next;
+    setDraft(next);
+  };
+
+  const options = open ? rename.getOptions(machineLabel) : [];
+
+  const commit = async () => {
+    const next = draftRef.current.trim().replace(/\s+/g, " ");
+    if (saving) return;
+    if (!next || next === name) {
+      setOpen(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await rename.commit(machineLabel, next);
+      setOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          rename.arm();
+          setDraftBoth(name === machineLabel ? "" : name);
+          setError(null);
+        }
+        setOpen(next);
+      }}
+    >
+      <PopoverTrigger
+        title={`Rename ${name}`}
+        aria-label={`Rename ${name}`}
+        className={cn(
+          "rounded px-0.5 text-left hover:bg-accent",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "data-[popup-open]:bg-accent"
+        )}
+      >
+        <span
+          className={cn("text-sm font-semibold", colorClass)}
+          title={name === machineLabel ? undefined : machineLabel}
+        >
+          {name}
+        </span>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-72 max-w-[calc(100vw-2rem)] p-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex flex-col gap-2">
+          <Autocomplete
+            value={draft}
+            onValueChange={setDraftBoth}
+            items={options}
+            placeholder="Name this speaker…"
+            aria-label={`Name for ${machineLabel}`}
+            onSubmit={() => void commit()}
+          />
+          {error && <p className="text-xs text-destructive">{error}</p>}
+          <div className="flex justify-end gap-1.5">
+            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={saving || !draft.trim()}
+              onClick={() => void commit()}
+            >
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
  * One speaker turn, memoized so a timeupdate tick re-renders only the turn
  * the playhead left and the turn it entered — not the whole transcript.
  * Word keys are the start time, which survives future correction edits the
@@ -35,7 +167,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   colorClass,
   showHeader = true,
   searchWords,
-  onRename,
+  rename,
   isActive,
   activeWordIndex,
   showTranslation,
@@ -52,9 +184,11 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   showHeader?: boolean;
   /** Word indices covered by the active document search, if any. */
   searchWords?: Set<number>;
-  /** Rename this turn's diarizer label — the header becomes click-to-edit.
-   *  Renaming to a neighbor's name merges the turns (see showHeader). */
-  onRename?: (label: string, name: string) => Promise<unknown>;
+  /** Rename this turn's diarizer label — the header becomes click-to-edit,
+   *  offering the available names (AI suggestion, this recording's names,
+   *  the speaker library). Renaming to a neighbor's name merges the turns
+   *  (see showHeader). */
+  rename?: SpeakerRename;
   isActive: boolean;
   activeWordIndex: number;
   showTranslation: boolean;
@@ -71,20 +205,12 @@ export const TranscriptTurn = memo(function TranscriptTurn({
     <div data-seg={index} className={cn(index > 0 && (showHeader ? "mt-5" : "mt-1"))}>
       {showHeader && (
         <div className="flex items-baseline gap-2 mb-1">
-          {onRename ? (
-            <EditableText
-              value={speakerName}
-              label={`Rename ${speakerName}`}
-              allowEmpty={false}
-              onCommit={(next) => onRename(seg.speaker, next)}
-              renderValue={(name) => (
-                <span
-                  className={cn("text-sm font-semibold", colorClass)}
-                  title={name === seg.speaker ? undefined : seg.speaker}
-                >
-                  {name}
-                </span>
-              )}
+          {rename ? (
+            <SpeakerNameEditor
+              machineLabel={seg.speaker}
+              name={speakerName}
+              colorClass={colorClass}
+              rename={rename}
             />
           ) : (
             <span
@@ -106,7 +232,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
       <p
         dir={showTranslation ? languageDirection(seg.translatedLanguageCode) : "ltr"}
         className={cn(
-          "text-sm leading-7",
+          "text-sm leading-6",
           isActive && "bg-accent/40 rounded px-1 -mx-1",
         )}
       >

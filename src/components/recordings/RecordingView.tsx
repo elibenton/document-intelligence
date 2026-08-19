@@ -119,6 +119,18 @@ export const RecordingView = forwardRef<
       }),
     [confirmSpeakers, doc._id]
   );
+  // The rename popover's option lists, fetched only once an editor has
+  // actually been opened — most visits never rename anyone.
+  const [nameOptionsArmed, setNameOptionsArmed] = useState(false);
+  const armNameOptions = useCallback(() => setNameOptionsArmed(true), []);
+  const speakerLibrary = useQuery(
+    api.speakers.list,
+    nameOptionsArmed ? {} : "skip"
+  );
+  const speakerSuggestions = useQuery(
+    api.documentSpeakers.suggestions,
+    nameOptionsArmed ? { documentId: doc._id } : "skip"
+  );
   const nameByLabel = useMemo(() => {
     const map = new Map<string, string>();
     for (const row of speakerRows ?? []) {
@@ -126,6 +138,43 @@ export const RecordingView = forwardRef<
     }
     return map;
   }, [speakerRows]);
+
+  // Options offered when renaming a speaker: the AI's suggestion for that
+  // voice first, then names already assigned in this recording, then the
+  // user's speaker library — deduped, first spelling wins.
+  const getNameOptions = useCallback(
+    (label: string) => {
+      const seen = new Set<string>();
+      const items: { value: string; label: string; hint?: string }[] = [];
+      const add = (raw: string, hint?: string) => {
+        const value = raw.trim();
+        const key = value.toLowerCase();
+        if (!value || seen.has(key)) return;
+        seen.add(key);
+        items.push({ value, label: value, hint });
+      };
+      for (const s of speakerSuggestions ?? []) {
+        if (s.label === label) add(s.name, "suggested");
+      }
+      for (const [otherLabel, name] of nameByLabel) {
+        if (otherLabel !== label) add(name, "in this recording");
+      }
+      for (const s of speakerLibrary ?? []) {
+        add(s.name, `used ${s.useCount}×`);
+      }
+      return items;
+    },
+    [speakerSuggestions, nameByLabel, speakerLibrary]
+  );
+
+  const rename = useMemo(
+    () => ({
+      commit: renameSpeaker,
+      getOptions: getNameOptions,
+      arm: armNameOptions,
+    }),
+    [renameSpeaker, getNameOptions, armNameOptions]
+  );
 
   // Two diarizer labels given the same human name are the same person:
   // they combine — one color (the first-appearing label's), and consecutive
@@ -651,7 +700,7 @@ export const RecordingView = forwardRef<
                 colorClass={colorByName.get(name)}
                 showHeader={name !== prevName}
                 searchWords={searchWordsBySegment?.get(si)}
-                onRename={renameSpeaker}
+                rename={rename}
                 isActive={active.segment === si}
                 activeWordIndex={active.segment === si ? active.word : -1}
                 showTranslation={showTranslation}

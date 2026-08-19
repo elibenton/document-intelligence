@@ -18,6 +18,7 @@ export function Autocomplete({
   placeholder,
   "aria-label": ariaLabel,
   className,
+  onSubmit,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -25,6 +26,9 @@ export function Autocomplete({
   placeholder?: string;
   "aria-label"?: string;
   className?: string;
+  /** Enter in the input, when Base UI didn't consume it to select an item —
+   *  lets a caller commit the value without a separate Save click. */
+  onSubmit?: () => void;
 }) {
   return (
     <AutocompletePrimitive.Root
@@ -35,6 +39,9 @@ export function Autocomplete({
       <AutocompletePrimitive.Input
         placeholder={placeholder}
         aria-label={ariaLabel}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.defaultPrevented) onSubmit?.();
+        }}
         className={cn(
           "h-8 w-full rounded-md border border-input bg-transparent px-2.5 text-sm outline-none transition-colors",
           "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring",
