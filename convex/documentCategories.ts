@@ -137,21 +137,31 @@ export async function seedCategories(
   }
 }
 
-/** Edits label/description/color. `key` is immutable — documents reference it. */
+/** Edits label/nickname/description/color. `key` is immutable — documents
+ *  reference it. An emptied nickname clears back to the full label. */
 export const update = authedMutation({
   args: {
     id: v.id("documentCategories"),
     label: v.optional(v.string()),
+    nickname: v.optional(v.string()),
     description: v.optional(v.string()),
     color: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireDocumentCategory(ctx, args.id);
-    const patch: { label?: string; description?: string; color?: string } = {};
+    const patch: {
+      label?: string;
+      nickname?: string;
+      description?: string;
+      color?: string;
+    } = {};
     if (args.label !== undefined) {
       const label = args.label.trim().slice(0, MAX_LABEL);
       if (!label) throw new Error("Category name is required");
       patch.label = label;
+    }
+    if (args.nickname !== undefined) {
+      patch.nickname = args.nickname.trim().slice(0, MAX_LABEL) || undefined;
     }
     if (args.description !== undefined) {
       patch.description = args.description.trim().slice(0, MAX_DESCRIPTION);

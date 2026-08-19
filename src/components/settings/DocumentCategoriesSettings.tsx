@@ -27,6 +27,7 @@ function CategoryRow({ category }: { category: Doc<"documentCategories"> }) {
   const remove = useMutation(api.documentCategories.remove);
 
   const [label, setLabel] = useState(category.label);
+  const [nickname, setNickname] = useState(category.nickname ?? "");
   const [description, setDescription] = useState(category.description);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -35,6 +36,7 @@ function CategoryRow({ category }: { category: Doc<"documentCategories"> }) {
 
   const dirty =
     label.trim() !== category.label ||
+    nickname.trim() !== (category.nickname ?? "") ||
     description.trim() !== category.description;
 
   async function save() {
@@ -44,6 +46,7 @@ function CategoryRow({ category }: { category: Doc<"documentCategories"> }) {
       await update({
         id: category._id,
         label,
+        nickname,
         description,
         color: category.color,
       });
@@ -86,11 +89,22 @@ function CategoryRow({ category }: { category: Doc<"documentCategories"> }) {
           {label.trim() || category.label}
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <Input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            className="h-8 max-w-xs text-sm"
-          />
+          <div className="flex max-w-md gap-2">
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              aria-label="Category name"
+              className="h-8 min-w-0 flex-1 text-sm"
+            />
+            {/* Presentation only — the pill shows this, prompts never do. */}
+            <Input
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              placeholder="Nickname, e.g. Gov"
+              aria-label="Category nickname"
+              className="h-8 w-36 text-sm"
+            />
+          </div>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}

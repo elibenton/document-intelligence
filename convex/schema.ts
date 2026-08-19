@@ -317,6 +317,10 @@ export default defineSchema({
     projectId: v.id("projects"),
     key: v.string(),
     label: v.string(),
+    // A short display name the user gave the pill ("Gov" for "Government").
+    // Presentation only: prompts and keys always use the full label, so a
+    // nickname can never change what Analyze is told the bucket means.
+    nickname: v.optional(v.string()),
     // The classification-rule clause for this bucket, folded into the
     // Analyze/Metadata prompts so the enum and its instructions can't drift.
     description: v.string(),

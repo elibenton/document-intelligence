@@ -96,3 +96,11 @@ export function nextColor(taken: { color: string }[]): string {
     CATEGORY_COLOR_KEYS[taken.length % CATEGORY_COLOR_KEYS.length]
   );
 }
+
+/** "writ of mandate" → "Writ Of Mandate" — type pills read as names, so
+ *  every word capitalizes. */
+export function titleCase(value: string): string {
+  return value.replace(/\p{L}[\p{L}'’-]*/gu, (word) =>
+    word.charAt(0).toUpperCase() + word.slice(1)
+  );
+}
