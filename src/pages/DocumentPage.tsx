@@ -42,6 +42,8 @@ import type { EntityHover } from "@/components/viewer/EntityHighlights";
 import { PipelineProgress } from "@/components/documents/PipelineProgress";
 import { DocumentUsage } from "@/components/documents/DocumentUsage";
 import { DocumentActions } from "@/components/documents/DocumentActions";
+import { DocumentInfoPanel } from "@/components/documents/DocumentInfoPanel";
+import { formatDuration } from "@/lib/duration";
 import { DocumentIdentityMenu } from "@/components/documents/DocumentIdentityMenu";
 import {
   EntityConnectionList,
@@ -1206,7 +1208,7 @@ export default function DocumentPage({ id }: { id: string }) {
                       />
                     </div>
                   )}
-                  {document && <DocumentTagsAndMetadata document={document} />}
+                  {document && <DocumentInfoPanel document={document} />}
                   {detections && detections.length > 0 && (
                     <VisualEvidenceList
                       detections={detections}
@@ -1232,6 +1234,12 @@ export default function DocumentPage({ id }: { id: string }) {
                         <span className="text-muted-foreground">Pages</span>
                         <span>{document.pageCount ?? "—"}</span>
                       </div>
+                      {document.durationSeconds !== undefined && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Duration</span>
+                          <span>{formatDuration(document.durationSeconds)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Status</span>
                         <span className="capitalize">{document.status}</span>
@@ -1728,81 +1736,6 @@ function SuggestedEntityTypes({ document }: { document: Doc<"documents"> }) {
   );
 }
 
-/** Tag editing and the extracted-metadata table, for the Info tab. */
-function DocumentTagsAndMetadata({ document }: { document: Doc<"documents"> }) {
-  const updateDocumentMeta = useMutation(api.metadata.updateDocumentMeta);
-  const [tagsDraft, setTagsDraft] = useState<string | null>(null);
-  const meta = useExtractedMetadata(document);
-
-  const tags = tagsDraft ?? (document.tags ?? []).join(", ");
-  const dirty = tagsDraft !== null && tagsDraft !== (document.tags ?? []).join(", ");
-
-  async function save() {
-    if (tagsDraft === null) return;
-    await updateDocumentMeta({
-      documentId: document._id,
-      tags: tagsDraft
-        .split(",")
-        .map((t) => t.trim().toLowerCase())
-        .filter(Boolean),
-    });
-    setTagsDraft(null);
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-muted-foreground">
-          Tags (comma-separated)
-        </label>
-        <Input
-          value={tags}
-          placeholder="e.g. litigation, 2024"
-          onChange={(e) => setTagsDraft(e.target.value)}
-          className="text-xs h-8"
-        />
-      </div>
-
-      {dirty && (
-        <Button size="sm" variant="outline" onClick={save} className="self-start">
-          Save
-        </Button>
-      )}
-
-      {meta && (
-        <div className="flex flex-col gap-1.5 text-sm border-t pt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Extracted metadata
-          </h4>
-          {[
-            ["Title", meta.title],
-            ["Date", meta.date],
-            // From the document row, not `meta` — the place is sanitized on
-            // the way in (convex/metadata.ts) rather than left in the raw blob.
-            ["Place", document.documentPlace],
-            ["Author", meta.author],
-            ["Language", meta.language],
-            ...(meta.additional ?? []).map(
-              (kv) => [kv.key, kv.value] as [string, string]
-            ),
-          ]
-            .filter(
-              ([, value]) =>
-                value && value !== "Unknown" && String(value).trim()
-            )
-            .map(([label, value]) => (
-              <div key={label} className="flex justify-between gap-3 text-xs">
-                <span className="text-muted-foreground capitalize shrink-0">
-                  {label}
-                </span>
-                <span className="text-right truncate">{value}</span>
-              </div>
-            ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Research dossier display component
