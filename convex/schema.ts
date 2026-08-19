@@ -96,8 +96,9 @@ export default defineSchema({
     // pass once the metadata pass has established what the document actually
     // is (convex/rename.ts), or typed by the user in the identity menu.
     displayName: v.optional(v.string()),
-    // "ai" | "human". A human-set title is never overwritten by a later
-    // rename pass; clearing the title clears this too, re-opening the door.
+    // "native" | "ai" | "human", ranked in that order: a title the file
+    // itself declared outranks a model guess, and a human-set title outranks
+    // both and is never overwritten (convex/rename.ts applyDisplayName).
     displayNameSource: v.optional(v.string()),
     storageId: v.id("_storage"),
     // Hex SHA-256 of the file the user selected, computed in the browser
@@ -136,6 +137,25 @@ export default defineSchema({
     // inferred from content; see the dating rule in convex/analyzePrompt.ts.
     documentDate: v.optional(v.string()),
     documentDatePrecision: v.optional(v.string()), // "day" | "month" | "year"
+    // When the source says it was MADE — the clip's published date, the
+    // recording container's creation time, the PDF's Info/XMP CreationDate,
+    // a photo's EXIF DateTimeOriginal. Distinct from documentDate, which is
+    // what the document's *text* establishes: a scanned 1954 letter has a
+    // 1954 documentDate and (at best) a scan-time createdDate. Same ISO-prefix
+    // + precision shape and the same sanitizer bargain (nativeDate.ts).
+    createdDate: v.optional(v.string()),
+    createdDatePrecision: v.optional(v.string()), // "day" | "month" | "year"
+    // "native" | "ai" | "human". Native (stated by the file/source) is only
+    // displaced by a human; "ai" appears only on web clips whose source
+    // stated no date. A human tombstone is value-absent + source "human":
+    // deliberately cleared, and nothing refills it.
+    createdDateSource: v.optional(v.string()),
+    // Who the source credits — the clip's byline, the PDF's Info.Author —
+    // promoted out of the metadata JSON blob so it can carry provenance and
+    // be edited fieldwise. Same "native" | "ai" | "human" ranking as
+    // createdDateSource, tombstone included.
+    author: v.optional(v.string()),
+    authorSource: v.optional(v.string()),
     // Provenance stamps, one per human-editable Analyze field, all following
     // displayNameSource's rule (the one kindSource used to diverge from):
     // a committed non-empty value stamps "human" and re-analysis skips the
@@ -259,7 +279,60 @@ export default defineSchema({
         ),
       })
     ),
+    // What the FILE or SOURCE itself declared, for every media type —
+    // pdfMetadata generalized (that field is migrating into this one).
+    // Written once at ingest (or by the backfill), already sanitized; never
+    // touched by Analyze or by a human edit, so it survives every override
+    // and the edit UI can always offer the original back as a candidate.
+    // The fields it covers are omitted from the Analyze request schema
+    // (NativeMetadataOmissions) — ground truth wins by never being asked.
+    sourceMetadata: v.optional(
+      v.object({
+        title: v.optional(v.string()),
+        author: v.optional(v.string()),
+        createdDate: v.optional(
+          v.object({ value: v.string(), precision: v.string() })
+        ),
+        tableOfContents: v.optional(
+          v.array(
+            v.object({
+              title: v.string(),
+              level: v.number(),
+              page: v.number(),
+            })
+          )
+        ),
+        // Clip extras that used to die in the metadata-blob rewrite.
+        siteName: v.optional(v.string()),
+        description: v.optional(v.string()),
+        excerpt: v.optional(v.string()),
+        ogImage: v.optional(v.string()),
+      })
+    ),
+    // The last Analyze run's answers for the human-editable scalars, written
+    // UNCONDITIONALLY by saveMetadataResult — provenance stamps gate the live
+    // columns, not this. The other candidate store for the edit combobox:
+    // a human override never erases what the model said.
+    aiMetadata: v.optional(
+      v.object({
+        displayTitle: v.optional(v.string()),
+        author: v.optional(v.string()),
+        createdDate: v.optional(
+          v.object({ value: v.string(), precision: v.string() })
+        ),
+        documentDate: v.optional(
+          v.object({ value: v.string(), precision: v.string() })
+        ),
+        documentPlace: v.optional(v.string()),
+        primaryCategory: v.optional(v.string()),
+        sourceLanguageCode: v.optional(v.string()),
+      })
+    ),
     pageCount: v.optional(v.number()),
+    // Recording length in seconds (audio/video), measured client-side at
+    // upload and clamped server-side. A fact about the file, like pageCount —
+    // no provenance stamp because neither AI nor human contests it.
+    durationSeconds: v.optional(v.number()),
     status: v.string(), // "uploaded" | "parsing" | "parsed" | "extracting" | "completed" | "failed"
     errorMessage: v.optional(v.string()),
     // Machine-readable failure cause, so the UI can render a specific state
@@ -323,6 +396,9 @@ export default defineSchema({
     // every dropped file.
     .index("by_project_hash", ["projectId", "contentHash"])
     .index("by_project_name", ["projectId", "name"])
+    // Web-clip duplicate detection: exact URL lookup per project, checked by
+    // GET /clip/lookup (popup warning) and enforced in clips.createFromClip.
+    .index("by_project_sourceUrl", ["projectId", "sourceUrl"])
     // primaryKind/primaryCategory ride as filterFields so the search bar's
     // kind:/category: prefixes filter at the index — exact at any corpus
     // size, unlike post-filtering a capped result set. Both fields already
