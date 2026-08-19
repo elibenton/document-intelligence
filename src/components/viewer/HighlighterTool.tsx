@@ -1,6 +1,5 @@
 import { Highlighter } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { FLOATING_SURFACE } from "./surfaces";
 import {
   ANNOTATION_COLORS,
   DEFAULT_ANNOTATION_COLOR,
@@ -25,8 +24,9 @@ export function HighlighterTool({
   onChange: (color: AnnotationColor | null) => void;
 }) {
   return (
+    // Flat header control — see ZoomControl for the shared reasoning.
     <div
-      className={cn(FLOATING_SURFACE, "inline-flex items-center")}
+      className="inline-flex h-8 items-center rounded-md"
       aria-label="Highlighter"
     >
       <button

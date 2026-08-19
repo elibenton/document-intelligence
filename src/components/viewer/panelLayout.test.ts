@@ -4,7 +4,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   resolvePanels,
 } from "./panelLayout";
-import { MIN_ZOOM, VIEWER_MIN_WIDTH } from "./zoom";
+import { MIN_ZOOM, PANEL_ZOOM_FLOOR, VIEWER_MIN_WIDTH } from "./zoom";
 
 const BASE = {
   hasLeft: true,
@@ -33,19 +33,19 @@ describe("resolvePanels", () => {
       sidebarWidth: 380,
       leftCollapsed: false,
       sidebarCollapsed: false,
-      zoomFloor: 1,
+      zoomFloor: PANEL_ZOOM_FLOOR,
     });
     expect(layout.viewerWidth).toBe(ROOMY + 400 - 680);
   });
 
-  it("holds the page at 100% before shrinking the panels", () => {
-    // The viewer keeps VIEWER_MIN_WIDTH — enough for a page at 100% — while
-    // the panels absorb the loss.
+  it("holds the page at the panel floor before shrinking the panels", () => {
+    // The viewer keeps VIEWER_MIN_WIDTH — enough for a page at the floor —
+    // while the panels absorb the loss.
     const layout = at(ROOMY - 100);
     expect(layout.leftWidth).toBeLessThan(300);
     expect(layout.sidebarWidth).toBeLessThan(380);
     expect(layout.viewerWidth).toBe(VIEWER_MIN_WIDTH);
-    expect(layout.zoomFloor).toBe(1);
+    expect(layout.zoomFloor).toBe(PANEL_ZOOM_FLOOR);
   });
 
   it("shrinks both panels together rather than one at a time", () => {
@@ -73,13 +73,13 @@ describe("resolvePanels", () => {
     expect(layout.sidebarCollapsed).toBe(false);
     // The right panel gets the room the left one gave up.
     expect(layout.sidebarWidth).toBeGreaterThanOrEqual(SIDEBAR_MIN_WIDTH);
-    expect(layout.zoomFloor).toBe(1);
+    expect(layout.zoomFloor).toBe(PANEL_ZOOM_FLOOR);
   });
 
   it("folds the right panel away next, and only then lets the page shrink", () => {
     const stillFits = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH);
     expect(stillFits.sidebarCollapsed).toBe(false);
-    expect(stillFits.zoomFloor).toBe(1);
+    expect(stillFits.zoomFloor).toBe(PANEL_ZOOM_FLOOR);
 
     const layout = at(VIEWER_MIN_WIDTH + SIDEBAR_MIN_WIDTH - 1);
     expect(layout.leftCollapsed).toBe(true);

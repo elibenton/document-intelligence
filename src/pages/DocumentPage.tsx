@@ -25,7 +25,6 @@ import { ZoomControl } from "@/components/viewer/ZoomControl";
 import { HighlighterTool } from "@/components/viewer/HighlighterTool";
 import type { AnnotationColor } from "@/components/viewer/annotationColors";
 import { useViewerZoom } from "@/components/viewer/useViewerZoom";
-import { FLOATING_SURFACE } from "@/components/viewer/surfaces";
 import { PageOverlays } from "@/components/viewer/PageOverlays";
 import { findPersonMentions } from "@/components/viewer/personMentions";
 import type { EntityHover } from "@/components/viewer/EntityHighlights";
@@ -77,6 +76,13 @@ export default function DocumentPage({ id }: { id: string }) {
     documentId,
   });
   const detections = useQuery(api.detections.byDocument, { documentId });
+  // Recordings: segment times for TOC/search navigation. The same
+  // subscription RecordingView holds, so Convex dedupes it.
+  const isRecordingDoc = Boolean(document && isAudioVideo(document));
+  const transcriptSegments = useQuery(
+    api.transcripts.byDocument,
+    isRecordingDoc ? { documentId } : "skip"
+  );
   // The same subscription the viewer and Notes panel already hold, so the tab
   // count is free — Convex dedupes identical queries across components.
   const annotations = useQuery(api.annotations.byDocument, { documentId });
@@ -143,6 +149,33 @@ export default function DocumentPage({ id }: { id: string }) {
     viewerRef.current?.scrollToPage(page);
   }, []);
 
+  const seekTo = useCallback((seconds: number) => {
+    recordingRef.current?.seekTo(seconds);
+  }, []);
+
+  // Which timed TOC section the playhead is in — reported by RecordingView
+  // only when it changes, and handed to the Contents panel as the active row.
+  const [activeSection, setActiveSection] = useState(-1);
+  const sectionTimes = useMemo(() => {
+    const entries = document?.tableOfContents ?? [];
+    return entries.length > 0 && entries.every((e) => e.time !== undefined)
+      ? entries.map((e) => e.time ?? 0)
+      : undefined;
+  }, [document?.tableOfContents]);
+
+  // Transcript blocks were ingested one per segment, in segment order, so
+  // zipping the block rows against the segments recovers each block's start
+  // time. Guarded on equal lengths: a transcript mid-replacement zips wrong.
+  const blockStartTimes = useMemo(() => {
+    if (!isRecordingDoc || !blocks || !transcriptSegments) return undefined;
+    if (blocks.length !== transcriptSegments.length) return undefined;
+    const map = new Map<string, number>();
+    blocks.forEach((block, i) => {
+      map.set(block._id as string, transcriptSegments[i].startTime);
+    });
+    return map;
+  }, [isRecordingDoc, blocks, transcriptSegments]);
+
   // The same section list the Contents panel shows, so a new note is filed
   // under exactly the heading the user can see it sitting beneath.
   const tocHeaders = useMemo(
@@ -205,9 +238,10 @@ export default function DocumentPage({ id }: { id: string }) {
   const totalPages = document?.pageCount ?? (pages?.length || undefined);
   const isRecording = Boolean(document && isAudioVideo(document));
 
-  // Recordings navigate via the transcript, so the page/section Contents tab
-  // only applies to paged documents.
-  const showContentsTab = !isCsv && !isRecording;
+  // Recordings get the Contents panel too: transcript segments are blocks,
+  // so search works, and the understand pass writes a table of contents for
+  // audio as well. Only CSVs have nothing to navigate.
+  const showContentsTab = !isCsv;
   useEffect(() => {
     if (!showContentsTab) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -433,45 +467,35 @@ export default function DocumentPage({ id }: { id: string }) {
       : undefined;
 
   return (
-    // Everything on this page floats above the canvas: the chrome is a row of
-    // separate cards rather than a header bar, so the document reads as the
-    // thing on the desk and the panels as what is laid over it.
-    <div className="flex h-screen flex-col gap-2 bg-viewer-canvas p-2">
+    // Flat, edge-to-edge chrome: one hairline header bar over three flush
+    // columns. No canvas tint, no floating cards — the hairline borders do
+    // all the separating.
+    <div className="flex h-screen flex-col bg-background">
       {document.projectId && (
         <ProjectSearchDialog projectId={document.projectId} />
       )}
-      {/* Every item in this row shares one height (h-14) so the row reads as
-          a single strip — the back button and toolbar chips stretch to match
-          the title card via items-stretch, rather than each picking its own
-          size. */}
-      <header className="flex h-14 shrink-0 items-stretch gap-2">
+      {/* The underline is inset from both edges, matching the home page's
+          divider rules rather than running the full window width. */}
+      <header className="relative flex h-14 shrink-0 items-center gap-3 px-3 after:absolute after:inset-x-3 after:bottom-0 after:h-px after:rounded-full after:bg-border">
         <Link
           to={projectSlug ? `/p/${projectSlug}` : "/"}
           title="Back to project"
           aria-label="Back to project"
-          className={cn(
-            FLOATING_SURFACE,
-            "flex w-14 items-center justify-center text-foreground transition-colors hover:bg-accent"
-          )}
+          className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <Folder className="size-4" />
         </Link>
-        <div
-          className={cn(
-            FLOATING_SURFACE,
-            "group/title flex min-w-0 flex-1 items-center gap-3 px-4"
-          )}
-        >
-          {/* Renaming and re-typing the document lives behind the ⋮ menu next
-              to the type pills — the title itself is just a title. The menu
-              stays out of sight until you're over the title, so the type
-              pills aren't fighting a third element for room at rest. */}
+        {/* Renaming and re-typing the document lives behind the ⋮ menu next
+            to the type pills — the title itself is just a title. The menu
+            stays out of sight until you're over the title, so the type
+            pills aren't fighting a third element for room at rest. */}
+        <div className="group/title flex min-w-0 flex-1 items-center gap-3">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-semibold leading-tight text-foreground">
               {titles.primary}
             </h1>
             {titles.original && (
-              <p className="truncate text-xs text-foreground">
+              <p className="truncate text-xs leading-tight text-muted-foreground">
                 {titles.original}
               </p>
             )}
@@ -488,22 +512,30 @@ export default function DocumentPage({ id }: { id: string }) {
           />
         </div>
 
-        <div className="flex items-stretch gap-2">
+        <div className="flex shrink-0 items-center gap-2">
+          {/* The working tools live here now rather than floating over the
+              viewer: highlighter, then zoom + page counter, quietly right of
+              the title. Pipeline status lives at the top of the Details
+              column, where a step list has the room a header bar doesn't. */}
+          {(isPdfDocument || isRecording) && (
+            <HighlighterTool color={penColor} onChange={setPenColor} />
+          )}
+          {isPdfDocument && (
+            <ZoomControl
+              zoom={zoom}
+              onZoomChange={chooseZoom}
+              onFitWidth={fitToWidth}
+              currentPage={currentPage}
+              totalPages={totalPages ?? 0}
+            />
+          )}
           {translationInProgress && (
-            <span
-              className={cn(
-                FLOATING_SURFACE,
-                "flex items-center px-3 text-xs text-foreground"
-              )}
-            >
-              Translating…
-            </span>
+            <span className="text-xs text-muted-foreground">Translating…</span>
           )}
           {document.translationStatus === "failed" && (
             <Button
               variant="outline"
               size="sm"
-              className="h-full shadow-md"
               title={document.translationError}
               onClick={() => void retryTranslation({ documentId })}
             >
@@ -512,17 +544,17 @@ export default function DocumentPage({ id }: { id: string }) {
           )}
           {hasTranslatedContent && (
             <div
-              className={cn(FLOATING_SURFACE, "flex items-center p-0.5")}
+              className="flex h-8 items-center rounded-md bg-muted p-0.5"
               aria-label="Document language view"
             >
               <button
                 type="button"
                 onClick={() => setLanguageView("translated")}
                 className={cn(
-                  "flex h-full items-center rounded px-3 text-xs text-foreground transition-colors",
+                  "flex h-full items-center rounded px-3 text-xs transition-colors",
                   languageView === "translated"
-                    ? "bg-background shadow-sm"
-                    : "hover:bg-accent"
+                    ? "bg-background text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 Translated
@@ -531,10 +563,10 @@ export default function DocumentPage({ id }: { id: string }) {
                 type="button"
                 onClick={() => setLanguageView("original")}
                 className={cn(
-                  "flex h-full items-center rounded px-3 text-xs text-foreground transition-colors",
+                  "flex h-full items-center rounded px-3 text-xs transition-colors",
                   languageView === "original"
-                    ? "bg-background shadow-sm"
-                    : "hover:bg-accent"
+                    ? "bg-background text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 Original
@@ -552,13 +584,16 @@ export default function DocumentPage({ id }: { id: string }) {
           revealLeft={findSignal}
           left={
             showContentsTab ? (
-              <div className={cn(FLOATING_SURFACE, "h-full overflow-hidden")}>
+              <div className="h-full overflow-hidden">
               <ContentsPanel
                 blocks={blocks ?? []}
                 outline={document.tableOfContents}
                 currentPage={currentPage}
                 totalPages={totalPages ?? 0}
                 onNavigate={scrollToPage}
+                onSeek={isRecording ? seekTo : undefined}
+                blockStartTimes={blockStartTimes}
+                activeSection={isRecording ? activeSection : undefined}
                 searchQuery={searchQuery}
                 onSearchChange={(q) => {
                   setSearchQuery(q);
@@ -571,25 +606,6 @@ export default function DocumentPage({ id }: { id: string }) {
               </div>
             ) : undefined
           }
-          bottomLeft={
-            isPdfDocument || isRecording ? (
-              <div className="flex flex-col items-start gap-2">
-                <HighlighterTool color={penColor} onChange={setPenColor} />
-                {isPdfDocument && (
-                  <ZoomControl
-                    zoom={zoom}
-                    onZoomChange={chooseZoom}
-                    onFitWidth={fitToWidth}
-                    currentPage={currentPage}
-                    totalPages={totalPages ?? 0}
-                  />
-                )}
-              </div>
-            ) : undefined
-          }
-          bottomRight={
-            <PipelineProgress document={document} floating collapseWhenDone />
-          }
           viewer={
             isRecording ? (
               <RecordingView
@@ -600,6 +616,8 @@ export default function DocumentPage({ id }: { id: string }) {
                   hasTranslatedContent && languageView === "translated"
                 }
                 penColor={penColor}
+                sectionTimes={sectionTimes}
+                onActiveSectionChange={setActiveSection}
               />
             ) : hasTranslatedContent && languageView === "translated" ? (
               <TranslatedDocumentView pages={translatedPages ?? []} />
@@ -643,6 +661,13 @@ export default function DocumentPage({ id }: { id: string }) {
           }
           sidebar={
             <div className="flex h-full flex-col overflow-hidden">
+              {/* Pipeline status while the document is still cooking (and any
+                  failure needing a retry). Compact renders the bare step
+                  list — no card — and nothing at all once processing is
+                  cleanly done; empty:hidden folds the section away with it. */}
+              <div className="shrink-0 border-b px-4 py-3 empty:hidden">
+                <PipelineProgress document={document} compact />
+              </div>
               {/* The description is the only thing pinned above the tabs now —
                   identity (name, kind) moved to the title bar's pill + ⋮ menu,
                   and tags/extracted-metadata detail moved into the Info tab.
@@ -1212,8 +1237,9 @@ function DocumentSummary({ document }: { document: Doc<"documents"> }) {
   const meta = useExtractedMetadata(document);
   if (!meta?.summary) return null;
   return (
-    // pr-9 leaves room for the panel's minimize button (see ViewerLayout).
-    <div className="max-h-[35%] shrink-0 overflow-y-auto border-b px-4 pt-3 pb-3 pr-9">
+    // Never scrolls: a long description pushes the tabs down and the panel's
+    // own scroll area absorbs the difference.
+    <div className="shrink-0 border-b px-4 pt-3 pb-3">
       <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-foreground">
         Document Description
       </h2>

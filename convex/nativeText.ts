@@ -199,10 +199,16 @@ export const finishNativeIngest = authedMutation({
 
     const title = cleanPdfTitle(args.metadata?.title, document.name);
     const author = cleanPdfAuthor(args.metadata?.author);
+    // Page mode always sets `page`; the `?? 1` only narrows the type back to
+    // the page-required shape pdfMetadata declares.
     const tableOfContents = sanitizeTableOfContents(
       args.metadata?.tableOfContents,
       document.pageCount
-    );
+    ).map((entry) => ({
+      title: entry.title,
+      level: entry.level,
+      page: entry.page ?? 1,
+    }));
     if (title || author || tableOfContents.length > 0) {
       await ctx.db.patch(args.documentId, {
         pdfMetadata: {

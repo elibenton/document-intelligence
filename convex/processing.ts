@@ -183,6 +183,32 @@ export const runFullPipeline = authedMutation({
   },
 });
 
+/**
+ * runFullPipeline for ops tooling (CLI / MCP), which has no browser session:
+ * same re-enqueue, minus the session-derived budget check. Internal, so it is
+ * not a public endpoint.
+ */
+export const rerunFullPipeline = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    bypassCache: v.optional(v.boolean()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const enqueued = await enqueueStage(ctx, args.documentId, "parse", {
+      bypassCache: args.bypassCache,
+    });
+    if (!enqueued) return null;
+    await ctx.db.patch(args.documentId, {
+      status: "uploaded",
+      errorMessage: undefined,
+      errorCode: undefined,
+    });
+    await clearStageJobRow(ctx, args.documentId, "analyze");
+    return null;
+  },
+});
+
 
 /**
  * Re-run Analyze alone, optionally with a prompt the user edited.

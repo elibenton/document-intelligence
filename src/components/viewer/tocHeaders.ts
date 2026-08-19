@@ -6,6 +6,8 @@ export interface TocHeader {
   /** 0-based, like every block page number. */
   pageNumber: number;
   level: number;
+  /** Recordings: the section's start time in seconds. */
+  time?: number;
 }
 
 /**
@@ -27,8 +29,9 @@ export function buildTocHeaders(
     return outline.map((entry, index) => ({
       id: `toc-${index}`,
       text: entry.title,
-      pageNumber: entry.page - 1,
+      pageNumber: (entry.page ?? 1) - 1,
       level: entry.level,
+      time: entry.time,
     }));
   }
   return blocks

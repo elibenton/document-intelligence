@@ -1,12 +1,20 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
-import { AlertCircle, UploadCloud, X } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  UploadCloud,
+  X,
+} from "lucide-react";
 import { useMatch, useSearchParams } from "react-router";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { useUploads, useProjectUploads } from "@/hooks/uploadContext";
 import { uploadWithConcurrency } from "@/lib/uploadQueue";
 import { UploadRow } from "@/components/documents/UploadRow";
+import { Spinner } from "@/components/ui/spinner";
 import { isSupportedUpload } from "@/lib/uploadTypes";
 
 function hasFiles(event: DragEvent): boolean {
@@ -117,6 +125,73 @@ export function GlobalDropOverlay() {
   ) : null;
 }
 
+/**
+ * The upload rows, or — collapsed — a one-line summary of them, so a long
+ * batch can get out of the way of the page. The whole summary row is the
+ * expand target; the chevron in the expanded header folds it back down.
+ */
+function UploadPanelBody({
+  uploads,
+  collapsed,
+  onToggle,
+}: {
+  uploads: ReturnType<typeof useProjectUploads>;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const active = uploads.filter(
+    (u) => u.status !== "done" && u.status !== "error" && u.status !== "duplicate"
+  ).length;
+  const failed = uploads.filter((u) => u.status === "error").length;
+  const summary =
+    active > 0
+      ? `Uploading ${active} file${active === 1 ? "" : "s"}…`
+      : failed > 0
+        ? `${uploads.length} upload${uploads.length === 1 ? "" : "s"} · ${failed} failed`
+        : `${uploads.length} upload${uploads.length === 1 ? "" : "s"} ready`;
+
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        title="Show uploads"
+        className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+      >
+        {active > 0 ? (
+          <Spinner className="size-3.5 shrink-0 text-primary" />
+        ) : failed > 0 ? (
+          <AlertCircle className="size-3.5 shrink-0 text-destructive" />
+        ) : (
+          <CheckCircle2 className="size-3.5 shrink-0 text-success" />
+        )}
+        {summary}
+        <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" />
+      </button>
+    );
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between pl-1.5">
+        <span className="text-xs text-muted-foreground">{summary}</span>
+        <button
+          type="button"
+          onClick={onToggle}
+          title="Collapse uploads"
+          aria-label="Collapse uploads to summary"
+          className="grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <ChevronDown className="size-3.5" />
+        </button>
+      </div>
+      {uploads.map((item) => (
+        <UploadRow key={item.id} item={item} />
+      ))}
+    </>
+  );
+}
+
 function ProjectDropOverlay({
   projectId,
 }: {
@@ -127,6 +202,9 @@ function ProjectDropOverlay({
   const [isDragging, setIsDragging] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
+  // Folds the progress card down to a one-line summary, so a long upload
+  // batch stops covering the page's bottom-left corner.
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     let dragDepth = 0;
@@ -219,7 +297,9 @@ function ProjectDropOverlay({
             // jump on drop.
             isDragging
               ? "pointer-events-none bottom-4 left-4 h-[25vh] min-h-[11rem] w-[max(25vw,20rem)] max-w-[calc(100vw-2rem)] items-center justify-center border-2 border-dashed border-primary p-6"
-              : "pointer-events-auto bottom-4 left-4 w-[min(26rem,calc(100vw-2rem))] border p-2"
+              : collapsed && uploads.length > 0 && !isPreparing && !dropError
+                ? "pointer-events-auto bottom-4 left-4 border p-1"
+                : "pointer-events-auto bottom-4 left-4 w-[min(26rem,calc(100vw-2rem))] border p-2"
           }`}
           role="status"
           aria-live="polite"
@@ -271,8 +351,13 @@ function ProjectDropOverlay({
           )}
           {/* The drag state is a target, not a status panel: in-flight rows
               step aside for it and come back when the drag ends. */}
-          {!isDragging &&
-            uploads.map((item) => <UploadRow key={item.id} item={item} />)}
+          {!isDragging && uploads.length > 0 && (
+            <UploadPanelBody
+              uploads={uploads}
+              collapsed={collapsed}
+              onToggle={() => setCollapsed((v) => !v)}
+            />
+          )}
         </div>
       )}
     </>

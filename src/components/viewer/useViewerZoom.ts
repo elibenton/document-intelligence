@@ -13,9 +13,9 @@ function zoomThatFits(preferred: number, viewerWidth: number, floor: number) {
  * It is real state rather than a derived value, because the two inputs are not
  * equal: an explicit +/−/fit is absolute and holds at any width, while a
  * *width* change re-derives the zoom from the last explicit choice, capped by
- * what now fits. `zoomFloor` — 100% while a panel could still give up width,
- * the hard minimum once both are folded away — is what keeps the page from
- * shrinking ahead of its turn (see resolvePanels).
+ * what now fits. `zoomFloor` — PANEL_ZOOM_FLOOR while a panel could still
+ * give up width, the hard minimum once both are folded away — is what keeps
+ * the page from shrinking ahead of its turn (see resolvePanels).
  */
 export function useViewerZoom(viewerWidth: number, zoomFloor: number) {
   const [zoom, setZoom] = useState(1);

@@ -1,8 +1,8 @@
 /**
- * The one surface still allowed to sit over the document: the small utility
- * chips (zoom, highlighter, pipeline status, the pill a minimized panel
- * leaves behind). Everything else in the viewer is flat chrome — full-height
- * columns separated by hairline borders, no cards, no frosted glass.
+ * The one surface still allowed to sit over the document: the pipeline
+ * status chip and the pill a minimized panel leaves behind. Everything else
+ * in the viewer is flat chrome — full-height columns separated by inset
+ * hairline rules, with the working tools living in the header bar.
  *
  * Kept deliberately quiet: background with a hairline border and the smallest
  * shadow, so a chip reads as part of the chrome rather than a floating window.

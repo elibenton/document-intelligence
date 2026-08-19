@@ -2,115 +2,131 @@ import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { HighlightedSnippet } from "./TableOfContents";
 import type { SearchHit } from "./blockSearch";
+import { formatTime } from "@/components/recordings/speakerColors";
 
-/** A search hit labeled with the outline section it falls under, when the
- * document has one — computed by ContentsPanel via sectionForPage. */
-export interface SearchResultRow extends SearchHit {
-  sectionLabel?: string;
-}
-
-interface ResultGroup {
-  key: string;
-  label: string;
-  hits: SearchResultRow[];
-}
-
-/**
- * One entry per section, not per hit — a section with 17 matches shows its
- * heading once and 17 snippets under it, instead of repeating the heading 17
- * times. Falls back to grouping by page for documents with no outline.
- * Groups come out in document order because `hits` already arrives sorted by
- * page (searchBlocks), so a section's hits are contiguous and the first one
- * seen fixes that section's position.
- */
-function groupBySection(hits: SearchResultRow[]): ResultGroup[] {
-  const groups: ResultGroup[] = [];
-  const indexByKey = new Map<string, number>();
-
-  for (const hit of hits) {
-    const key = hit.sectionLabel ?? `page-${hit.pageNumber}`;
-    let index = indexByKey.get(key);
-    if (index === undefined) {
-      index = groups.length;
-      indexByKey.set(key, index);
-      groups.push({
-        key,
-        label: hit.sectionLabel ?? `Page ${hit.pageNumber + 1}`,
-        hits: [],
-      });
-    }
-    groups[index].hits.push(hit);
-  }
-
-  return groups;
+interface PageGroup {
+  pageNumber: number;
+  hits: SearchHit[];
 }
 
 interface DocumentSearchProps {
-  hits: SearchResultRow[];
+  hits: SearchHit[];
   totalMatches: number;
   currentPage: number;
   /** 1-based, matching the viewer's own page numbering. */
   onNavigate: (page: number) => void;
+  /** Recordings: seek playback to a hit instead of scrolling to a page. */
+  onSeek?: (seconds: number) => void;
+  /** Recordings: block id → segment start time. With `onSeek`, switches the
+   *  list to a flat, timestamp-addressed view (a transcript has no pages). */
+  blockStartTimes?: Map<string, number>;
 }
 
 /**
- * Search results, grouped by the section they fall in rather than listed
- * flat — "Section B" printed once with its matches under it, not once per
- * match. Falls back to a page number for documents with no outline.
+ * Search results grouped under page headers — "Page 4" printed once with
+ * every match on that page beneath it. The match count sits after the
+ * results rather than above them, a footer rather than a gate.
  */
 export function DocumentSearch({
   hits,
   totalMatches,
   currentPage,
   onNavigate,
+  onSeek,
+  blockStartTimes,
 }: DocumentSearchProps) {
-  const groups = useMemo(() => groupBySection(hits), [hits]);
+  // Hits arrive in reading order (searchBlocks), so a page's matches are
+  // contiguous — grouping is a fold, not a sort.
+  const groups = useMemo(() => {
+    const out: PageGroup[] = [];
+    for (const hit of hits) {
+      const last = out[out.length - 1];
+      if (last && last.pageNumber === hit.pageNumber) last.hits.push(hit);
+      else out.push({ pageNumber: hit.pageNumber, hits: [hit] });
+    }
+    return out;
+  }, [hits]);
 
-  return (
-    <div className="flex flex-col">
-      <div className="border-b px-3 py-2 text-xs text-foreground">
-        {totalMatches} match{totalMatches !== 1 && "es"} in {groups.length}{" "}
-        section{groups.length !== 1 && "s"}
-      </div>
+  // Recording: the transcript is one nominal page, so page headers say
+  // nothing — a flat list addressed by each hit's segment timestamp.
+  if (onSeek && blockStartTimes) {
+    return (
       <div className="flex flex-col">
-        {groups.map((group) => (
-          <div key={group.key} className="border-b border-border/50 py-1.5">
-            <h4 className="truncate px-3 pb-1 text-xs font-semibold text-foreground">
-              {group.label}
-            </h4>
-            <div className="flex flex-col">
-              {group.hits.map((hit) => {
-                const displayPage = hit.pageNumber + 1;
-                return (
-                  <button
-                    key={hit.key}
-                    onClick={() => onNavigate(displayPage)}
-                    className={cn(
-                      "flex items-start gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent",
-                      currentPage === displayPage && "bg-accent/60"
-                    )}
-                  >
-                    <p className="line-clamp-5 min-w-0 flex-1 leading-relaxed text-foreground">
-                      <HighlightedSnippet
-                        text={hit.snippet}
-                        query={hit.matchText}
-                      />
-                    </p>
-                    <span className="shrink-0 pt-px text-2xs tabular-nums text-foreground">
-                      p. {displayPage}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-        {groups.length === 0 && (
+        {hits.map((hit) => {
+          const time = blockStartTimes.get(hit.blockId);
+          return (
+            <button
+              key={hit.key}
+              onClick={() => time !== undefined && onSeek(time)}
+              className="flex items-start gap-2 border-b border-border/50 px-3 py-1.5 text-left text-xs transition-colors last:border-0 hover:bg-accent"
+            >
+              <p className="line-clamp-3 min-w-0 flex-1 leading-relaxed text-foreground">
+                <HighlightedSnippet text={hit.snippet} query={hit.matchText} />
+              </p>
+              {time !== undefined && (
+                <span className="shrink-0 pt-px text-2xs tabular-nums text-muted-foreground">
+                  {formatTime(time)}
+                </span>
+              )}
+            </button>
+          );
+        })}
+        {hits.length === 0 ? (
           <p className="px-3 py-4 text-center text-xs text-foreground">
             No results found.
           </p>
+        ) : (
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            {totalMatches} match{totalMatches !== 1 && "es"}
+          </p>
         )}
       </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col">
+      {groups.map((group) => {
+        const displayPage = group.pageNumber + 1;
+        return (
+          <div
+            key={group.pageNumber}
+            className="border-b border-border/50 py-1.5"
+          >
+            <h4
+              className={cn(
+                "px-3 pb-0.5 text-xs font-semibold",
+                currentPage === displayPage
+                  ? "text-foreground"
+                  : "text-muted-foreground"
+              )}
+            >
+              Page {displayPage}
+            </h4>
+            {group.hits.map((hit) => (
+              <button
+                key={hit.key}
+                onClick={() => onNavigate(displayPage)}
+                className="w-full px-3 py-1 text-left text-xs transition-colors hover:bg-accent"
+              >
+                <p className="line-clamp-3 leading-relaxed text-foreground">
+                  <HighlightedSnippet text={hit.snippet} query={hit.matchText} />
+                </p>
+              </button>
+            ))}
+          </div>
+        );
+      })}
+      {groups.length === 0 ? (
+        <p className="px-3 py-4 text-center text-xs text-foreground">
+          No results found.
+        </p>
+      ) : (
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          {totalMatches} match{totalMatches !== 1 && "es"} on {groups.length}{" "}
+          page{groups.length !== 1 && "s"}
+        </p>
+      )}
     </div>
   );
 }

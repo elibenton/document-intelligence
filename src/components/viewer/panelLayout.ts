@@ -1,22 +1,23 @@
-import { MIN_ZOOM, VIEWER_MIN_WIDTH } from "./zoom";
+import { MIN_ZOOM, PANEL_ZOOM_FLOOR, VIEWER_MIN_WIDTH } from "./zoom";
 
 /**
  * What gives way first as the window narrows.
  *
  * The order is deliberate — each stage is exhausted before the next begins:
  *
- *   1. the page zooms down to 100% (`zoomFloor`, applied by useViewerZoom)
+ *   1. the page zooms down to PANEL_ZOOM_FLOOR (applied by useViewerZoom)
  *   2. both side panels shrink toward their minimum widths
  *   3. the left panel folds into its chip
  *   4. the right panel folds into its chip
- *   5. nothing is left to give, so the page shrinks below 100% with the window
+ *   5. nothing is left to give, so the page shrinks below the floor
  *
  * Only stages 2–4 are decided here; stages 1 and 5 fall out of `zoomFloor`,
- * which stays at 100% for as long as a panel could still yield width.
+ * which holds at PANEL_ZOOM_FLOOR for as long as a panel could still yield
+ * width.
  */
 
-export const LEFT_MIN_WIDTH = 200;
-export const SIDEBAR_MIN_WIDTH = 260;
+export const LEFT_MIN_WIDTH = 240;
+export const SIDEBAR_MIN_WIDTH = 320;
 
 /**
  * Hit-target width of the resize handle. The handle is an absolutely
@@ -126,7 +127,7 @@ export function resolvePanels(input: PanelLayoutInput): ResolvedPanels {
       leftForced: false,
       sidebarForced: false,
       viewerWidth: 0,
-      zoomFloor: leftOpen || sidebarOpen ? 1 : MIN_ZOOM,
+      zoomFloor: leftOpen || sidebarOpen ? PANEL_ZOOM_FLOOR : MIN_ZOOM,
     };
   }
 
@@ -179,8 +180,8 @@ export function resolvePanels(input: PanelLayoutInput): ResolvedPanels {
     sidebarForced,
     viewerWidth: Math.max(0, budget - leftWidth - sidebarWidth),
     // While a panel is still open it is the next thing to give up width, so
-    // the page holds at 100%. With both folded away, the page is all that's
-    // left to shrink.
-    zoomFloor: leftOpen || sidebarOpen ? 1 : MIN_ZOOM,
+    // the page holds at the panel floor. With both folded away, the page is
+    // all that's left to shrink.
+    zoomFloor: leftOpen || sidebarOpen ? PANEL_ZOOM_FLOOR : MIN_ZOOM,
   };
 }

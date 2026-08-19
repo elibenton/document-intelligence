@@ -175,6 +175,11 @@ export interface NativeMetadataOmissions {
   author?: boolean;
 }
 
+const AUDIO_TOC_CLAUSE =
+  " Build the table of contents from the topical sections a listener would " +
+  "navigate by — one entry per distinct topic or segment, with time_seconds " +
+  "as the second it begins, taken from the transcript timestamps.";
+
 export function buildAnalyzePrompt(options: {
   csv: boolean;
   kindNames: string[];
@@ -195,6 +200,9 @@ export function buildAnalyzePrompt(options: {
    * never see and asks for 1-based page numbers from the document itself.
    */
   fileInput?: boolean;
+  /** Recording rather than paged document: the lead asks for a time-based
+   *  table of contents (see AUDIO_TOC_CLAUSE) and drops page talk. */
+  audio?: boolean;
   /** Fields the PDF's own metadata already answers — see NativeMetadataOmissions. */
   omit?: NativeMetadataOmissions;
 }): string {
@@ -211,7 +219,10 @@ export function buildAnalyzePrompt(options: {
   const omit = options.omit;
   const lead = options.csv
     ? "Analyze this CSV dataset: its columns, row semantics, subject, and notable structure."
-    : options.fileInput
+    : options.audio
+      ? "Analyze the attached recording and return the requested metadata. Listen to the whole recording." +
+        (omit?.tableOfContents ? "" : AUDIO_TOC_CLAUSE)
+      : options.fileInput
       ? "Analyze the attached document and return the requested metadata. Read the entire document." +
         (omit?.tableOfContents
           ? ""
@@ -334,7 +345,13 @@ export function buildDocumentUnderstandingSchema(
    * entirely — see NativeMetadataOmissions. Removal cannot reorder what
    * remains, so the reasoning chain the declaration order encodes survives.
    */
-  omit?: NativeMetadataOmissions
+  omit?: NativeMetadataOmissions,
+  /**
+   * Recordings have no pages: the table of contents asks for each section's
+   * start time in seconds instead of a page number. Undefined keeps the
+   * schema byte-identical to the page-based shape (it is a vcache input).
+   */
+  audio?: boolean
 ) {
   const schema = {
     type: "object",
@@ -461,23 +478,45 @@ export function buildDocumentUnderstandingSchema(
       // on the client. Page numbers come from the "--- Page N ---" markers the
       // text is fed in with (interfaze.ts:analyzeDocumentText), so the model is
       // reporting a number it was shown rather than counting.
-      table_of_contents: {
-        type: "array",
-        description:
-          "Table of contents for the document, in reading order. One entry per heading or section that a reader would navigate by. level is 1 for top-level sections and increases for subsections (max 4). page is the 1-based page number from the '--- Page N ---' marker the section starts under. Return an empty array when the document has no navigable section structure. Never invent headings that are not in the text.",
-        items: {
-          type: "object",
-          properties: {
-            title: {
-              type: "string",
-              description: "Heading text as written in the document",
+      table_of_contents: audio
+        ? {
+            type: "array",
+            description:
+              "Table of contents for the recording, in playback order. One entry per topical section a listener would navigate by. level is 1 for top-level sections and increases for subsections (max 4). time_seconds is the second the section begins, from the start of the recording. Return an empty array when the recording has no navigable structure. Never invent sections that are not in the audio.",
+            items: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  description: "Short label for the section's topic",
+                },
+                level: { type: "integer", description: "Depth, 1-4" },
+                time_seconds: {
+                  type: "integer",
+                  description:
+                    "Start time in whole seconds from the beginning of the recording",
+                },
+              },
+              required: ["title", "level", "time_seconds"],
             },
-            level: { type: "integer", description: "Depth, 1-4" },
-            page: { type: "integer", description: "1-based page the section starts on" },
+          }
+        : {
+            type: "array",
+            description:
+              "Table of contents for the document, in reading order. One entry per heading or section that a reader would navigate by. level is 1 for top-level sections and increases for subsections (max 4). page is the 1-based page number from the '--- Page N ---' marker the section starts under. Return an empty array when the document has no navigable section structure. Never invent headings that are not in the text.",
+            items: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  description: "Heading text as written in the document",
+                },
+                level: { type: "integer", description: "Depth, 1-4" },
+                page: { type: "integer", description: "1-based page the section starts on" },
+              },
+              required: ["title", "level", "page"],
+            },
           },
-          required: ["title", "level", "page"],
-        },
-      },
       additional: {
         type: "array",
         description: "Other notable metadata as key/value pairs",

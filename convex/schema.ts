@@ -215,12 +215,15 @@ export default defineSchema({
      // Analyze's guess at where this file contains more than one document.
     // Suggestions only — splitting is a user action and would need provenance
     // (a parent document id on the pieces), which does not exist yet.
+    // Paged documents carry `page` (1-based); recordings carry `time`
+    // (seconds from the start). Exactly one is set per entry.
     tableOfContents: v.optional(
       v.array(
         v.object({
           title: v.string(),
           level: v.number(),
-          page: v.number(),
+          page: v.optional(v.number()),
+          time: v.optional(v.number()),
         })
       )
     ),

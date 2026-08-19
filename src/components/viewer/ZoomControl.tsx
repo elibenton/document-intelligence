@@ -1,7 +1,6 @@
 import { Minus, Plus, MoveHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MAX_ZOOM, MIN_ZOOM, zoomIn, zoomOut } from "./zoom";
-import { FLOATING_SURFACE } from "./surfaces";
 
 interface ZoomControlProps {
   zoom: number;
@@ -20,7 +19,9 @@ export function ZoomControl({
   totalPages,
 }: ZoomControlProps) {
   return (
-    <div className={cn(FLOATING_SURFACE, "inline-flex items-center")} aria-label="Zoom">
+    // Flat header control — no surface of its own; the buttons' own hover
+    // states carry the affordance.
+    <div className="inline-flex h-8 items-center rounded-md" aria-label="Zoom">
       {Boolean(currentPage && totalPages) && (
         <>
           <span className="px-3 text-xs tabular-nums text-foreground">
@@ -40,7 +41,7 @@ export function ZoomControl({
         type="button"
         onClick={() => onZoomChange(1)}
         title="Reset to 100%"
-        className="min-w-[3.25rem] px-1 py-2 text-xs tabular-nums text-foreground hover:bg-accent"
+        className="min-w-[3.25rem] rounded-md px-1 py-2 text-xs tabular-nums text-foreground hover:bg-accent"
       >
         {Math.round(zoom * 100)}%
       </button>
@@ -78,7 +79,7 @@ function ZoomButton({
       title={label}
       aria-label={label}
       className={cn(
-        "grid h-full place-items-center px-2 py-2 text-foreground transition-colors",
+        "grid h-full place-items-center rounded-md px-2 py-2 text-foreground transition-colors",
         "hover:bg-accent",
         "disabled:pointer-events-none disabled:opacity-40"
       )}

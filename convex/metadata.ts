@@ -35,7 +35,12 @@ export const saveMetadataResult = internalMutation({
       document_date?: { value?: string; precision?: string; evidence?: string };
       place?: { value?: string; evidence?: string };
       tags?: string[];
-      table_of_contents?: Array<{ title?: string; level?: number; page?: number }>;
+      table_of_contents?: Array<{
+        title?: string;
+        level?: number;
+        page?: number;
+        time_seconds?: number;
+      }>;
       additional?: Array<{ key?: string; value?: string }>;
       citation?: CitationInput;
     };
@@ -60,7 +65,10 @@ export const saveMetadataResult = internalMutation({
 
     const toc = native?.tableOfContents?.length
       ? native.tableOfContents
-      : sanitizeTableOfContents(parsed.table_of_contents, document.pageCount);
+      : sanitizeTableOfContents(parsed.table_of_contents, document.pageCount, {
+          audio:
+            document.mediaType === "audio" || document.mediaType === "video",
+        });
 
 
     const documentDate = sanitizeDocumentDate(parsed.document_date, Date.now());
@@ -433,12 +441,27 @@ const MAX_TOC_LEVEL = 4;
  * flat array read back as a tree.
  */
 export function sanitizeTableOfContents(
-  entries: Array<{ title?: string; level?: number; page?: number }> | undefined,
-  pageCount: number | undefined
-): Array<{ title: string; level: number; page: number }> {
+  entries:
+    | Array<{
+        title?: string;
+        level?: number;
+        page?: number;
+        time_seconds?: number;
+      }>
+    | undefined,
+  pageCount: number | undefined,
+  /** audio: entries address by start time in seconds rather than page. */
+  options?: { audio?: boolean }
+): Array<{ title: string; level: number; page?: number; time?: number }> {
   if (!Array.isArray(entries)) return [];
+  const audio = options?.audio ?? false;
   const lastPage = pageCount && pageCount > 0 ? pageCount : undefined;
-  const cleaned: Array<{ title: string; level: number; page: number }> = [];
+  const cleaned: Array<{
+    title: string;
+    level: number;
+    page?: number;
+    time?: number;
+  }> = [];
   let previousLevel = 0;
 
   for (const entry of entries) {
@@ -455,12 +478,17 @@ export function sanitizeTableOfContents(
       MAX_TOC_LEVEL
     );
 
-    const rawPage = Math.trunc(Number(entry?.page));
-    const page = Number.isFinite(rawPage)
-      ? Math.min(Math.max(1, rawPage), lastPage ?? Math.max(1, rawPage))
-      : 1;
-
-    cleaned.push({ title: title.slice(0, 300), level, page });
+    if (audio) {
+      const rawTime = Math.trunc(Number(entry?.time_seconds));
+      const time = Number.isFinite(rawTime) ? Math.max(0, rawTime) : 0;
+      cleaned.push({ title: title.slice(0, 300), level, time });
+    } else {
+      const rawPage = Math.trunc(Number(entry?.page));
+      const page = Number.isFinite(rawPage)
+        ? Math.min(Math.max(1, rawPage), lastPage ?? Math.max(1, rawPage))
+        : 1;
+      cleaned.push({ title: title.slice(0, 300), level, page });
+    }
     previousLevel = level;
   }
 

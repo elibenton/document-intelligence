@@ -24,8 +24,16 @@ const EMPTY: SearchOutcome = { hits: [], totalMatches: 0 };
  * Counted in normalized characters, so punctuation and spaces don't pad it. */
 export const MIN_QUERY_LENGTH = 2;
 
-/** Characters of context kept on each side of the match in a snippet. */
-const SNIPPET_CONTEXT = 160;
+/**
+ * Characters of context kept around the match in a snippet — deliberately
+ * asymmetric. The list renders snippets under a line clamp that eats from
+ * the end, so a long lead-in pushes the match itself off the visible text at
+ * narrow panel widths. A short lead anchors the match near the snippet's
+ * start; the tail carries the readable context and is what the clamp
+ * sacrifices first.
+ */
+const SNIPPET_BEFORE = 25;
+const SNIPPET_AFTER = 90;
 
 const ENTITIES: Record<string, string> = {
   amp: "&",
@@ -140,8 +148,15 @@ export function searchIndex(index: SearchIndex, query: string): SearchOutcome {
 
     const matchStart = offsets[at];
     const matchEnd = offsets[at + q.length - 1] + 1;
-    const start = Math.max(0, matchStart - SNIPPET_CONTEXT);
-    const end = Math.min(joined.length, matchEnd + SNIPPET_CONTEXT);
+    let start = Math.max(0, matchStart - SNIPPET_BEFORE);
+    const end = Math.min(joined.length, matchEnd + SNIPPET_AFTER);
+
+    // Snap a mid-word cut forward to the next word boundary, so the lead-in
+    // reads "…youth treatment" rather than "…outh treatment".
+    if (start > 0) {
+      const space = joined.indexOf(" ", start);
+      if (space !== -1 && space < matchStart) start = space + 1;
+    }
 
     let snippet = joined.slice(start, end);
     if (start > 0) snippet = "…" + snippet;

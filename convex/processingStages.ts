@@ -181,6 +181,9 @@ async function understandingRequest(
     fileName?: string;
     promptOverride?: string;
     fileInput?: boolean;
+    /** Recording rather than paged document: the table of contents is asked
+     *  for by start time in seconds instead of page number. */
+    audio?: boolean;
     /** The PDF file's own declared metadata (documents.pdfMetadata). Fields
      * it covers are removed from the request — ground truth over inference;
      * saveMetadataResult reads them back in when persisting. */
@@ -219,6 +222,7 @@ async function understandingRequest(
         fileName: options.fileName,
         graphExtraTypes: extraTypes,
         fileInput: options.fileInput,
+        audio: options.audio,
         omit,
       }),
     responseSchema: {
@@ -226,7 +230,8 @@ async function understandingRequest(
       schema: buildDocumentUnderstandingSchema(
         categoryDefs.map((c) => c.key),
         extraTypes.map((t) => t.key),
-        omit
+        omit,
+        options.audio
       ),
     },
   };
@@ -288,6 +293,7 @@ async function analyzeAndStore(
     pageTexts: string[];
     apiKey: string;
     csv: boolean;
+    audio?: boolean;
     kindNames: string[];
     categories: Doc<"documentCategories">[];
     log?: ReturnType<typeof usageLogger>;
@@ -367,6 +373,10 @@ export const runAnalyze = internalAction({
         pageTexts,
         apiKey,
         csv: isCsvDocument(document),
+        // The stored transcript text carries [Ns] timestamps, so a text-in
+        // re-analyze of a recording can still produce a timed TOC.
+        audio:
+          document.mediaType === "audio" || document.mediaType === "video",
         kindNames,
         categories,
         log: usageLogger(ctx, { documentId: args.documentId }),
@@ -545,6 +555,7 @@ export const runPipeline = internalAction({
           categories,
           fileName: document.name,
           fileInput: true,
+          audio: isRecording,
           // A partially-native PDF still preempts the fields its own file
           // metadata answers, even though the text goes through OCR.
           pdfMetadata: document.pdfMetadata,

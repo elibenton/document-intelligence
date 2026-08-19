@@ -54,9 +54,21 @@ export const RecordingView = forwardRef<
     /** Armed highlighter color: a selection commits straight to a highlight
      *  of this color, with no comment card afterwards. */
     penColor?: AnnotationColor | null;
+    /** TOC section start times, in playback order. With the callback below,
+     *  the view reports which section the playhead is in — only when it
+     *  changes, so the parent is not re-rendered per timeupdate tick. */
+    sectionTimes?: number[];
+    onActiveSectionChange?: (index: number) => void;
   }
 >(function RecordingView(
-  { document: doc, url, showTranslation = false, penColor = null },
+  {
+    document: doc,
+    url,
+    showTranslation = false,
+    penColor = null,
+    sectionTimes,
+    onActiveSectionChange,
+  },
   ref
 ) {
   const segments = useQuery(api.transcripts.byDocument, {
@@ -70,10 +82,6 @@ export const RecordingView = forwardRef<
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const activeWordRef = useRef<HTMLSpanElement | null>(null);
-  // Brackets our own scrollIntoView so the scroll listener can tell the
-  // user's hand from ours. A counter, not a boolean: smooth scrolling fires
-  // several scroll events after the call returns.
-  const programmaticScrollUntil = useRef(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -102,6 +110,20 @@ export const RecordingView = forwardRef<
     }
     return map;
   }, [speakerRows]);
+
+  // Two diarizer labels given the same human name are the same person:
+  // they combine — one color (the first-appearing label's), and consecutive
+  // turns merge under a single header (see the render below). Unnamed labels
+  // keep their own machine-keyed color, so naming never shuffles the rest.
+  const colorByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const seg of segments ?? []) {
+      const name = nameByLabel.get(seg.speaker) ?? seg.speaker;
+      const color = speakerColor.get(seg.speaker);
+      if (color && !map.has(name)) map.set(name, color);
+    }
+    return map;
+  }, [segments, nameByLabel, speakerColor]);
   const [namingOpen, setNamingOpen] = useState(false);
   const currentSignature =
     segments && segments.length > 0 ? transcriptSignature(segments) : null;
@@ -126,14 +148,33 @@ export const RecordingView = forwardRef<
   // or make an explicit seek (which declares a new focus point).
   useEffect(() => {
     if (following && playing && activeWordRef.current) {
-      programmaticScrollUntil.current = Date.now() + 600;
       activeWordRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }, [active.segment, active.word, following, playing]);
 
-  const onUserScroll = useCallback(() => {
-    if (Date.now() > programmaticScrollUntil.current) setFollowing(false);
-  }, []);
+  // The user's hand, not ours: wheel and touch are events only a person
+  // fires, so there is no guessing whether a scroll event came from our own
+  // scrollIntoView — scrolling away always works mid-playback, and the
+  // "Resume following" button is the way back to the playhead.
+  const onUserScroll = useCallback(() => setFollowing(false), []);
+
+  // Which TOC section the playhead is inside — reported upward only on
+  // change (a few times per recording, not per tick).
+  const lastSection = useRef(-1);
+  useEffect(() => {
+    if (!sectionTimes || !onActiveSectionChange) return;
+    let index = -1;
+    for (let i = sectionTimes.length - 1; i >= 0; i--) {
+      if (sectionTimes[i] <= currentTime) {
+        index = i;
+        break;
+      }
+    }
+    if (index !== lastSection.current) {
+      lastSection.current = index;
+      onActiveSectionChange(index);
+    }
+  }, [currentTime, sectionTimes, onActiveSectionChange]);
 
   const seekTo = useCallback((time: number) => {
     const media = mediaRef.current;
@@ -455,55 +496,33 @@ export const RecordingView = forwardRef<
 
   return (
     <div className="flex flex-col h-full">
-      {/* Player */}
-      <div className="border-b p-4 shrink-0 bg-card flex flex-col gap-2">
-        {url === undefined ? (
-          <Skeleton className="h-12 w-full" />
-        ) : url === null ? (
-          <p className="text-sm text-muted-foreground">Media file not found.</p>
-        ) : (
-          <>
-            {isVideo ? (
-              <video
-                ref={(el) => {
-                  mediaRef.current = el;
-                }}
-                src={url}
-                controls
-                className="w-full max-h-72 rounded-lg bg-black"
-                {...mediaEvents}
-              />
-            ) : (
-              <audio
-                ref={(el) => {
-                  mediaRef.current = el;
-                }}
-                src={url}
-                {...mediaEvents}
-              />
-            )}
-            <TransportBar
-              playing={playing}
-              currentTime={currentTime}
-              duration={duration}
-              speed={speed}
-              onTogglePlay={togglePlay}
-              onSeek={seekTo}
-              onSpeedChange={changeSpeed}
-              seekOnly={isVideo}
-            />
-          </>
-        )}
-      </div>
+      {/* The picture stays at the top for video; the controls live in the
+          transport strip at the bottom either way. */}
+      {isVideo && url && (
+        <div className="border-b p-4 shrink-0">
+          <video
+            ref={(el) => {
+              mediaRef.current = el;
+            }}
+            src={url}
+            controls
+            className="w-full max-h-72 rounded-lg bg-black"
+            {...mediaEvents}
+          />
+        </div>
+      )}
 
       {/* Transcript */}
       <div
         ref={scrollRef}
-        onScroll={onUserScroll}
+        onWheel={onUserScroll}
+        onTouchMove={onUserScroll}
         onPointerUp={onTranscriptPointerUp}
         className="relative flex-1 overflow-y-auto p-6"
       >
-        <div className="flex items-center justify-between mb-4">
+        {/* One centered measure: the heading, controls and turns share the
+            same column so nothing sits at a different left edge. */}
+        <div className="mx-auto w-full max-w-3xl flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             {showTranslation && doc.translationLanguageCode
               ? `${languageName(doc.translationLanguageCode)} transcript`
@@ -567,14 +586,21 @@ export const RecordingView = forwardRef<
             )}
           </div>
         ) : (
-          <div className="flex flex-col gap-5 max-w-3xl">
-            {segments.map((seg, si) => (
+          <div className="mx-auto w-full max-w-3xl flex flex-col">
+            {segments.map((seg, si) => {
+              const name = nameByLabel.get(seg.speaker) ?? seg.speaker;
+              const prev = segments[si - 1];
+              const prevName = prev
+                ? nameByLabel.get(prev.speaker) ?? prev.speaker
+                : null;
+              return (
               <TranscriptTurn
                 key={seg._id}
                 segment={seg}
                 index={si}
-                speakerName={nameByLabel.get(seg.speaker) ?? seg.speaker}
-                colorClass={speakerColor.get(seg.speaker)}
+                speakerName={name}
+                colorClass={colorByName.get(name)}
+                showHeader={name !== prevName}
                 isActive={active.segment === si}
                 activeWordIndex={active.segment === si ? active.word : -1}
                 showTranslation={showTranslation}
@@ -584,7 +610,8 @@ export const RecordingView = forwardRef<
                   if (el) activeWordRef.current = el;
                 }}
               />
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -595,7 +622,6 @@ export const RecordingView = forwardRef<
               size="sm"
               onClick={() => {
                 setFollowing(true);
-                programmaticScrollUntil.current = Date.now() + 600;
                 activeWordRef.current?.scrollIntoView({
                   block: "center",
                   behavior: "smooth",
@@ -606,6 +632,37 @@ export const RecordingView = forwardRef<
               Resume following
             </Button>
           </div>
+        )}
+      </div>
+
+      {/* Transport — pinned under the transcript like a status bar. */}
+      <div className="border-t px-4 py-3 shrink-0">
+        {url === undefined ? (
+          <Skeleton className="h-8 w-full" />
+        ) : url === null ? (
+          <p className="text-sm text-muted-foreground">Media file not found.</p>
+        ) : (
+          <>
+            {!isVideo && (
+              <audio
+                ref={(el) => {
+                  mediaRef.current = el;
+                }}
+                src={url}
+                {...mediaEvents}
+              />
+            )}
+            <TransportBar
+              playing={playing}
+              currentTime={currentTime}
+              duration={duration}
+              speed={speed}
+              onTogglePlay={togglePlay}
+              onSeek={seekTo}
+              onSpeedChange={changeSpeed}
+              seekOnly={isVideo}
+            />
+          </>
         )}
       </div>
 

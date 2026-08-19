@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { PanelLeftOpen, PanelRightOpen, PanelLeftClose, PanelRightClose } from "lucide-react";
+import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   HANDLE_WIDTH,
@@ -18,10 +18,6 @@ interface ViewerLayoutProps {
   sidebar: React.ReactNode;
   /** Label for the floating button that restores the right panel. */
   sidebarLabel?: string;
-  /** Floats over the bottom-left corner of the viewer (e.g. zoom controls). */
-  bottomLeft?: React.ReactNode;
-  /** Floats over the bottom-right corner of the viewer (e.g. processing status). */
-  bottomRight?: React.ReactNode;
   /**
    * Reports how much room the viewer got and the zoom it must not auto-shrink
    * past. Drives useViewerZoom; see panelLayout for the ladder they share.
@@ -91,8 +87,6 @@ export function ViewerLayout({
   viewer,
   sidebar,
   sidebarLabel = "Details",
-  bottomLeft,
-  bottomRight,
   onViewerMetrics,
   revealLeft,
 }: ViewerLayoutProps) {
@@ -114,6 +108,11 @@ export function ViewerLayout({
   const startX = useRef(0);
   const startWidth = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Mirrors `dragging.current` as state, for what must re-render with it:
+  // the width transition turns off mid-drag (it would lag the pointer), and
+  // the viewer metrics report is held until release (it re-lays-out the
+  // document, far too heavy per mousemove).
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     saveLayout({
@@ -154,13 +153,15 @@ export function ViewerLayout({
 
   const { viewerWidth, zoomFloor } = layout;
   useEffect(() => {
+    if (isDragging) return;
     if (viewerWidth > 0) onViewerMetrics?.(viewerWidth, zoomFloor);
-  }, [onViewerMetrics, viewerWidth, zoomFloor]);
+  }, [onViewerMetrics, viewerWidth, zoomFloor, isDragging]);
 
   const onMouseDown = useCallback(
     (target: DragTarget) => (e: React.MouseEvent) => {
       e.preventDefault();
       dragging.current = target;
+      setIsDragging(true);
       startX.current = e.clientX;
       startWidth.current =
         target === "left" ? layout.leftWidth : layout.sidebarWidth;
@@ -171,10 +172,17 @@ export function ViewerLayout({
   );
 
   useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
+    // Mousemove outpaces the frame rate; coalesce to one state write per
+    // animation frame so the drag tracks the pointer instead of queueing
+    // behind a backlog of renders.
+    let frame = 0;
+    let lastX = 0;
+
+    const applyMove = () => {
+      frame = 0;
       const target = dragging.current;
       if (!target) return;
-      const delta = e.clientX - startX.current;
+      const delta = lastX - startX.current;
 
       // The sidebar sits on the right, so its drag is inverted — dragging
       // left makes it wider.
@@ -197,8 +205,16 @@ export function ViewerLayout({
       }
     };
 
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragging.current) return;
+      lastX = e.clientX;
+      if (!frame) frame = requestAnimationFrame(applyMove);
+    };
+
     const onMouseUp = () => {
+      if (!dragging.current) return;
       dragging.current = null;
+      setIsDragging(false);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
@@ -206,6 +222,7 @@ export function ViewerLayout({
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
     };
@@ -247,136 +264,83 @@ export function ViewerLayout({
     if (layout.sidebarForced) setSidebarPinned(true);
   }, [layout.sidebarCollapsed, layout.sidebarForced]);
 
-  // bottomLeft/bottomRight live wherever their panel does: stacked as a
-  // footer under it while it's open (so they read as belonging to it), and
-  // only dropped onto the viewer's corner once that panel is closed and
-  // there's nowhere else for them to sit.
-  const leftOpen = Boolean(left) && !layout.leftCollapsed;
-  const sidebarOpen = !layout.sidebarCollapsed;
-  const stackBottomLeft = leftOpen && bottomLeft;
-  const floatBottomLeft = bottomLeft && !stackBottomLeft;
-  const stackBottomRight = sidebarOpen && bottomRight;
-  const floatBottomRight = bottomRight && !stackBottomRight;
-
   return (
     <div ref={containerRef} className="relative flex h-full overflow-hidden">
-      {/* Navigation panel — left. No surface of its own: the content passed in
-          supplies its own floating card(s) (e.g. the outline box stacked over
-          the processing box), so more than one can share this column. */}
+      {/* Navigation panel — left. A flat, full-height column flush against
+          the viewer: the hairline border is the only divider, and the resize
+          handle is an invisible overlay straddling it (no gutter). */}
       {left && (
-        <>
-          <div
-            className="relative shrink-0 transition-[width] duration-150"
-            style={{ width: layout.leftWidth }}
-          >
-            {!layout.leftCollapsed && (
-              <>
-                <div className="flex h-full flex-col gap-2">
-                  <div className="min-h-0 flex-1">{left}</div>
-                  {stackBottomLeft && (
-                    <div className="w-full shrink-0 [&>*]:w-full [&>*]:justify-center">
-                      {bottomLeft}
-                    </div>
-                  )}
-                </div>
-                <MinimizeButton
-                  side="left"
-                  label={`Minimize ${leftLabel.toLowerCase()} panel`}
-                  onClick={toggleLeft}
-                />
-              </>
-            )}
-          </div>
-          <DragHandle
-            onMouseDown={onMouseDown("left")}
-            onDoubleClick={toggleLeft}
-          />
-        </>
+        <div
+          className={cn(
+            "relative shrink-0",
+            !isDragging && "transition-[width] duration-150"
+          )}
+          style={{ width: layout.leftWidth }}
+        >
+          {!layout.leftCollapsed && (
+            <>
+              {/* px-2 insets the content — and every full-width rule inside
+                  it — from the column edges, so the nested hairlines end
+                  short of the edge the way the column dividers do. */}
+              <div className="h-full px-2">{left}</div>
+              <DragHandle
+                side="left"
+                label={`Resize ${leftLabel.toLowerCase()} panel`}
+                width={layout.leftWidth}
+                onMouseDown={onMouseDown("left")}
+                onDoubleClick={toggleLeft}
+                onResize={(delta) =>
+                  setLeftPreferred((w) => Math.max(LEFT_MIN_WIDTH, w + delta))
+                }
+              />
+            </>
+          )}
+        </div>
       )}
 
-      {/* Document viewer — center. No surface of its own: the pages float
-          straight on the canvas, which is what the panels cast onto. */}
+      {/* Document viewer — center. No surface of its own: the pages sit
+          straight on the background. */}
       <div className="relative flex flex-1 min-w-0 justify-center overflow-hidden">
         {viewer}
       </div>
 
-      {/* Sidebar drag handle + panel */}
-      <DragHandle
-        onMouseDown={onMouseDown("sidebar")}
-        onDoubleClick={toggleSidebar}
-      />
+      {/* Sidebar — right. Same flat column, mirrored. */}
       <div
-        className="relative shrink-0 transition-[width] duration-150"
+        className={cn(
+          "relative shrink-0",
+          !isDragging && "transition-[width] duration-150"
+        )}
         style={{ width: layout.sidebarWidth }}
       >
         {!layout.sidebarCollapsed && (
           <>
-            <div className="flex h-full flex-col gap-2">
-              <div className={cn(FLOATING_SURFACE, "min-h-0 flex-1 overflow-hidden")}>
-                {sidebar}
-              </div>
-              {stackBottomRight && (
-                <div className="w-full shrink-0 [&>*]:w-full">{bottomRight}</div>
-              )}
-            </div>
-            <MinimizeButton
+            <div className="h-full overflow-hidden px-2">{sidebar}</div>
+            <DragHandle
               side="right"
-              label={`Minimize ${sidebarLabel.toLowerCase()} panel`}
-              onClick={toggleSidebar}
+              label={`Resize ${sidebarLabel.toLowerCase()} panel`}
+              width={layout.sidebarWidth}
+              onMouseDown={onMouseDown("sidebar")}
+              onDoubleClick={toggleSidebar}
+              onResize={(delta) =>
+                setSidebarPreferred((w) =>
+                  Math.max(SIDEBAR_MIN_WIDTH, w + delta)
+                )
+              }
             />
           </>
         )}
       </div>
 
-      {/* Minimized panels, and bottomLeft/bottomRight once they have no panel
-          to sit under, anchor to this row's own true edges — not the center
-          viewer div's, which shift with the (collapsed) left panel's width
-          plus its drag-handle gutter and would throw left-side alignment off
-          by that gutter's width. */}
+      {/* Minimized panels anchor to this row's own true edges — not the
+          center viewer div's, which shift with the (collapsed) left panel's
+          width and would throw left-side alignment off. */}
       {left && layout.leftCollapsed && (
         <FloatingPanelButton side="left" label={leftLabel} onClick={toggleLeft} />
       )}
       {layout.sidebarCollapsed && (
         <FloatingPanelButton side="right" label={sidebarLabel} onClick={toggleSidebar} />
       )}
-      {floatBottomLeft && (
-        <div className="absolute bottom-3 left-3 z-30">{bottomLeft}</div>
-      )}
-      {floatBottomRight && (
-        <div className="absolute bottom-3 right-3 z-30">{bottomRight}</div>
-      )}
     </div>
-  );
-}
-
-/**
- * The in-panel minimize control: a small button in the panel's top-right
- * corner. Panel contents leave room for it (see the `pr-9` on their top rows).
- */
-function MinimizeButton({
-  side,
-  label,
-  onClick,
-}: {
-  side: "left" | "right";
-  label: string;
-  onClick: () => void;
-}) {
-  const Icon = side === "left" ? PanelLeftClose : PanelRightClose;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      className={cn(
-        "absolute top-2 right-2 z-30 grid size-6 place-items-center rounded-md",
-        "text-foreground transition-colors hover:bg-accent",
-        "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
-      )}
-    >
-      <Icon className="size-3.5" />
-    </button>
   );
 }
 
@@ -412,28 +376,62 @@ function FloatingPanelButton({
   );
 }
 
+/**
+ * The column divider and its resize handle in one: an inset hairline rule
+ * (the same `w-px rounded-full bg-border` line SplitPane draws on the home
+ * page) inside an invisible drag strip straddling the panel edge. The strip
+ * takes no layout width (see HANDLE_WIDTH in panelLayout), so the columns
+ * sit flush; hovering or dragging tints the rule like the home page divider.
+ */
 function DragHandle({
+  side,
+  label,
+  width,
   onMouseDown,
   onDoubleClick,
+  onResize,
 }: {
+  side: "left" | "right";
+  label: string;
+  /** Current panel width, reported as the separator's value. */
+  width: number;
   onMouseDown: (e: React.MouseEvent) => void;
   onDoubleClick: () => void;
+  /** Keyboard resize: positive delta grows the panel. */
+  onResize: (delta: number) => void;
 }) {
-  // The gutter between a floating panel and the canvas *is* the drag target —
-  // no divider line, since the panel's own edge already draws the boundary.
   return (
     <div
-      className="group relative shrink-0 cursor-col-resize"
+      role="separator"
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuenow={Math.round(width)}
+      tabIndex={0}
+      title="Drag to resize · double-click to close"
+      className={cn(
+        "group absolute inset-y-0 z-30 cursor-col-resize outline-none",
+        side === "left" ? "-right-[5px]" : "-left-[5px]"
+      )}
       style={{ width: HANDLE_WIDTH }}
       onMouseDown={onMouseDown}
       onDoubleClick={onDoubleClick}
+      // Arrow keys move the divider the way they do on SplitPane: the
+      // direction is spatial, so which arrow grows the panel depends on
+      // which side of the viewer it sits.
+      onKeyDown={(e) => {
+        const step =
+          e.key === "ArrowLeft" ? -16 : e.key === "ArrowRight" ? 16 : 0;
+        if (step === 0) return;
+        e.preventDefault();
+        onResize(side === "left" ? step : -step);
+      }}
     >
       <div
         className={cn(
-          "absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2",
-          "flex h-8 w-1 items-center justify-center rounded-full",
-          "bg-muted-foreground/25 group-hover:bg-muted-foreground/50 group-active:bg-primary/60",
-          "opacity-0 transition-opacity group-hover:opacity-100"
+          "absolute inset-y-3 left-1/2 w-px -translate-x-1/2 rounded-full",
+          "bg-border transition-colors",
+          "group-hover:bg-primary/40 group-active:bg-primary",
+          "group-focus-visible:bg-primary"
         )}
       />
     </div>

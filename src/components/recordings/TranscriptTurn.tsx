@@ -32,6 +32,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   index,
   speakerName,
   colorClass,
+  showHeader = true,
   isActive,
   activeWordIndex,
   showTranslation,
@@ -43,6 +44,9 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   index: number;
   speakerName: string;
   colorClass: string | undefined;
+  /** False when the previous turn is the same (display) speaker — the turns
+   *  read as one, so the repeated name/time header is dropped. */
+  showHeader?: boolean;
   isActive: boolean;
   activeWordIndex: number;
   showTranslation: boolean;
@@ -53,22 +57,27 @@ export const TranscriptTurn = memo(function TranscriptTurn({
   activeWordRef: (el: HTMLSpanElement | null) => void;
 }) {
   return (
-    <div data-seg={index}>
-      <div className="flex items-baseline gap-2 mb-1">
-        <span
-          className={cn("text-sm font-semibold", colorClass)}
-          title={speakerName === seg.speaker ? undefined : seg.speaker}
-        >
-          {speakerName}
-        </span>
-        <button
-          onClick={() => onSeek(seg.startTime)}
-          className="text-xs text-muted-foreground tabular-nums hover:text-foreground hover:underline"
-          title="Jump to this segment"
-        >
-          {formatTime(seg.startTime)}
-        </button>
-      </div>
+    // Continuation turns (header hidden) hug the previous turn so a run of
+    // same-speaker segments reads as one turn; the parent list has no gap of
+    // its own.
+    <div data-seg={index} className={cn(index > 0 && (showHeader ? "mt-5" : "mt-1"))}>
+      {showHeader && (
+        <div className="flex items-baseline gap-2 mb-1">
+          <span
+            className={cn("text-sm font-semibold", colorClass)}
+            title={speakerName === seg.speaker ? undefined : seg.speaker}
+          >
+            {speakerName}
+          </span>
+          <button
+            onClick={() => onSeek(seg.startTime)}
+            className="text-xs text-muted-foreground tabular-nums hover:text-foreground hover:underline"
+            title="Jump to this segment"
+          >
+            {formatTime(seg.startTime)}
+          </button>
+        </div>
+      )}
       <p
         dir={showTranslation ? languageDirection(seg.translatedLanguageCode) : "ltr"}
         className={cn(
@@ -97,8 +106,11 @@ export const TranscriptTurn = memo(function TranscriptTurn({
                 data-word={wi}
                 ref={wordActive ? activeWordRef : undefined}
                 onClick={() => onSeek(w.start)}
+                // No horizontal padding: span padding is not painted by the
+                // native selection, so padded words made a drag-selection
+                // read as separate boxes instead of one continuous run.
                 className={cn(
-                  "cursor-pointer rounded px-0.5 hover:bg-primary/15",
+                  "cursor-pointer rounded hover:bg-primary/15",
                   wordActive && "bg-primary/25",
                 )}
                 style={

@@ -4,6 +4,7 @@ import { api } from "../../../convex/_generated/api";
 import { cn } from "@/lib/utils";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { buildTocHeaders } from "./tocHeaders";
+import { formatTime } from "@/components/recordings/speakerColors";
 
 /** Lightweight block shape from `blocks.byDocument` (no word boxes / html). */
 export interface TocBlock {
@@ -13,11 +14,13 @@ export interface TocBlock {
   blockType: string;
 }
 
-/** One entry of the Analyze pass's outline (`documents.tableOfContents`). */
+/** One entry of the Analyze pass's outline (`documents.tableOfContents`).
+ *  Paged documents carry `page` (1-based); recordings carry `time` (seconds). */
 export interface OutlineEntry {
   title: string;
   level: number;
-  page: number;
+  page?: number;
+  time?: number;
 }
 
 interface TableOfContentsProps {
@@ -31,6 +34,12 @@ interface TableOfContentsProps {
   currentPage: number;
   totalPages: number;
   onNavigate: (page: number) => void;
+  /** Recordings: seek playback to a time-addressed entry. Its presence is
+   *  also what marks this document as a recording. */
+  onSeek?: (seconds: number) => void;
+  /** Recordings: index of the section the playhead is in (-1 = none) —
+   *  time-addressed entries can't derive this from `currentPage`. */
+  activeSection?: number;
 }
 
 export function TableOfContents({
@@ -39,6 +48,8 @@ export function TableOfContents({
   currentPage,
   totalPages,
   onNavigate,
+  onSeek,
+  activeSection,
 }: TableOfContentsProps) {
   const activeRef = useRef<HTMLDivElement>(null);
   const updateBlockType = useMutation(api.blocks.updateType);
@@ -59,11 +70,19 @@ export function TableOfContents({
 
   const currentPage0 = currentPage - 1;
 
+  // Time-addressed headers (recordings) share one nominal page, so the
+  // page-based tracking would always mark the last entry — the playhead
+  // position arrives as `activeSection` instead.
+  const timed = headers.some((header) => header.time !== undefined);
   let activeIdx = -1;
-  for (let i = headers.length - 1; i >= 0; i--) {
-    if (headers[i].pageNumber <= currentPage0) {
-      activeIdx = i;
-      break;
+  if (timed) {
+    activeIdx = activeSection ?? -1;
+  } else {
+    for (let i = headers.length - 1; i >= 0; i--) {
+      if (headers[i].pageNumber <= currentPage0) {
+        activeIdx = i;
+        break;
+      }
     }
   }
 
@@ -122,15 +141,17 @@ export function TableOfContents({
     setSelected(new Set());
   }, []);
 
-  if (headers.length === 0 && totalPages === 0) {
+  if (headers.length === 0 && (totalPages === 0 || onSeek)) {
     return (
       <div className="p-4 text-sm text-foreground">
-        Process the document to generate a table of contents.
+        {onSeek
+          ? "No table of contents for this recording yet — re-run processing to generate one."
+          : "Process the document to generate a table of contents."}
       </div>
     );
   }
 
-  // Pages-only fallback
+  // Pages-only fallback (paged documents; a recording has no pages to list)
   if (headers.length === 0 && totalPages > 0) {
     return (
       <nav className="flex flex-col">
@@ -225,19 +246,25 @@ export function TableOfContents({
               key={header.id}
               ref={isActive ? activeRef : undefined}
               className={cn(
+                // Quiet by default — muted, small — with the active entry
+                // lifted by color and background alone, never size or weight.
                 "group relative flex items-center gap-1 text-sm leading-snug transition-all cursor-pointer",
-                "py-1.5 pr-3",
+                "py-1 pr-3",
                 editing
                   ? isSelected
                     ? "bg-primary/10"
                     : "hover:bg-accent"
                   : isActive
-                    ? "font-semibold text-foreground bg-accent/50"
-                    : "font-normal text-foreground hover:bg-accent"
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
               )}
               style={{ paddingLeft: `${16 + indent * 16}px` }}
               onClick={() =>
-                editing ? toggleSelect(header.id) : onNavigate(displayPage)
+                editing
+                  ? toggleSelect(header.id)
+                  : header.time !== undefined && onSeek
+                    ? onSeek(header.time)
+                    : onNavigate(displayPage)
               }
             >
               {editing && (
@@ -267,18 +294,19 @@ export function TableOfContents({
               )}
               <span
                 className={cn(
+                  // One size, one weight, title case throughout — depth reads
+                  // from the indent alone.
                   "flex-1 min-w-0 line-clamp-1",
-                  isActive && !editing && "line-clamp-2",
-                  // Depth still reads as hierarchy via size, just not color.
-                  header.level >= 3 && "text-xs",
-                  header.level === 1 && fromOutline && "font-medium"
+                  isActive && !editing && "line-clamp-2"
                 )}
               >
-                {header.text}
+                {toTitleCase(header.text)}
               </span>
               {!editing && (
-                <span className="tabular-nums text-xs text-foreground shrink-0">
-                  {displayPage}
+                <span className="tabular-nums text-xs text-muted-foreground shrink-0">
+                  {header.time !== undefined
+                    ? formatTime(header.time)
+                    : displayPage}
                 </span>
               )}
               {editing && (
@@ -315,6 +343,29 @@ export function TableOfContents({
       </div>
     </nav>
   );
+}
+
+/**
+ * Normalize a heading to title case: models and PDFs deliver a mix of
+ * ALL-CAPS, sentence case, and as-written headings, and the list reads
+ * calmer when they all match. Minor words stay lowercase except at the
+ * start; fully-uppercase words are folded down first so acronyms of real
+ * words ("TEXT OF PROPOSED LAWS") don't survive as shouting.
+ */
+const MINOR_WORDS = new Set([
+  "a", "an", "and", "as", "at", "but", "by", "for", "in", "nor",
+  "of", "on", "or", "per", "the", "to", "vs", "via",
+]);
+
+function toTitleCase(text: string): string {
+  return text
+    .split(/\s+/)
+    .map((word, index) => {
+      const lower = word.toLowerCase();
+      if (index > 0 && MINOR_WORDS.has(lower)) return lower;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
 }
 
 /** Renders text with the search query highlighted in bold */

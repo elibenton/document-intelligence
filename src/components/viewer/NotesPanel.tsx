@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Trash2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
@@ -104,7 +104,21 @@ function NoteRow({
   onSelect: () => void;
   onDelete: () => void;
 }) {
+  const updateAnnotation = useMutation(api.annotations.update);
+  // Commenting happens inline, right here in the panel — it must not
+  // navigate the viewer back to the highlight. null = not editing.
+  const [draft, setDraft] = useState<string | null>(null);
   const color = annotationColor(note.color);
+
+  const commit = () => {
+    if (draft === null) return;
+    const comment = draft.trim();
+    if (comment !== (note.comment ?? "").trim()) {
+      void updateAnnotation({ id: note._id, comment });
+    }
+    setDraft(null);
+  };
+
   return (
     <div
       className={cn(
@@ -115,7 +129,7 @@ function NoteRow({
       <button
         type="button"
         onClick={onSelect}
-        className="flex w-full flex-col items-start gap-1 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring rounded-md"
+        className="flex w-full flex-col items-start gap-1 px-2.5 pt-2 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring rounded-md"
       >
         {/* pr-8 keeps the quote clear of the hover trash button overlaid in
             the row's top-right corner. */}
@@ -129,17 +143,60 @@ function NoteRow({
             “{note.text}”
           </span>
         </span>
-        {note.comment && (
+        {note.comment && draft === null && (
           <span className="w-full whitespace-pre-wrap pl-4.5 text-sm text-foreground">
             {note.comment}
           </span>
         )}
-        <span className="pl-4.5 text-2xs text-muted-foreground">
+      </button>
+
+      {draft !== null && (
+        <div className="px-2.5 pl-7 pt-1">
+          <textarea
+            value={draft}
+            autoFocus
+            rows={2}
+            placeholder="Add a comment…"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setDraft(null);
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                commit();
+              }
+            }}
+            className={cn(
+              "w-full resize-none rounded-md border bg-background px-2 py-1 text-sm",
+              "placeholder:text-muted-foreground",
+              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+            )}
+          />
+        </div>
+      )}
+
+      {/* Footer: the address on the left, the quiet comment control on the
+          right. Siblings of the main button, so neither click navigates. */}
+      <div className="flex items-center justify-between pb-1.5 pl-7 pr-2">
+        <span className="text-2xs text-muted-foreground">
           {note.timeRange
             ? formatTime(note.timeRange.start)
             : `Page ${note.pageNumber + 1}`}
         </span>
-      </button>
+        <button
+          type="button"
+          onClick={() =>
+            draft === null ? setDraft(note.comment ?? "") : commit()
+          }
+          className={cn(
+            "rounded px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors",
+            "hover:bg-accent hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring"
+          )}
+        >
+          {draft !== null ? "Save" : note.comment ? "Edit" : "Comment"}
+        </button>
+      </div>
+
       <button
         type="button"
         onClick={onDelete}

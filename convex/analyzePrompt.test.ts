@@ -77,8 +77,11 @@ describe("native metadata omissions", () => {
     expect(omitted.required).not.toContain("author");
     // The graph still rides along untouched.
     expect(omitted.required).toContain("entities");
-    const citation = (omitted.properties as Record<string, { properties: object; required: string[] }>)
-      .citation;
+    const properties = omitted.properties as Record<string, unknown>;
+    const citation = properties.citation as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
     expect(Object.keys(citation.properties)).not.toContain("contributors");
     expect(citation.required).toEqual(["type"]);
   });
