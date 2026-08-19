@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { authedAction } from "./authz";
+import { requireDocumentFromAction } from "./ownership";
 import { analyzeDocumentText } from "./interfaze";
 import { analyzeSystemPrompt } from "./analyzePrompt";
 import { usageLogger } from "./apiLogs";
@@ -24,6 +25,8 @@ export const runExtraction = authedAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await requireDocumentFromAction(ctx, args.documentId);
+
     const document = await ctx.runQuery(internal.documents.getInternal, {
       id: args.documentId,
     });

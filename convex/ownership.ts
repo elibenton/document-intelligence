@@ -1,5 +1,7 @@
-import { ConvexError } from "convex/values";
-import type { QueryCtx } from "./_generated/server";
+import { ConvexError, v } from "convex/values";
+import { internalQuery } from "./_generated/server";
+import type { ActionCtx, QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 
 /**
@@ -35,9 +37,9 @@ import type { Doc, Id } from "./_generated/dataModel";
  *
  * ## Actions
  *
- * An action has no `ctx.db`, so it cannot call these directly. The five authed
- * actions go through `ownership.assertOwns*` internal queries instead, which
- * run this same code. Note that ownership does *not* travel into the
+ * An action has no `ctx.db`, so it cannot call these directly. Authed actions
+ * go through `requireDocumentFromAction`, whose `assertOwnsDocument` internal
+ * query runs this same code. Note that ownership does *not* travel into the
  * scheduler: Convex drops identity there, so everything downstream of an
  * enqueue is internal and trusts the `projectId` it was handed as data.
  */
@@ -69,6 +71,41 @@ export async function requireDocument(
   if (!document?.projectId) throw new ConvexError(DENIED);
   await requireProject(ctx, document.projectId);
   return document;
+}
+
+/**
+ * The walk, reachable from an action.
+ *
+ * An action has no `ctx.db`, so it cannot run `requireDocument` itself. It
+ * takes the caller's id as an argument rather than reading `ctx.auth`, because
+ * this is also the shape that would work if it were ever called from somewhere
+ * identity does not reach — and because a query that trusted ambient identity
+ * would be one refactor away from being scheduled and silently passing.
+ *
+ * Internal, so passing your own `userId` is not something an outside caller
+ * can do.
+ */
+export const assertOwnsDocument = internalQuery({
+  args: { userId: v.string(), documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireDocument(
+      { db: ctx.db, user: { _id: args.userId } },
+      args.documentId
+    );
+    return null;
+  },
+});
+
+/** `requireDocument` for authed actions. */
+export async function requireDocumentFromAction(
+  ctx: ActionCtx & { user: { _id: string } },
+  documentId: Id<"documents">
+): Promise<void> {
+  await ctx.runQuery(internal.ownership.assertOwnsDocument, {
+    userId: ctx.user._id,
+    documentId,
+  });
 }
 
 export async function requireEntity(
