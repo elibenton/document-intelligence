@@ -74,6 +74,7 @@ import type * as slug from "../slug.js";
 import type * as speakerSignature from "../speakerSignature.js";
 import type * as speakers from "../speakers.js";
 import type * as suggestedEntities from "../suggestedEntities.js";
+import type * as tempClipToken from "../tempClipToken.js";
 import type * as transcripts from "../transcripts.js";
 import type * as translations from "../translations.js";
 import type * as upload from "../upload.js";
@@ -151,6 +152,7 @@ declare const fullApi: ApiFromModules<{
   speakerSignature: typeof speakerSignature;
   speakers: typeof speakers;
   suggestedEntities: typeof suggestedEntities;
+  tempClipToken: typeof tempClipToken;
   transcripts: typeof transcripts;
   translations: typeof translations;
   upload: typeof upload;

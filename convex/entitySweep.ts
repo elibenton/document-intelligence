@@ -3,7 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { CASCADE_BATCH, sweepOrphanEntities } from "./documents";
+import { CASCADE_BATCH, ORPHAN_BATCH, sweepOrphanEntities } from "./documents";
 
 /**
  * Repair pass for entity data stranded by a deletion cascade that never
@@ -14,10 +14,15 @@ import { CASCADE_BATCH, sweepOrphanEntities } from "./documents";
  * real use. This sweep is the terminal-state backstop, the same bargain as
  * `sweepStuckJobs`: the cascade is still the fast path, this is the guarantee.
  *
- * Three self-rescheduled phases, each one bounded transaction at a time:
+ * Four self-rescheduled phases, each one bounded transaction at a time:
  *   0  walk `mentions`, delete rows whose document is gone, adjust counts
  *   1  walk `entityRoles`, delete rows whose document is gone
- *   2  run the ordinary orphan sweep over every entity a deleted row named
+ *   2  walk `entities`, feeding each row to the ordinary orphan sweep
+ *   3  finish entities the orphan sweep deferred (more edges than one batch)
+ *
+ * Phase 2 walks the whole table rather than only entities the earlier phases
+ * touched because an entity can be orphaned with no dangling row left to name
+ * it — two were, by deletions that predate the current cascade entirely.
  *
  * Counts are adjusted arithmetically, mirroring `drainMentions`: subtracting
  * what this batch removed is exact, and recounting a common entity's mentions
@@ -27,6 +32,7 @@ export const sweep = internalMutation({
   args: {
     phase: v.optional(v.number()),
     cursor: v.optional(v.string()),
+    // Entities the orphan sweep could not finish in one transaction.
     orphanCandidates: v.optional(v.array(v.id("entities"))),
   },
   returns: v.null(),
@@ -37,24 +43,26 @@ export const sweep = internalMutation({
     let more = false;
 
     if (phase === 0) {
-      const result = await sweepDanglingMentions(
-        ctx,
-        args.cursor,
-        orphanCandidates
-      );
+      const result = await sweepDanglingMentions(ctx, args.cursor);
       more = result.more;
       cursor = result.cursor;
-      orphanCandidates = result.orphanCandidates;
     } else if (phase === 1) {
-      const result = await sweepDanglingRoles(
-        ctx,
-        args.cursor,
-        orphanCandidates
-      );
+      const result = await sweepDanglingRoles(ctx, args.cursor);
       more = result.more;
       cursor = result.cursor;
-      orphanCandidates = result.orphanCandidates;
     } else if (phase === 2) {
+      // ORPHAN_BATCH entities per transaction, matching what the orphan sweep
+      // will examine, so leftovers can only come from relationship draining.
+      const page = await ctx.db
+        .query("entities")
+        .paginate({ numItems: ORPHAN_BATCH, cursor: args.cursor ?? null });
+      orphanCandidates = await sweepOrphanEntities(ctx, [
+        ...orphanCandidates,
+        ...page.page.map((e) => e._id),
+      ]);
+      more = !page.isDone;
+      cursor = page.continueCursor;
+    } else if (phase === 3) {
       orphanCandidates = await sweepOrphanEntities(ctx, orphanCandidates);
       more = orphanCandidates.length > 0;
     } else {
@@ -62,7 +70,7 @@ export const sweep = internalMutation({
     }
 
     const next = more ? phase : phase + 1;
-    if (next > 2) return null;
+    if (next > 3 || (next === 3 && orphanCandidates.length === 0)) return null;
     await ctx.scheduler.runAfter(0, internal.entitySweep.sweep, {
       phase: next,
       // The cursor belongs to one table's pagination; a phase change resets it.
@@ -88,13 +96,8 @@ async function documentExists(
 
 async function sweepDanglingMentions(
   ctx: MutationCtx,
-  cursor: string | undefined,
-  orphanCandidates: Id<"entities">[]
-): Promise<{
-  more: boolean;
-  cursor: string | undefined;
-  orphanCandidates: Id<"entities">[];
-}> {
+  cursor: string | undefined
+): Promise<{ more: boolean; cursor: string | undefined }> {
   const page = await ctx.db
     .query("mentions")
     .paginate({ numItems: CASCADE_BATCH, cursor: cursor ?? null });
@@ -112,11 +115,9 @@ async function sweepDanglingMentions(
     await ctx.db.delete(row._id);
   }
 
-  const candidates = new Set(orphanCandidates);
   for (const [entityId, perDoc] of removed) {
     const entity = await ctx.db.get(entityId);
     if (!entity) continue;
-    candidates.add(entityId);
 
     let mentionsRemoved = 0;
     let documentsVacated = 0;
@@ -137,37 +138,22 @@ async function sweepDanglingMentions(
     });
   }
 
-  return {
-    more: !page.isDone,
-    cursor: page.continueCursor,
-    orphanCandidates: [...candidates],
-  };
+  return { more: !page.isDone, cursor: page.continueCursor };
 }
 
 async function sweepDanglingRoles(
   ctx: MutationCtx,
-  cursor: string | undefined,
-  orphanCandidates: Id<"entities">[]
-): Promise<{
-  more: boolean;
-  cursor: string | undefined;
-  orphanCandidates: Id<"entities">[];
-}> {
+  cursor: string | undefined
+): Promise<{ more: boolean; cursor: string | undefined }> {
   const page = await ctx.db
     .query("entityRoles")
     .paginate({ numItems: CASCADE_BATCH, cursor: cursor ?? null });
 
   const docCache = new Map<Id<"documents">, boolean>();
-  const candidates = new Set(orphanCandidates);
   for (const row of page.page) {
     if (await documentExists(ctx, docCache, row.documentId)) continue;
-    candidates.add(row.entityId);
     await ctx.db.delete(row._id);
   }
 
-  return {
-    more: !page.isDone,
-    cursor: page.continueCursor,
-    orphanCandidates: [...candidates],
-  };
+  return { more: !page.isDone, cursor: page.continueCursor };
 }
