@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, ExternalLink, Globe } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 
 interface WebClipViewerProps {
   url: string; // storage URL of the archived single-file HTML snapshot
-  sourceUrl?: string;
-  clippedAt?: number;
 }
 
 // Not every stored blob is a styled single-file archive: older clippers
@@ -37,7 +35,7 @@ function withReaderStyles(html: string): string {
   return html.slice(0, at) + READER_HEAD + html.slice(at);
 }
 
-export function WebClipViewer({ url, sourceUrl, clippedAt }: WebClipViewerProps) {
+export function WebClipViewer({ url }: WebClipViewerProps) {
   const [state, setState] = useState<
     { html: string } | { error: string } | null
   >(null);
@@ -67,37 +65,8 @@ export function WebClipViewer({ url, sourceUrl, clippedAt }: WebClipViewerProps)
     return () => controller.abort();
   }, [url]);
 
-  let domain: string | null = null;
-  if (sourceUrl) {
-    try {
-      domain = new URL(sourceUrl).hostname;
-    } catch {
-      domain = null;
-    }
-  }
-
   return (
     <div className="flex flex-col h-full w-full min-w-0">
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-muted/50 text-xs text-muted-foreground shrink-0">
-        <Globe className="size-3.5 shrink-0" />
-        <span className="truncate">
-          Archived snapshot
-          {domain ? ` of ${domain}` : ""}
-          {clippedAt
-            ? ` · clipped ${new Date(clippedAt).toLocaleDateString()}`
-            : ""}
-        </span>
-        {sourceUrl && (
-          <a
-            href={sourceUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-auto inline-flex items-center gap-1 hover:text-foreground shrink-0"
-          >
-            View original <ExternalLink className="size-3" />
-          </a>
-        )}
-      </div>
       {state === null ? (
         <div className="flex flex-1 items-center justify-center">
           <Spinner />

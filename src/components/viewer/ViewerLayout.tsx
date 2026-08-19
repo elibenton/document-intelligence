@@ -28,6 +28,14 @@ interface ViewerLayoutProps {
    * search box back when the panel is minimized. Zero means "never asked".
    */
   revealLeft?: number;
+  /**
+   * localStorage key for the remembered layout. Document types whose panels
+   * should default differently (web clips close Contents) get their own key,
+   * so each type remembers its owner's choice independently.
+   */
+  storageKey?: string;
+  /** Left panel starts collapsed when nothing is stored under storageKey. */
+  defaultLeftCollapsed?: boolean;
 }
 
 const LEFT_DEFAULT = 300;
@@ -44,23 +52,18 @@ interface LayoutState {
   sidebarCollapsed: boolean;
 }
 
-const DEFAULT_LAYOUT: LayoutState = {
-  leftWidth: LEFT_DEFAULT,
-  leftCollapsed: false,
-  sidebarWidth: SIDEBAR_DEFAULT,
-  sidebarCollapsed: false,
-};
-
-function loadLayout(): LayoutState {
+function loadLayout(storageKey: string, leftCollapsedDefault: boolean): LayoutState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<LayoutState>;
       return {
         leftWidth:
           typeof parsed.leftWidth === "number" ? parsed.leftWidth : LEFT_DEFAULT,
         leftCollapsed:
-          typeof parsed.leftCollapsed === "boolean" ? parsed.leftCollapsed : false,
+          typeof parsed.leftCollapsed === "boolean"
+            ? parsed.leftCollapsed
+            : leftCollapsedDefault,
         sidebarWidth:
           typeof parsed.sidebarWidth === "number"
             ? parsed.sidebarWidth
@@ -72,12 +75,17 @@ function loadLayout(): LayoutState {
       };
     }
   } catch { /* ignore */ }
-  return DEFAULT_LAYOUT;
+  return {
+    leftWidth: LEFT_DEFAULT,
+    leftCollapsed: leftCollapsedDefault,
+    sidebarWidth: SIDEBAR_DEFAULT,
+    sidebarCollapsed: false,
+  };
 }
 
-function saveLayout(state: LayoutState) {
+function saveLayout(storageKey: string, state: LayoutState) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(storageKey, JSON.stringify(state));
   } catch { /* ignore */ }
 }
 
@@ -89,16 +97,30 @@ export function ViewerLayout({
   sidebarLabel = "Details",
   onViewerMetrics,
   revealLeft,
+  storageKey = STORAGE_KEY,
+  defaultLeftCollapsed = false,
 }: ViewerLayoutProps) {
   // Lazy state initializer, not a ref: loadLayout() must run exactly once, and
   // reading a ref during render is what the hooks rules forbid.
-  const [initial] = useState(loadLayout);
+  const [initial] = useState(() => loadLayout(storageKey, defaultLeftCollapsed));
   // What the user asked for. The widths actually rendered are derived from
   // these plus the measured container width — see resolvePanels.
   const [leftPreferred, setLeftPreferred] = useState(initial.leftWidth);
   const [sidebarPreferred, setSidebarPreferred] = useState(initial.sidebarWidth);
   const [leftHidden, setLeftHidden] = useState(initial.leftCollapsed);
   const [sidebarHidden, setSidebarHidden] = useState(initial.sidebarCollapsed);
+  // Navigating between documents of different types swaps the storage key
+  // without a remount — reload that key's layout during render, the same
+  // compare-and-set pattern as the reveal counter below.
+  const [seenKey, setSeenKey] = useState(storageKey);
+  if (storageKey !== seenKey) {
+    setSeenKey(storageKey);
+    const next = loadLayout(storageKey, defaultLeftCollapsed);
+    setLeftPreferred(next.leftWidth);
+    setSidebarPreferred(next.sidebarWidth);
+    setLeftHidden(next.leftCollapsed);
+    setSidebarHidden(next.sidebarCollapsed);
+  }
   // Set when the user re-opens a panel the window width had folded away.
   const [leftPinned, setLeftPinned] = useState(false);
   const [sidebarPinned, setSidebarPinned] = useState(false);
@@ -115,13 +137,13 @@ export function ViewerLayout({
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
-    saveLayout({
+    saveLayout(storageKey, {
       leftWidth: leftPreferred,
       leftCollapsed: leftHidden,
       sidebarWidth: sidebarPreferred,
       sidebarCollapsed: sidebarHidden,
     });
-  }, [leftPreferred, leftHidden, sidebarPreferred, sidebarHidden]);
+  }, [storageKey, leftPreferred, leftHidden, sidebarPreferred, sidebarHidden]);
 
   useEffect(() => {
     const el = containerRef.current;

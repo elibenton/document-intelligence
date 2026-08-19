@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router";
-import { Folder, Sparkles } from "lucide-react";
+import { ExternalLink, Folder, Sparkles } from "lucide-react";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
@@ -298,6 +298,7 @@ export default function DocumentPage({ id }: { id: string }) {
    */
   const totalPages = document?.pageCount ?? (pages?.length || undefined);
   const isRecording = Boolean(document && isAudioVideo(document));
+  const isWebClip = document?.mediaType === "webScrape";
 
   // Recordings get the Contents panel too: transcript segments are blocks,
   // so search works, and the understand pass writes a table of contents for
@@ -609,6 +610,16 @@ export default function DocumentPage({ id }: { id: string }) {
               viewer: highlighter, then zoom + page counter, quietly right of
               the title. Pipeline status lives at the top of the Details
               column, where a step list has the room a header bar doesn't. */}
+          {isWebClip && document.sourceUrl && (
+            <a
+              href={document.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              View original <ExternalLink className="size-3" />
+            </a>
+          )}
           {(isPdfDocument || isRecording) && (
             <HighlighterTool color={penColor} onChange={setPenColor} />
           )}
@@ -674,6 +685,10 @@ export default function DocumentPage({ id }: { id: string }) {
           sidebarLabel="Details"
           onViewerMetrics={handleViewerMetrics}
           revealLeft={findSignal}
+          // Web clips read as one page, so the Contents panel starts closed
+          // for them — remembered separately from the paged-document layout.
+          storageKey={isWebClip ? "viewer-layout-webclip" : undefined}
+          defaultLeftCollapsed={isWebClip}
           left={
             showContentsTab ? (
               <div className="h-full overflow-hidden">
@@ -715,12 +730,8 @@ export default function DocumentPage({ id }: { id: string }) {
             ) : hasTranslatedContent && languageView === "translated" ? (
               <TranslatedDocumentView pages={translatedPages ?? []} />
             ) : url ? (
-              document.mediaType === "webScrape" ? (
-                <WebClipViewer
-                  url={url}
-                  sourceUrl={document.sourceUrl}
-                  clippedAt={document.uploadedAt}
-                />
+              isWebClip ? (
+                <WebClipViewer url={url} />
               ) : isCsv ? (
                 <CsvViewer url={url} name={document.name} />
               ) : document.mediaType === "image" ? (

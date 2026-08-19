@@ -188,6 +188,10 @@ async function understandingRequest(
      * it covers are removed from the request — ground truth over inference;
      * saveMetadataResult reads them back in when persisting. */
     pdfMetadata?: Doc<"documents">["pdfMetadata"];
+    /** Web clips: a scraped page's nav chrome makes the outline noise, so the
+     * table of contents leaves the request entirely — fewer billed output
+     * tokens, and the Contents tab falls back to the block list. */
+    omitTableOfContents?: boolean;
   }
 ): Promise<{
   systemPrompt: string;
@@ -204,11 +208,13 @@ async function understandingRequest(
         })
       : [];
   const omit: NativeMetadataOmissions | undefined =
-    options.pdfMetadata && !options.csv
+    (options.pdfMetadata || options.omitTableOfContents) && !options.csv
       ? {
-          tableOfContents: !!options.pdfMetadata.tableOfContents?.length,
-          displayTitle: !!options.pdfMetadata.title,
-          author: !!options.pdfMetadata.author,
+          tableOfContents:
+            !!options.omitTableOfContents ||
+            !!options.pdfMetadata?.tableOfContents?.length,
+          displayTitle: !!options.pdfMetadata?.title,
+          author: !!options.pdfMetadata?.author,
         }
       : undefined;
   return {
@@ -305,6 +311,7 @@ async function analyzeAndStore(
     promptOverride?: string;
     fileName?: string;
     pdfMetadata?: Doc<"documents">["pdfMetadata"];
+    omitTableOfContents?: boolean;
   }
 ): Promise<void> {
   const request = await understandingRequest(ctx, options);
@@ -390,6 +397,7 @@ export const runAnalyze = internalAction({
         promptOverride: args.promptOverride,
         fileName: document.name,
         pdfMetadata: document.pdfMetadata,
+        omitTableOfContents: document.mediaType === "webScrape",
       });
 
       await ctx.runMutation(internal.processing.updateJobStatus, {
@@ -563,6 +571,7 @@ export const runPipeline = internalAction({
           // A partially-native PDF still preempts the fields its own file
           // metadata answers, even though the text goes through OCR.
           pdfMetadata: document.pdfMetadata,
+          omitTableOfContents: document.mediaType === "webScrape",
         })),
         log,
         bypassCache: args.bypassCache,
