@@ -86,6 +86,57 @@ describe("native metadata omissions", () => {
     expect(citation.required).toEqual(["type"]);
   });
 
+  // askCreatedDate is the same vcache bargain: off (or undefined) must be
+  // byte-identical to the world before the flag existed, and on must only
+  // APPEND — created_date lands after citation, before the graph, so the
+  // reasoning chain the declaration order encodes is untouched.
+  it("askCreatedDate off is byte-identical; on appends after citation", () => {
+    expect(
+      buildAnalyzePrompt({
+        csv: false,
+        kindNames: ["letter"],
+        categories: CATEGORIES,
+        fileName: "a.pdf",
+        graphExtraTypes: [],
+        askCreatedDate: false,
+      })
+    ).toBe(prompt());
+    expect(
+      JSON.stringify(
+        buildDocumentUnderstandingSchema(["legal"], [], undefined, false, false)
+      )
+    ).toBe(JSON.stringify(buildDocumentUnderstandingSchema(["legal"], [])));
+
+    const withAsk = buildDocumentUnderstandingSchema(
+      ["legal"],
+      ["vessel"],
+      undefined,
+      false,
+      true
+    );
+    const keys = Object.keys(withAsk.properties);
+    expect(keys.indexOf("created_date")).toBe(keys.indexOf("citation") + 1);
+    expect(keys.indexOf("entities")).toBeGreaterThan(
+      keys.indexOf("created_date")
+    );
+    const without = buildDocumentUnderstandingSchema(["legal"], ["vessel"]);
+    expect(keys.filter((key) => key !== "created_date")).toEqual(
+      Object.keys(without.properties)
+    );
+    // Declining must stay legal: never required.
+    expect(withAsk.required).not.toContain("created_date");
+    const asked = buildAnalyzePrompt({
+      csv: false,
+      kindNames: ["letter"],
+      categories: CATEGORIES,
+      fileName: "a.pdf",
+      graphExtraTypes: [],
+      askCreatedDate: true,
+    });
+    expect(asked).toContain("created_date");
+    expect(asked).not.toBe(prompt());
+  });
+
   it("repeated builds never share mutated state", () => {
     buildDocumentUnderstandingSchema(["legal"], [], {
       tableOfContents: true,

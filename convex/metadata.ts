@@ -6,13 +6,12 @@ import { applyDisplayName, normalizeTitle } from "./rename";
 import { authedMutation } from "./authz";
 import { requireDocument } from "./ownership";
 import { recordOverride } from "./apiLogs";
+import { mergeMetadataBlob } from "./metadataBlob";
 
 // ---------------------------------------------------------------------------
-// Metadata pass — default-runtime half.
-//
-// The Interfaze call (runMetadataPass) lives in metadataNode.ts under
-// "use node" because the Interfaze SDK needs the Node runtime; this file keeps
-// the mutations that persist and edit its output.
+// Metadata pass — the mutations that persist and edit the understanding
+// response (the Interfaze call itself lives in processingStages.ts /
+// interfaze.ts).
 // ---------------------------------------------------------------------------
 
 export const saveMetadataResult = internalMutation({
@@ -33,6 +32,7 @@ export const saveMetadataResult = internalMutation({
       primary_category?: string;
       display_title?: string;
       document_date?: { value?: string; precision?: string; evidence?: string };
+      created_date?: { value?: string; precision?: string; evidence?: string };
       place?: { value?: string; evidence?: string };
       tags?: string[];
       table_of_contents?: Array<{
@@ -55,13 +55,13 @@ export const saveMetadataResult = internalMutation({
 
     const kindName = (parsed.primary_kind ?? "").trim().toLowerCase();
 
-    // What the PDF file itself declared (documents.pdfMetadata) outranks the
-    // model on the fields it covers — those fields were omitted from the
-    // request schema (NativeMetadataOmissions in analyzePrompt.ts), so the
-    // parsed response legitimately lacks them and the native value is the
-    // only one there is. Stored sanitized at commit (nativeText.ts), so it is
-    // used as-is here.
-    const native = document.pdfMetadata;
+    // What the file/source itself declared (documents.sourceMetadata; the
+    // legacy pdfMetadata during the migration window) outranks the model on
+    // the fields it covers — those fields were omitted from the request
+    // schema (NativeMetadataOmissions in analyzePrompt.ts), so the parsed
+    // response legitimately lacks them and the native value is the only one
+    // there is. Stored sanitized at commit, so it is used as-is here.
+    const native = document.sourceMetadata ?? document.pdfMetadata;
 
     const toc = native?.tableOfContents?.length
       ? native.tableOfContents
@@ -72,7 +72,25 @@ export const saveMetadataResult = internalMutation({
 
 
     const documentDate = sanitizeDocumentDate(parsed.document_date, Date.now());
+    // created_date is only in the response for web clips whose page stated no
+    // published date (askCreatedDate); the same sanitizer bargain applies.
+    const createdDate = sanitizeDocumentDate(parsed.created_date, Date.now());
     const documentPlace = sanitizeDocumentPlace(parsed.place);
+    // The model's author answer, held to the citation-field bar: a refusal
+    // word or a run of prose is not a credited author.
+    const parsedAuthor = (() => {
+      const value = (parsed.author ?? "").trim().replace(/\s+/g, " ");
+      if (!value || NOT_A_VALUE.test(value) || value.length > 120) {
+        return undefined;
+      }
+      return value;
+    })();
+    const displayTitle = normalizeTitle(parsed.display_title ?? "");
+    const languageCode = /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(
+      (parsed.source_language_code ?? "").trim().toLowerCase().replaceAll("_", "-")
+    )
+      ? parsed.source_language_code!.trim().toLowerCase().replaceAll("_", "-")
+      : undefined;
     // An off-enum category is the model free-styling (or a category since
     // deleted); "other" is the honest bucket for it, and the library shows no
     // primary pill for it rather than coloring a word Analyze made up.
@@ -112,6 +130,9 @@ export const saveMetadataResult = internalMutation({
     // re-run that found nothing. The stamps are written "ai" alongside each
     // AI value so a later human edit can tell displacement from authorship.
     const human = (source: string | undefined) => source === "human";
+    // For fields that can carry a source-native value: native also wins.
+    const wins = (source: string | undefined) =>
+      source === "human" || source === "native";
     await ctx.db.patch(args.documentId, {
       ...(document.kindSource === "human" || !kindName
         ? {}
@@ -144,6 +165,46 @@ export const saveMetadataResult = internalMutation({
             documentPlaceEvidence: documentPlace?.documentPlaceEvidence,
             documentPlaceSource: documentPlace ? "ai" : undefined,
           }),
+      // The two source-native-capable fields honor "native" as well as
+      // "human": what the file/source declared is only displaced by a person.
+      // A human tombstone (value absent, source "human") is skipped by the
+      // same guard, so a deliberate clear survives re-analysis.
+      ...(wins(document.createdDateSource)
+        ? {}
+        : {
+            createdDate: createdDate?.documentDate,
+            createdDatePrecision: createdDate?.documentDatePrecision,
+            createdDateSource: createdDate ? "ai" : undefined,
+          }),
+      ...(wins(document.authorSource)
+        ? {}
+        : {
+            author: parsedAuthor,
+            authorSource: parsedAuthor ? "ai" : undefined,
+          }),
+      // The model's answers for the human-editable scalars, kept verbatim and
+      // unconditionally — provenance stamps gate the live columns above, not
+      // this. It is the candidate store the edit UI offers back.
+      aiMetadata: {
+        displayTitle: displayTitle || undefined,
+        author: parsedAuthor,
+        createdDate: createdDate
+          ? {
+              value: createdDate.documentDate,
+              precision: createdDate.documentDatePrecision,
+            }
+          : undefined,
+        documentDate: documentDate
+          ? {
+              value: documentDate.documentDate,
+              precision: documentDate.documentDatePrecision,
+            }
+          : undefined,
+        documentPlace: documentPlace?.documentPlace,
+        primaryCategory:
+          primaryCategory === OTHER_CATEGORY ? undefined : primaryCategory,
+        sourceLanguageCode: languageCode,
+      },
       // Cleared rather than left stale on a re-run, the same as the date and
       // place above: the previous run's bibliography is not evidence for this
       // one, and a citation that survives the analysis it came from is exactly
@@ -169,24 +230,23 @@ export const saveMetadataResult = internalMutation({
       ...(human(document.metadataSource)
         ? {}
         : {
-            metadata: JSON.stringify({
+            // Merged, never rewritten wholesale: the wholesale rewrite this
+            // replaces silently deleted every ingest-written `additional`
+            // entry (a clip's site, excerpt, og image, notes) on the first
+            // Analyze run. mergeMetadataBlob overlays only the keys the model
+            // answered and unions `additional` with existing entries winning.
+            metadata: mergeMetadataBlob(document.metadata, {
               title: parsed.title ?? native?.title,
               summary: parsed.summary,
               date: parsed.date,
               author: parsed.author ?? native?.author,
               language: parsed.language,
-              additional: parsed.additional ?? [],
+              additional: parsed.additional,
             }),
           }),
-      ...(!human(document.sourceLanguageSource) &&
-      /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(
-        (parsed.source_language_code ?? "").trim().toLowerCase().replaceAll("_", "-")
-      )
+      ...(!human(document.sourceLanguageSource) && languageCode
         ? {
-            sourceLanguageCode: parsed.source_language_code!
-              .trim()
-              .toLowerCase()
-              .replaceAll("_", "-"),
+            sourceLanguageCode: languageCode,
             sourceLanguageSource: "ai",
           }
         : {}),
@@ -200,10 +260,10 @@ export const saveMetadataResult = internalMutation({
     // It used to be a second Interfaze call over a re-fetched excerpt, which
     // re-sent ~4,000 characters Analyze already had in full.
     //
-    // normalizeTitle still runs: the prompt forbids dates, but a date can be
-    // read straight out of the document text, and one leaked date in a column
-    // of dateless titles is the ragged edge the rule exists to prevent.
-    const displayTitle = normalizeTitle(parsed.display_title ?? "");
+    // normalizeTitle still runs (computed above, alongside aiMetadata): the
+    // prompt forbids dates, but a date can be read straight out of the
+    // document text, and one leaked date in a column of dateless titles is
+    // the ragged edge the rule exists to prevent.
     if (displayTitle) {
       await applyDisplayName(ctx, args.documentId, displayTitle);
     }

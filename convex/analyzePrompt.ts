@@ -175,6 +175,20 @@ export interface NativeMetadataOmissions {
   author?: boolean;
 }
 
+/**
+ * Asked only of web clips whose page stated no machine-readable published
+ * date (createdDate is otherwise ingested natively and never asked).
+ * Appended after the citation rule, mirroring where the schema appends the
+ * created_date property.
+ */
+const CREATED_DATE_RULE =
+  "For created_date: the date this page or article was originally published " +
+  "or created, only when the page itself states it — a byline date, a " +
+  "'Published on' line, a dateline. This is not document_date: an article " +
+  "about 1969 published in 2024 has created_date 2024. Decline rather than " +
+  "infer — the article's subject matter is never evidence. Unknown is a " +
+  "correct answer.";
+
 const AUDIO_TOC_CLAUSE =
   " Build the table of contents from the topical sections a listener would " +
   "navigate by — one entry per distinct topic or segment, with time_seconds " +
@@ -203,8 +217,11 @@ export function buildAnalyzePrompt(options: {
   /** Recording rather than paged document: the lead asks for a time-based
    *  table of contents (see AUDIO_TOC_CLAUSE) and drops page talk. */
   audio?: boolean;
-  /** Fields the PDF's own metadata already answers — see NativeMetadataOmissions. */
+  /** Fields the file's own metadata already answers — see NativeMetadataOmissions. */
   omit?: NativeMetadataOmissions;
+  /** Ask for a created/published date — web clips with no native one only.
+   *  Undefined keeps the prompt byte-identical (it is a vcache input). */
+  askCreatedDate?: boolean;
 }): string {
   const categoryRule = buildCategoryRule(options.categories);
   const typeRule = `${TYPE_RULE} ${buildKindReuseClause(options.kindNames)}`.trim();
@@ -245,6 +262,9 @@ export function buildAnalyzePrompt(options: {
     DATE_RULE,
     PLACE_RULE,
     citationRule,
+    // Appended after the citation rule, mirroring the schema's created_date
+    // placement; absent, the prompt is byte-identical to what it always was.
+    ...(options.askCreatedDate ? [CREATED_DATE_RULE] : []),
   ].join(" ") + graphRule;
 }
 
@@ -351,7 +371,14 @@ export function buildDocumentUnderstandingSchema(
    * start time in seconds instead of a page number. Undefined keeps the
    * schema byte-identical to the page-based shape (it is a vcache input).
    */
-  audio?: boolean
+  audio?: boolean,
+  /**
+   * Web clips whose page stated no published date: appends `created_date`
+   * after `citation` (appending cannot disturb the reasoning chain the
+   * declaration order encodes). Not required — declining is the correct
+   * conservative default. Undefined keeps the schema byte-identical.
+   */
+  askCreatedDate?: boolean
 ) {
   const schema = {
     type: "object",
@@ -628,6 +655,36 @@ export function buildDocumentUnderstandingSchema(
         },
         required: ["type", "contributors"],
       },
+      // Appended after citation (see the placement comment there): asked only
+      // when the clip's page stated no machine-readable published date.
+      ...(askCreatedDate
+        ? {
+            created_date: {
+              type: "object",
+              description:
+                "When this page or article says it was originally published or created. See the created-date rule in the instruction — unknown is a correct answer.",
+              properties: {
+                value: {
+                  type: "string",
+                  description:
+                    'ISO 8601, truncated to what the page establishes: "2026-08-08", "2026-08", or "2026". Empty string when unknown.',
+                },
+                precision: {
+                  type: "string",
+                  enum: ["day", "month", "year", "unknown"],
+                  description:
+                    "How precisely the page fixes its publication date. Must agree with the shape of value.",
+                },
+                evidence: {
+                  type: "string",
+                  description:
+                    "The exact text the date was read from, quoted from the page. Empty when unknown.",
+                },
+              },
+              required: ["value", "precision", "evidence"],
+            },
+          }
+        : {}),
       // Appended after citation: property order is the reasoning chain, and
       // the graph is read off a document the model has already classified,
       // titled, and dated. JS object spread preserves insertion order.

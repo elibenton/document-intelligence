@@ -184,14 +184,19 @@ async function understandingRequest(
     /** Recording rather than paged document: the table of contents is asked
      *  for by start time in seconds instead of page number. */
     audio?: boolean;
-    /** The PDF file's own declared metadata (documents.pdfMetadata). Fields
+    /** What the file/source itself declared (documents.sourceMetadata; the
+     * legacy pdfMetadata is assignable during the migration window). Fields
      * it covers are removed from the request — ground truth over inference;
      * saveMetadataResult reads them back in when persisting. */
-    pdfMetadata?: Doc<"documents">["pdfMetadata"];
+    sourceMetadata?: Doc<"documents">["sourceMetadata"];
     /** Web clips: a scraped page's nav chrome makes the outline noise, so the
      * table of contents leaves the request entirely — fewer billed output
      * tokens, and the Contents tab falls back to the block list. */
     omitTableOfContents?: boolean;
+    /** Web clips whose page stated no published date: ask the model for a
+     * conservative created_date. Everything else never asks — native or
+     * nothing — which keeps non-clip request bytes vcache-identical. */
+    askCreatedDate?: boolean;
   }
 ): Promise<{
   systemPrompt: string;
@@ -208,13 +213,13 @@ async function understandingRequest(
         })
       : [];
   const omit: NativeMetadataOmissions | undefined =
-    (options.pdfMetadata || options.omitTableOfContents) && !options.csv
+    (options.sourceMetadata || options.omitTableOfContents) && !options.csv
       ? {
           tableOfContents:
             !!options.omitTableOfContents ||
-            !!options.pdfMetadata?.tableOfContents?.length,
-          displayTitle: !!options.pdfMetadata?.title,
-          author: !!options.pdfMetadata?.author,
+            !!options.sourceMetadata?.tableOfContents?.length,
+          displayTitle: !!options.sourceMetadata?.title,
+          author: !!options.sourceMetadata?.author,
         }
       : undefined;
   return {
@@ -230,6 +235,7 @@ async function understandingRequest(
         fileInput: options.fileInput,
         audio: options.audio,
         omit,
+        askCreatedDate: options.askCreatedDate,
       }),
     responseSchema: {
       name: "document_understanding",
@@ -237,7 +243,8 @@ async function understandingRequest(
         categoryDefs.map((c) => c.key),
         extraTypes.map((t) => t.key),
         omit,
-        options.audio
+        options.audio,
+        options.askCreatedDate
       ),
     },
   };
@@ -310,8 +317,9 @@ async function analyzeAndStore(
     bypassCache?: boolean;
     promptOverride?: string;
     fileName?: string;
-    pdfMetadata?: Doc<"documents">["pdfMetadata"];
+    sourceMetadata?: Doc<"documents">["sourceMetadata"];
     omitTableOfContents?: boolean;
+    askCreatedDate?: boolean;
   }
 ): Promise<void> {
   const request = await understandingRequest(ctx, options);
@@ -396,8 +404,11 @@ export const runAnalyze = internalAction({
         bypassCache: args.bypassCache,
         promptOverride: args.promptOverride,
         fileName: document.name,
-        pdfMetadata: document.pdfMetadata,
+        sourceMetadata: document.sourceMetadata ?? document.pdfMetadata,
         omitTableOfContents: document.mediaType === "webScrape",
+        askCreatedDate:
+          document.mediaType === "webScrape" &&
+          !document.sourceMetadata?.createdDate,
       });
 
       await ctx.runMutation(internal.processing.updateJobStatus, {
@@ -543,7 +554,7 @@ export const runPipeline = internalAction({
             log,
             bypassCache: args.bypassCache,
             fileName: document.name,
-            pdfMetadata: document.pdfMetadata,
+            sourceMetadata: document.sourceMetadata ?? document.pdfMetadata,
           });
           await ctx.runMutation(internal.processing.updateJobStatus, {
             documentId: args.documentId,
@@ -570,8 +581,11 @@ export const runPipeline = internalAction({
           audio: isRecording,
           // A partially-native PDF still preempts the fields its own file
           // metadata answers, even though the text goes through OCR.
-          pdfMetadata: document.pdfMetadata,
+          sourceMetadata: document.sourceMetadata ?? document.pdfMetadata,
           omitTableOfContents: document.mediaType === "webScrape",
+          askCreatedDate:
+            document.mediaType === "webScrape" &&
+            !document.sourceMetadata?.createdDate,
         })),
         log,
         bypassCache: args.bypassCache,
