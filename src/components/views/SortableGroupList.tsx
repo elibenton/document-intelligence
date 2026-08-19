@@ -11,8 +11,10 @@ import {
   KeyboardSensor,
   PointerSensor,
   closestCenter,
+  pointerWithin,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -58,6 +60,7 @@ export function SortableGroupList<G extends SortableGroup>({
   enabled,
   onReorder,
   renderGroup,
+  rowDrag,
 }: {
   groups: G[];
   /** False for ungrouped lists — there are no headings to drag. */
@@ -66,6 +69,19 @@ export function SortableGroupList<G extends SortableGroup>({
   onReorder: (orderedKeys: string[]) => void;
   /** Render one group; spread `dragHandle` into its ListGroup when given. */
   renderGroup: (group: G, dragHandle: DragHandle) => ReactNode;
+  /**
+   * A second drag species riding this same context: rows inside the groups
+   * (drag-to-merge entities). dnd-kit binds a draggable to the NEAREST
+   * context, so nesting a separate one for rows is not an option — instead a
+   * draggable carrying `data.rowDrag` is routed to these handlers, and the
+   * collision detection only pairs like with like.
+   */
+  rowDrag?: {
+    onDragStart: (event: DragStartEvent) => void;
+    onDragEnd: (event: DragEndEvent) => void;
+    onDragCancel: () => void;
+    overlay: ReactNode;
+  };
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -79,16 +95,28 @@ export function SortableGroupList<G extends SortableGroup>({
     count: number;
   } | null>(null);
 
+  const isRowDrag = (event: { active: { data: { current?: unknown } } }) =>
+    (event.active.data.current as { rowDrag?: boolean } | undefined)
+      ?.rowDrag === true;
+
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
+      if (isRowDrag(event)) {
+        rowDrag?.onDragStart(event);
+        return;
+      }
       const group = groups.find((g) => g.key === event.active.id);
       if (group) setDragging({ label: group.label, count: group.rows.length });
     },
-    [groups]
+    [groups, rowDrag]
   );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
+      if (isRowDrag(event)) {
+        rowDrag?.onDragEnd(event);
+        return;
+      }
       setDragging(null);
       suppressToggle.current = true;
       setTimeout(() => {
@@ -102,21 +130,59 @@ export function SortableGroupList<G extends SortableGroup>({
       if (from === -1 || to === -1) return;
       onReorder(arrayMove(keys, from, to));
     },
-    [groups, onReorder]
+    [groups, onReorder, rowDrag]
+  );
+
+  // Rows drop on rows, headings sort among headings — the two species never
+  // see each other's droppables, and each keeps its natural algorithm
+  // (pointer containment for a drop target, closest center for a slot).
+  const collisionDetection = useCallback<CollisionDetection>(
+    (args) => {
+      const row =
+        (args.active.data.current as { rowDrag?: boolean } | undefined)
+          ?.rowDrag === true;
+      const containers = args.droppableContainers.filter(
+        (container) =>
+          ((container.data.current as { rowDrag?: boolean } | undefined)
+            ?.rowDrag === true) === row
+      );
+      return (row ? pointerWithin : closestCenter)({
+        ...args,
+        droppableContainers: containers,
+      });
+    },
+    []
   );
 
   if (!enabled) {
-    return <>{groups.map((group) => renderGroup(group, undefined))}</>;
+    const rows = <>{groups.map((group) => renderGroup(group, undefined))}</>;
+    // Ungrouped lists still need a context for the row-drag species — a
+    // draggable row outside any DndContext is a crash, not a no-op.
+    if (!rowDrag) return rows;
+    return (
+      <DndContext
+        sensors={sensors}
+        collisionDetection={collisionDetection}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => rowDrag.onDragCancel()}
+      >
+        {rows}
+        <DragOverlay>{rowDrag.overlay}</DragOverlay>
+      </DndContext>
+    );
   }
 
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
-      modifiers={[restrictToVerticalAxis]}
+      collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setDragging(null)}
+      onDragCancel={() => {
+        setDragging(null);
+        rowDrag?.onDragCancel();
+      }}
     >
       <SortableContext
         items={groups.filter((g) => !g.isEmpty).map((g) => g.key)}
@@ -135,7 +201,8 @@ export function SortableGroupList<G extends SortableGroup>({
           )
         )}
       </SortableContext>
-      <DragOverlay>
+      <DragOverlay modifiers={dragging ? [restrictToVerticalAxis] : []}>
+        {!dragging && rowDrag?.overlay}
         {dragging && (
           <div className="flex cursor-grabbing items-center justify-between rounded-md border bg-background px-2 py-1.5 shadow-md">
             <span className="text-sm font-medium">{dragging.label}</span>

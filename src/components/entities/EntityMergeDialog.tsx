@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Undo2 } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
   Dialog,
@@ -71,6 +72,35 @@ export function EntityMergeDialog({
         />
       )}
     </Dialog>
+  );
+}
+
+/** The "Merged A into B — Undo" chip every merge entry point shows. */
+export function MergeUndoBar({
+  undo,
+  onUndo,
+}: {
+  undo: { survivorName: string; mergedName: string } | null;
+  onUndo: () => void;
+}) {
+  if (!undo) return null;
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border bg-card px-2 py-1.5 text-xs">
+      <span className="min-w-0 truncate text-muted-foreground">
+        Merged{" "}
+        <span className="font-medium text-foreground">{undo.mergedName}</span>{" "}
+        into{" "}
+        <span className="font-medium text-foreground">{undo.survivorName}</span>
+      </span>
+      <button
+        type="button"
+        className="inline-flex shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
+        onClick={onUndo}
+      >
+        <Undo2 className="size-3" />
+        Undo
+      </button>
+    </div>
   );
 }
 

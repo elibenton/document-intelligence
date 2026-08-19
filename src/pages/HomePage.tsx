@@ -36,6 +36,12 @@ import SearchBar from "@/components/search/SearchBar";
 import { useSearchHotkey } from "@/components/search/useSearchHotkey";
 import { ListGroup } from "@/components/views/ListGroup";
 import { SortableGroupList } from "@/components/views/SortableGroupList";
+import {
+  EntityMergeDialog,
+  MergeUndoBar,
+} from "@/components/entities/EntityMergeDialog";
+import { MergeDropRow } from "@/components/entities/MergeDropRow";
+import { useEntityMergeDnd } from "@/components/entities/useEntityMergeDnd";
 import { PropertyChips, type ChipCommit } from "@/components/views/PropertyChips";
 import { ViewBar } from "@/components/views/ViewBar";
 import { applyView, type ViewGroup } from "@/lib/views/applyView";
@@ -294,6 +300,7 @@ function EntityGroup({
   forceOpen,
   grouped,
   dragHandle,
+  mergeSuppressRef,
 }: {
   group: ViewGroup<EntityRowType>;
   suggestions: MergeSuggestion[];
@@ -303,6 +310,8 @@ function EntityGroup({
   forceOpen: boolean;
   grouped: boolean;
   dragHandle?: ComponentProps<typeof ListGroup>["dragHandle"];
+  /** From useEntityMergeDnd — arms the rows for drag-to-merge. */
+  mergeSuppressRef: React.RefObject<boolean>;
 }) {
   // Seeded from the persisted caret so the starred-peek footer agrees with
   // the ListGroup's restored state on first paint.
@@ -315,13 +324,23 @@ function EntityGroup({
     <>
       <MergeSuggestions suggestions={suggestions} />
       {group.rows.map((entity) => (
-        <EntityListRow
+        <MergeDropRow
           key={entity._id}
-          entity={entity}
-          projectId={projectId}
-          visibleProperties={visibleProperties}
-          defs={defs}
-        />
+          entityId={entity._id}
+          name={entity.name}
+          suppressClickRef={mergeSuppressRef}
+        >
+          {({ handleProps, isDragging }) => (
+            <div {...handleProps} className={cn(isDragging && "opacity-40")}>
+              <EntityListRow
+                entity={entity}
+                projectId={projectId}
+                visibleProperties={visibleProperties}
+                defs={defs}
+              />
+            </div>
+          )}
+        </MergeDropRow>
       ))}
     </>
   );
@@ -423,6 +442,10 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
     () => entityProperties(declaredEntityTypes ?? []),
     [declaredEntityTypes]
   );
+  // Drag one entity row onto another to merge them — the same machinery as
+  // the document sidebar, riding the group-sort DndContext (see the rowDrag
+  // prop on SortableGroupList).
+  const mergeDnd = useEntityMergeDnd(entities);
   const mergeSuggestions = useQuery(api.mergeSuggestions.listPending, {
     projectId,
   });
@@ -805,6 +828,10 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                   </p>
                 ) : (
                   <div className="flex flex-col gap-1">
+                    <MergeUndoBar
+                      undo={mergeDnd.mergeUndo}
+                      onUndo={mergeDnd.undoLast}
+                    />
                     <SortableGroupList
                       groups={entityResult.groups}
                       enabled={entitiesGrouped}
@@ -815,6 +842,16 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                           groupOrder,
                         })
                       }
+                      rowDrag={{
+                        onDragStart: mergeDnd.onDragStart,
+                        onDragEnd: mergeDnd.onDragEnd,
+                        onDragCancel: mergeDnd.onDragCancel,
+                        overlay: mergeDnd.draggedName && (
+                          <div className="flex cursor-grabbing items-center rounded-md border bg-background px-2 py-1 text-sm font-medium shadow-md">
+                            {mergeDnd.draggedName}
+                          </div>
+                        ),
+                      }}
                       renderGroup={(group, dragHandle) => (
                         <EntityGroup
                           group={group}
@@ -825,8 +862,21 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
                           forceOpen={entitiesNarrowed}
                           grouped={entitiesGrouped}
                           dragHandle={dragHandle}
+                          mergeSuppressRef={mergeDnd.suppressClickRef}
                         />
                       )}
+                    />
+                    <EntityMergeDialog
+                      pair={mergeDnd.mergePair}
+                      description={
+                        mergeDnd.mergePair
+                          ? `You dropped “${mergeDnd.mergePair.a.name}” onto “${mergeDnd.mergePair.b.name}”.`
+                          : ""
+                      }
+                      error={mergeDnd.mergeError}
+                      busy={mergeDnd.mergeBusy}
+                      onMerge={mergeDnd.runMerge}
+                      onClose={mergeDnd.closeDialog}
                     />
                   </div>
                 )}

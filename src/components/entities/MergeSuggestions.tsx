@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useMutation } from "convex/react";
-import { ChevronRight, Undo2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { EntityMergeDialog } from "@/components/entities/EntityMergeDialog";
+import {
+  EntityMergeDialog,
+  MergeUndoBar,
+} from "@/components/entities/EntityMergeDialog";
 import { usePersistedDisclosure } from "@/hooks/usePersistedDisclosure";
 
 export type MergeSuggestion = {
@@ -82,22 +85,14 @@ export function MergeSuggestions({
   return (
     <>
       {undo && (
-        <div className="mt-1 flex items-center justify-between gap-2 rounded-md border bg-card px-2 py-1.5 text-xs">
-          <span className="min-w-0 truncate text-muted-foreground">
-            Merged <span className="font-medium text-foreground">{undo.mergedName}</span> into{" "}
-            <span className="font-medium text-foreground">{undo.survivorName}</span>
-          </span>
-          <button
-            type="button"
-            className="inline-flex shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
-            onClick={() => {
+        <div className="mt-1">
+          <MergeUndoBar
+            undo={undo}
+            onUndo={() => {
               void unmerge({ logId: undo.mergeLogId });
               setUndo(null);
             }}
-          >
-            <Undo2 className="size-3" />
-            Undo
-          </button>
+          />
         </div>
       )}
       {suggestions.length > 0 && (
