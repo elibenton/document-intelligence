@@ -186,11 +186,17 @@ export default function DocumentPage({ id }: { id: string }) {
 
   // Jump the viewer to an entity's first occurrence: page scroll for paged
   // documents, a seek for recordings (the mention's block is a transcript
-  // mirror row, whose blockId names the segment and so the second).
+  // mirror row, whose blockId names the segment and so the second), a text
+  // jump into the archive for web clips (one nominal page — the mention's
+  // snippet re-finds the passage itself).
   const jumpToFirstMention = (
     first: ReturnType<typeof findPersonMentions>[number] | undefined
   ) => {
     if (!first) return;
+    if (isWebClip) {
+      webClipRef.current?.scrollToText([first.snippet, first.variant]);
+      return;
+    }
     if (isRecordingDoc) {
       const row = blocks?.find((b) => b._id === first.blockId);
       const seg = row?.blockId?.match(/^transcript_seg(\d+)$/);
@@ -1171,7 +1177,9 @@ export default function DocumentPage({ id }: { id: string }) {
                                     onLocate={(text, isEntity, pageNumber) => {
                                       setSelectedItem(isEntity ? text : null);
                                       setSearchQuery(text);
-                                      if (pageNumber !== undefined) {
+                                      if (isWebClip) {
+                                        webClipRef.current?.scrollToText([text]);
+                                      } else if (pageNumber !== undefined) {
                                         scrollToPage(pageNumber + 1);
                                       }
                                     }}
