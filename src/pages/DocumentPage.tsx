@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router";
-import { Folder } from "lucide-react";
-import { useQuery, useMutation } from "convex/react";
+import { Folder, Sparkles } from "lucide-react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
 import {
@@ -930,6 +930,13 @@ export default function DocumentPage({ id }: { id: string }) {
                 );
               })}
 
+              {/* The understand pass's conservative offer of further entity
+                  types — tap one or more; the batch fires after a short
+                  pause so several taps become one call. */}
+              {isParsed && (document.suggestedEntityTypes?.length ?? 0) > 0 && (
+                <SuggestedEntityTypes document={document} />
+              )}
+
               {/* New Entity: a single button at the bottom of the list, not a
                   form competing with the entities themselves for attention. */}
               {isParsed && (
@@ -1287,6 +1294,100 @@ function DocumentSummary({ document }: { document: Doc<"documents"> }) {
       </h2>
       <p className="text-sm leading-relaxed text-foreground">
         {meta.summary}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The understand pass's suggested additional entity types, as tappable
+ * chips. Taps batch: each one restarts a short pause, and when it elapses
+ * every selected type goes to the extraction in ONE call — so tapping three
+ * chips costs one API call, not three. Extraction is one-document-only by
+ * design; declaring a type for all future documents stays the New Entity
+ * form's job.
+ */
+const SUGGESTION_BATCH_MS = 2_500;
+
+function SuggestedEntityTypes({ document }: { document: Doc<"documents"> }) {
+  const runExtraction = useAction(api.suggestedEntities.runExtraction);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  // The timer's closure would see a stale selection; the ref — written only
+  // inside the tap handler, never during render — sees every tap.
+  const selectedRef = useRef<Set<string>>(new Set());
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    },
+    []
+  );
+
+  const toggle = (label: string) => {
+    const next = new Set(selectedRef.current);
+    if (next.has(label)) next.delete(label);
+    else next.add(label);
+    selectedRef.current = next;
+    setSelected(next);
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      const labels = [...selectedRef.current];
+      if (labels.length === 0) return;
+      setRunning(true);
+      selectedRef.current = new Set();
+      setSelected(new Set());
+      void runExtraction({ documentId: document._id, labels })
+        .catch((err) => console.error("Suggested extraction failed:", err))
+        .finally(() => setRunning(false));
+    }, SUGGESTION_BATCH_MS);
+  };
+
+  const suggestions = document.suggestedEntityTypes ?? [];
+  return (
+    <div className="flex flex-col gap-2 border-t pt-3">
+      <h3 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <Sparkles className="size-3 text-primary" />
+        Suggested
+      </h3>
+      <div className="flex flex-wrap gap-1.5">
+        {suggestions.map((suggestion) => {
+          const isSelected = selected.has(suggestion.label);
+          return (
+            <button
+              key={suggestion.label}
+              type="button"
+              disabled={running}
+              onClick={() => toggle(suggestion.label)}
+              title={suggestion.description}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "disabled:opacity-50",
+                isSelected
+                  ? "border-primary bg-primary/10 text-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              )}
+            >
+              {suggestion.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-2xs leading-snug text-muted-foreground">
+        {running ? (
+          <span className="flex items-center gap-1.5">
+            <Spinner className="size-3" />
+            Extracting from this document…
+          </span>
+        ) : selected.size > 0 ? (
+          `Extracting ${selected.size} type${
+            selected.size === 1 ? "" : "s"
+          } in a moment — tap more to include them.`
+        ) : (
+          "Tap to extract from this document only."
+        )}
       </p>
     </div>
   );

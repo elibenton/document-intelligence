@@ -215,6 +215,12 @@ export default defineSchema({
      // Analyze's guess at where this file contains more than one document.
     // Suggestions only — splitting is a user action and would need provenance
     // (a parent document id on the pieces), which does not exist yet.
+    // The understand pass's conservative offer of additional entity types
+    // this document is centrally about (0–5). Consumed by the sidebar's
+    // suggestion chips; a chip the user runs is removed from this list.
+    suggestedEntityTypes: v.optional(
+      v.array(v.object({ label: v.string(), description: v.string() }))
+    ),
     // Paged documents carry `page` (1-based); recordings carry `time`
     // (seconds from the start). Exactly one is set per entry.
     tableOfContents: v.optional(

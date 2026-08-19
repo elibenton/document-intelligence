@@ -21,8 +21,10 @@ import { requireProject, requireProjectEntityType } from "./ownership";
  * form submit.
  */
 
-/** Same shape as the slug used everywhere else, so the key is predictable. */
-function toKey(label: string): string {
+/** Same shape as the slug used everywhere else, so the key is predictable.
+ *  Exported for the suggested-entity extraction, which mints the same keys
+ *  for its one-document types. */
+export function toKey(label: string): string {
   return label
     .trim()
     .toLowerCase()

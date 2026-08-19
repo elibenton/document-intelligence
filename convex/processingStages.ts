@@ -278,6 +278,10 @@ async function persistUnderstanding(
     entities: graph.entities,
     relationships: graph.relationships,
   });
+  await ctx.runMutation(internal.metadata.setSuggestedEntityTypes, {
+    documentId,
+    suggestions: graph.suggestions,
+  });
 }
 
 /**

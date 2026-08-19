@@ -466,8 +466,94 @@ const TYPE_MAP: Record<string, string> = {
 
 /** The wire shape of a document_graph response — also the graph fields of the
  *  merged understanding response, which appends the same properties. */
+/**
+ * Add entities to a document's existing graph without disturbing it — the
+ * focused re-extraction a user triggers from the suggested-entity chips.
+ * Unlike ingestGraph this clears nothing: the person/organization graph
+ * stays, mentions are added only where the (entityId, blockId) pair doesn't
+ * already exist, and no relationships are touched.
+ */
+export const ingestAdditionalEntities = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    entities: v.array(
+      v.object({
+        name: v.string(),
+        type: v.string(),
+        role: v.optional(v.string()),
+      })
+    ),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const document = await ctx.db.get(args.documentId);
+    if (document === null || args.entities.length === 0) return null;
+
+    const blocks = await ctx.db
+      .query("blocks")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .take(6_000);
+    const pages = await ctx.db
+      .query("pages")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    const pageIdByNumber = new Map<number, Id<"pages">>();
+    for (const page of pages) pageIdByNumber.set(page.pageNumber, page._id);
+    const nameIndex = buildNameIndex(blocks.map((b) => b.text));
+
+    const existingMentions = await ctx.db
+      .query("mentions")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    const mentioned = new Set(
+      existingMentions.map((m) => `${m.entityId}:${m.blockId ?? ""}`)
+    );
+
+    const touched = new Set<Id<"entities">>();
+    const seen = new Set<string>();
+    for (const entity of args.entities) {
+      const key = entity.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const { entityId } = await resolveEntity(ctx, {
+        name: entity.name,
+        stableType: entity.type,
+        documentId: args.documentId,
+      });
+
+      const row = await ctx.db.get(entityId);
+      const variants = [entity.name, ...(row?.aliases ?? [])];
+      if (row && row.name !== entity.name) variants.unshift(row.name);
+      for (const index of matchedBlockIndexes(nameIndex, variants)) {
+        const block = blocks[index];
+        const pageId = pageIdByNumber.get(block.pageNumber);
+        if (!pageId) continue;
+        const mentionKey = `${entityId}:${block.blockId}`;
+        if (mentioned.has(mentionKey)) continue;
+        mentioned.add(mentionKey);
+        await ctx.db.insert("mentions", {
+          entityId,
+          documentId: args.documentId,
+          pageId,
+          pageNumber: block.pageNumber,
+          text: block.text,
+          confidence: 1.0,
+          blockId: block.blockId,
+          bbox: block.bbox,
+        });
+      }
+      touched.add(entityId);
+    }
+
+    for (const entityId of touched) await recountEntity(ctx, entityId);
+    return null;
+  },
+});
+
 export interface GraphResponse {
   entities?: Array<{ name?: string; type?: string; role?: string }>;
+  suggested_entity_types?: Array<{ label?: string; description?: string }>;
   relationships?: Array<{
     source_name?: string;
     target_name?: string;
@@ -505,6 +591,8 @@ export function normalizeGraphResponse(parsed: GraphResponse): {
     confidence: number;
   }>;
   unlisted: number;
+  /** Sanitized 0–5 additional-entity-type suggestions, in the model's order. */
+  suggestions: Array<{ label: string; description: string }>;
 } {
   const byName = new Map<string, { name: string; type: string; role?: string }>();
   for (const entity of parsed.entities ?? []) {
@@ -551,7 +639,15 @@ export function normalizeGraphResponse(parsed: GraphResponse): {
     });
   }
 
-  return { entities: [...byName.values()], relationships, unlisted };
+  const suggestions = (parsed.suggested_entity_types ?? [])
+    .map((s) => ({
+      label: (s.label ?? "").trim(),
+      description: (s.description ?? "").trim(),
+    }))
+    .filter((s) => s.label && s.description)
+    .slice(0, 5);
+
+  return { entities: [...byName.values()], relationships, unlisted, suggestions };
 }
 
 // The standalone extract action is gone: the entity graph rides along on the

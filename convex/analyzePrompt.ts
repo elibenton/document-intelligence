@@ -648,7 +648,9 @@ export function buildDocumentUnderstandingSchema(
       "tags",
       "table_of_contents",
       "additional",
-      ...(graphEntityTypes ? ["entities", "relationships"] : []),
+      ...(graphEntityTypes
+        ? ["entities", "relationships", "suggested_entity_types"]
+        : []),
     ],
   };
 
@@ -797,6 +799,29 @@ function graphSchemaProperties(extraTypes: string[]) {
         ],
       },
     },
+    // Declared after the graph, deliberately: the model has extracted every
+    // person and organization before being asked what else the document is
+    // about — the suggestions are formed against what is already covered.
+    suggested_entity_types: {
+      type: "array",
+      description:
+        "Zero to five ADDITIONAL entity types worth extracting from this document, beyond the types in the entity enum. Suggest a type only when the document names several instances and they are central to what the document is about — the kind of thing that would connect this document to others in a research corpus. An empty array is a correct and common answer; be conservative rather than complete.",
+      items: {
+        type: "object",
+        properties: {
+          label: {
+            type: "string",
+            description: 'Plural noun naming the type, e.g. "Vessels"',
+          },
+          description: {
+            type: "string",
+            description:
+              "One sentence saying what counts as one, written so an extractor could apply it",
+          },
+        },
+        required: ["label", "description"],
+      },
+    },
   };
 }
 
@@ -842,6 +867,7 @@ export function buildGraphRule(
   return (
     "Fill in `entities` with every person and organization this document names, then `relationships` with every relationship between them that the text explicitly supports. " +
     "Work only from the text. Never invent an entity, a connection, a date, or a place. " +
-    entityRule(extraTypes)
+    entityRule(extraTypes) +
+    " Last, `suggested_entity_types`: zero to five ADDITIONAL entity types worth extracting from this document — only types that are central to what the document is about, with several instances named, whose extraction would connect this document to others in a research corpus (vessels, case numbers, properties, licenses). Be conservative: an empty list is a correct and common answer, suggesting nothing is always better than suggesting something marginal, and a type already in the entity enum must never be suggested."
   );
 }

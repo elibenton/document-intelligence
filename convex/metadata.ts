@@ -432,6 +432,30 @@ const MAX_TOC_ENTRIES = 500;
 const MAX_TOC_LEVEL = 4;
 
 /**
+ * The understand pass's additional-entity-type suggestions, and their
+ * consumption: the pipeline writes the full sanitized list, and the focused
+ * extraction re-writes it minus the types the user just ran.
+ */
+export const setSuggestedEntityTypes = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    suggestions: v.array(
+      v.object({ label: v.string(), description: v.string() })
+    ),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const document = await ctx.db.get(args.documentId);
+    if (!document) return null;
+    await ctx.db.patch(args.documentId, {
+      suggestedEntityTypes:
+        args.suggestions.length > 0 ? args.suggestions : undefined,
+    });
+    return null;
+  },
+});
+
+/**
  * Make a model-produced outline safe to render.
  *
  * The Contents tab indents by `level` and navigates by `page`, so both have to
