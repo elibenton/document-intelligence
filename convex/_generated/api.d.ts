@@ -31,6 +31,7 @@ import type * as embeddings from "../embeddings.js";
 import type * as entities from "../entities.js";
 import type * as entityMerge from "../entityMerge.js";
 import type * as entityResolution from "../entityResolution.js";
+import type * as entitySweep from "../entitySweep.js";
 import type * as hash from "../hash.js";
 import type * as http from "../http.js";
 import type * as ingest from "../ingest.js";
@@ -107,6 +108,7 @@ declare const fullApi: ApiFromModules<{
   entities: typeof entities;
   entityMerge: typeof entityMerge;
   entityResolution: typeof entityResolution;
+  entitySweep: typeof entitySweep;
   hash: typeof hash;
   http: typeof http;
   ingest: typeof ingest;

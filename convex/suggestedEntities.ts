@@ -20,8 +20,11 @@ import { toKey } from "./projectEntityTypes";
 export const runExtraction = authedAction({
   args: {
     documentId: v.id("documents"),
-    /** Labels of the document's stored suggestions to extract. */
-    labels: v.array(v.string()),
+    /** The types to extract — the tapped suggestion chips, or a custom type
+     *  the user just declared. Label + what-counts-as-one description. */
+    types: v.array(
+      v.object({ label: v.string(), description: v.string() })
+    ),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -32,11 +35,21 @@ export const runExtraction = authedAction({
     });
     if (!document) throw new Error("Document not found");
 
-    const wanted = new Set(args.labels.map((l) => l.toLowerCase()));
-    const selected = (document.suggestedEntityTypes ?? []).filter((s) =>
-      wanted.has(s.label.toLowerCase())
-    );
+    const seenLabels = new Set<string>();
+    const selected = args.types
+      .map((t) => ({
+        label: t.label.trim(),
+        description: t.description.trim(),
+      }))
+      .filter((t) => {
+        const key = t.label.toLowerCase();
+        if (!t.label || !t.description || seenLabels.has(key)) return false;
+        seenLabels.add(key);
+        return true;
+      })
+      .slice(0, 5);
     if (selected.length === 0) return null;
+    const wanted = new Set(selected.map((t) => t.label.toLowerCase()));
 
     const apiKey = process.env.INTERFAZE_API_KEY;
     if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");

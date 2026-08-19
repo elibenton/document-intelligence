@@ -59,4 +59,20 @@ crons.daily(
   {}
 );
 
+/**
+ * Repair entity data a broken deletion cascade left behind.
+ *
+ * drainDeletion has no retry — any failure mid-chain strands the document's
+ * mentions, roles, and orphaned entities silently. Daily because the leak is
+ * rare and invisible until a user meets a ghost entity; the sweep walks the
+ * mentions and entityRoles tables a batch per transaction, so a quiet day
+ * costs a handful of paginated reads.
+ */
+crons.daily(
+  "sweep dangling entity data",
+  { hourUTC: 9, minuteUTC: 0 },
+  internal.entitySweep.sweep,
+  {}
+);
+
 export default crons;

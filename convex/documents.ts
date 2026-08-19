@@ -510,7 +510,8 @@ export const addKinds = authedMutation({
  *
  * `mentions` and `mergeSuggestions` are absent on purpose — both need more than
  * a delete (entity bookkeeping, preserved merge history) and get their own
- * phases below.
+ * phases below. `entityRoles` stays in the list to keep phase numbering stable
+ * but is drained by `drainEntityRoles`, which records orphan candidates.
  */
 const DOCUMENT_SCOPED_TABLES = [
   "blocks",
@@ -668,7 +669,14 @@ export const drainDeletion = internalMutation({
     let more = false;
 
     if (phase < DOCUMENT_SCOPED_TABLES.length) {
-      more = await drainTable(ctx, DOCUMENT_SCOPED_TABLES[phase], documentId);
+      const table = DOCUMENT_SCOPED_TABLES[phase];
+      if (table === "entityRoles") {
+        const result = await drainEntityRoles(ctx, documentId, orphanCandidates);
+        more = result.more;
+        orphanCandidates = result.orphanCandidates;
+      } else {
+        more = await drainTable(ctx, table, documentId);
+      }
     } else if (phase === DOCUMENT_SCOPED_TABLES.length) {
       more = await drainMergeSuggestions(ctx, documentId);
     } else if (phase === DOCUMENT_SCOPED_TABLES.length + 1) {
@@ -798,6 +806,33 @@ async function drainMergeSuggestions(
     else await ctx.db.patch(row._id, { documentId: undefined });
   }
   return rows.length === CASCADE_BATCH;
+}
+
+/**
+ * This document's role rows, with the entities they name recorded as orphan
+ * candidates. A role is the other edge that keeps an entity alive — the sweep
+ * checks both — so an entity whose only evidence was a role here must be
+ * examined too. Draining this table blindly left exactly those entities
+ * stranded, mentionless and roleless, in the library forever.
+ */
+async function drainEntityRoles(
+  ctx: MutationCtx,
+  documentId: Id<"documents">,
+  orphanCandidates: Id<"entities">[]
+): Promise<{ more: boolean; orphanCandidates: Id<"entities">[] }> {
+  const rows = await ctx.db
+    .query("entityRoles")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(CASCADE_BATCH);
+  const candidates = new Set(orphanCandidates);
+  for (const row of rows) {
+    candidates.add(row.entityId);
+    await ctx.db.delete(row._id);
+  }
+  return {
+    more: rows.length === CASCADE_BATCH,
+    orphanCandidates: [...candidates],
+  };
 }
 
 /**

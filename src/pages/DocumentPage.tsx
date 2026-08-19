@@ -95,6 +95,7 @@ export default function DocumentPage({ id }: { id: string }) {
   });
   const retryTranslation = useMutation(api.translations.retry);
   const rotateDocument = useMutation(api.documents.rotateDocument);
+  const runSuggestedExtraction = useAction(api.suggestedEntities.runExtraction);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [showBlocks, setShowBlocks] = useState(false);
@@ -457,12 +458,21 @@ export default function DocumentPage({ id }: { id: string }) {
     if (!document?.projectId || !customTitle.trim() || !customDescription.trim()) {
       return;
     }
+    const label = customTitle.trim();
+    const description = customDescription.trim();
     setCustomExtracting(true);
     try {
       await addEntityType({
         projectId: document.projectId,
-        label: customTitle.trim(),
-        description: customDescription.trim(),
+        label,
+        description,
+      });
+      // The declared type joins the vocabulary for future documents — and
+      // runs against THIS document right away, so the person who just typed
+      // it sees its entities appear instead of a note telling them to re-run.
+      await runSuggestedExtraction({
+        documentId,
+        types: [{ label, description }],
       });
       setCustomTitle("");
       setCustomDescription("");
@@ -1004,12 +1014,9 @@ export default function DocumentPage({ id }: { id: string }) {
                         onChange={(e) => setCustomDescription(e.target.value)}
                         className="text-xs h-8"
                       />
-                      {/* Says plainly that this is forward-looking. The old
-                          form ran against this document immediately, so the
-                          button meaning something different now matters. */}
                       <p className="text-2xs leading-snug text-muted-foreground">
-                        Applies to documents uploaded from now on. Re-run this
-                        document to apply it here.
+                        Extracts from this document now, and applies to
+                        documents uploaded from now on.
                       </p>
                       <div className="flex gap-1.5">
                         <Button
@@ -1548,12 +1555,15 @@ function SuggestedEntityTypes({ document }: { document: Doc<"documents"> }) {
     setSelected(next);
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
-      const labels = [...selectedRef.current];
-      if (labels.length === 0) return;
+      const chosen = new Set(selectedRef.current);
+      const types = (document.suggestedEntityTypes ?? []).filter((s) =>
+        chosen.has(s.label)
+      );
+      if (types.length === 0) return;
       setRunning(true);
       selectedRef.current = new Set();
       setSelected(new Set());
-      void runExtraction({ documentId: document._id, labels })
+      void runExtraction({ documentId: document._id, types })
         .catch((err) => console.error("Suggested extraction failed:", err))
         .finally(() => setRunning(false));
     }, SUGGESTION_BATCH_MS);
