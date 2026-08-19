@@ -129,6 +129,22 @@ export function entityProperties(
     render: (entity) => countChip(entity.documentCount, "document", "documents"),
   },
   {
+    // Matches the Library's "Added" (uploadedAt there); an entity's creation
+    // time is when extraction first saw it.
+    id: "addedAt",
+    label: "Added",
+    kind: "date",
+    filterable: true,
+    sortable: true,
+    value: (entity) => new Date(entity._creationTime).toISOString().slice(0, 10),
+    format: (entity) => new Date(entity._creationTime).toLocaleDateString(),
+    render: (entity) => (
+      <span className="font-mono text-2xs tabular-nums text-muted-foreground shrink-0">
+        {new Date(entity._creationTime).toLocaleDateString()}
+      </span>
+    ),
+  },
+  {
     id: "avgConfidence",
     label: "Confidence",
     kind: "number",
