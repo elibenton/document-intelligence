@@ -40,6 +40,25 @@ export function registerIssueReporter(c: ConvexReactClient): void {
   client = c;
 }
 
+/**
+ * Whether there is a session to report under. `issues.report` is deliberately
+ * session-gated (see its note on unauthenticated writes), so firing it signed
+ * out never records anything — it just throws Unauthenticated into the server
+ * log, once per failure, forever. The gate lives here so every caller shares
+ * it. Reports raised before auth resolves are held: a crash during hydration
+ * is exactly the kind worth keeping, and whether it can be recorded is not
+ * known yet. Root syncs this from the provider (setIssueReporterAuthed).
+ */
+let authState: "unknown" | "authed" | "anon" = "unknown";
+const HELD_CAP = 20;
+const held: ClientIssue[] = [];
+
+export function setIssueReporterAuthed(authed: boolean): void {
+  authState = authed ? "authed" : "anon";
+  const flush = held.splice(0);
+  if (authed) flush.forEach(send);
+}
+
 export interface ClientIssue {
   /** "client" for an upload that failed, "crash" for a throw. */
   surface: "client" | "crash";
@@ -73,14 +92,23 @@ let crashReports = 0;
 
 export function reportIssue(issue: ClientIssue): void {
   if (issue.surface === "crash" && ++crashReports > MAX_CRASH_REPORTS) return;
+  if (authState === "anon") return;
+  if (authState === "unknown") {
+    if (held.length < HELD_CAP) held.push(issue);
+    return;
+  }
+  send(issue);
+}
+
+function send(issue: ClientIssue): void {
   // Deliberately not awaited by callers: a failure card must render at the
   // speed of the failure, not at the speed of the network.
   void (async () => {
     try {
       await client?.mutation(api.issues.report, { ...issue, buildSha: BUILD_SHA });
     } catch {
-      // Signed out, offline, or the endpoint is unhappy. See the file header:
-      // there is nothing useful to do with a failure to report a failure.
+      // Offline, or the endpoint is unhappy. See the file header: there is
+      // nothing useful to do with a failure to report a failure.
     }
   })();
 }

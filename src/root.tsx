@@ -9,7 +9,7 @@ import {
   type LinksFunction,
   type MetaFunction,
 } from "react-router";
-import { ConvexReactClient } from "convex/react";
+import { ConvexReactClient, useConvexAuth } from "convex/react";
 import type { Route } from "./+types/root";
 import {
   ConvexBetterAuthProvider,
@@ -23,7 +23,11 @@ import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PageShell } from "@/components/ui/page-shell";
 import { buttonVariants } from "@/components/ui/button-variants";
-import { registerIssueReporter, reportIssue } from "@/lib/reportIssue";
+import {
+  registerIssueReporter,
+  reportIssue,
+  setIssueReporterAuthed,
+} from "@/lib/reportIssue";
 
 const SITE_URL = "https://glorious-warbler-976.convex.site/";
 
@@ -212,6 +216,20 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   );
 }
 
+/**
+ * Syncs the session state into the module-scope issue reporter, which sits
+ * outside React (see reportIssue.ts): reports are held until the session
+ * resolves, then sent or dropped. A component rather than a hook in Root
+ * because useConvexAuth must render inside ConvexBetterAuthProvider.
+ */
+function IssueReporterAuthBridge() {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  useEffect(() => {
+    if (!isLoading) setIssueReporterAuthed(isAuthenticated);
+  }, [isLoading, isAuthenticated]);
+  return null;
+}
+
 // StrictMode wraps HydratedRouter in entry.client.tsx, so it covers Layout too.
 export default function Root() {
   return (
@@ -226,6 +244,7 @@ export default function Root() {
         client={convex}
         authClient={authClient as unknown as AuthClient}
       >
+        <IssueReporterAuthBridge />
         <TooltipProvider>
           <ConfirmProvider>
               {/* Every page's own <main> carries id="main"; the pages built on
