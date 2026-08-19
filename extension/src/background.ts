@@ -70,7 +70,12 @@ async function capture(
 
 async function runClip(
   tabId: number,
-  extras: { title?: string; tags: string[]; notes?: string }
+  extras: {
+    title?: string;
+    tags: string[];
+    notes?: string;
+    projectId?: string;
+  }
 ): Promise<void> {
   const settings = await getSettings();
   if (!settings.endpoint || !settings.apiKey) {
@@ -98,6 +103,9 @@ async function runClip(
     if (extras.title?.trim()) payload.title = extras.title.trim();
     payload.tags = extras.tags;
     if (extras.notes?.trim()) payload.notes = extras.notes.trim();
+    // Per-clip project from the popup's dropdown; the server falls back to
+    // the token's own project when absent.
+    if (extras.projectId) payload.projectId = extras.projectId;
 
     await setStatus({ state: "uploading", tabId });
     const res = await fetch(`${settings.endpoint}/clip`, {
@@ -168,6 +176,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       title: msg.title,
       tags: Array.isArray(msg.tags) ? msg.tags : [],
       notes: msg.notes,
+      projectId: typeof msg.projectId === "string" ? msg.projectId : undefined,
     });
     sendResponse({ started: true });
   }

@@ -1,6 +1,7 @@
 const $ = <T extends HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 
+const projectSelect = $<HTMLSelectElement>("project");
 const titleInput = $<HTMLInputElement>("title");
 const tagsInput = $<HTMLInputElement>("tags");
 const notesInput = $<HTMLTextAreaElement>("notes");
@@ -43,6 +44,41 @@ function showStatus(status: {
   }
 }
 
+/**
+ * Fill the per-clip project dropdown from GET /clip/projects. Defaults to the
+ * last project clipped to (remembered locally), falling back to the token's
+ * own project. If the fetch fails the dropdown collapses to one "default"
+ * option — the server clips into the token's project when none is sent.
+ */
+async function loadProjects(): Promise<void> {
+  const { endpoint, lastProjectId } = await chrome.storage.sync.get([
+    "endpoint",
+    "lastProjectId",
+  ]);
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+  if (!endpoint || !apiKey) return; // background reports "not connected"
+  try {
+    const res = await fetch(`${endpoint as string}/clip/projects`, {
+      headers: { Authorization: `Bearer ${apiKey as string}` },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { defaultProjectId, projects } = (await res.json()) as {
+      defaultProjectId: string;
+      projects: { id: string; name: string }[];
+    };
+    projectSelect.replaceChildren(
+      ...projects.map(({ id, name }) => new Option(name, id))
+    );
+    const preferred =
+      projects.find((p) => p.id === lastProjectId)?.id ?? defaultProjectId;
+    projectSelect.value = preferred;
+    projectSelect.disabled = false;
+  } catch {
+    projectSelect.replaceChildren(new Option("Default project", ""));
+    projectSelect.disabled = true;
+  }
+}
+
 async function init(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   activeTabId = tab?.id;
@@ -73,12 +109,17 @@ clipButton.addEventListener("click", () => {
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
+  const projectId = projectSelect.value || undefined;
+  if (projectId) {
+    void chrome.storage.sync.set({ lastProjectId: projectId });
+  }
   void chrome.runtime.sendMessage({
     type: "clip",
     tabId: activeTabId,
     title: titleInput.value,
     tags,
     notes: notesInput.value,
+    projectId,
   });
   showStatus({ state: "capturing" });
 });
@@ -95,3 +136,4 @@ $<HTMLAnchorElement>("openOptions").addEventListener("click", (e) => {
 });
 
 void init();
+void loadProjects();

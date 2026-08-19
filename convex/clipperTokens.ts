@@ -91,14 +91,20 @@ export const revoke = authedMutation({
 /**
  * Resolve a bearer token for POST /clip, before any bytes are stored.
  *
- * Returns null for an unknown token, or one whose target project has been
- * deleted or changed hands — one opaque failure, for the oracle reason in
- * convex/ownership.ts. `exhausted` rides along so the endpoint can refuse an
- * out-of-budget account with 402 before storing the clip's blobs;
+ * Returns null for an unknown token, one whose target project has been
+ * deleted or changed hands, or a per-clip `projectId` override that isn't a
+ * project the token's owner owns — one opaque failure, for the oracle reason
+ * in convex/ownership.ts. `exhausted` rides along so the endpoint can refuse
+ * an out-of-budget account with 402 before storing the clip's blobs;
  * clips.createFromClip re-verifies ownership at write time.
  */
 export const resolve = internalQuery({
-  args: { token: v.string() },
+  args: {
+    token: v.string(),
+    // Untrusted per-clip override from the popup's project dropdown; the
+    // token's own project is the default when absent.
+    projectId: v.optional(v.string()),
+  },
   returns: v.union(
     v.null(),
     v.object({
@@ -116,11 +122,60 @@ export const resolve = internalQuery({
     if (!row) return null;
     const project = await ctx.db.get(row.projectId);
     if (!project || project.ownerId !== row.ownerId) return null;
+
+    let projectId = row.projectId;
+    if (args.projectId !== undefined) {
+      const override = ctx.db.normalizeId("projects", args.projectId);
+      if (!override) return null;
+      const overrideProject = await ctx.db.get(override);
+      if (!overrideProject || overrideProject.ownerId !== row.ownerId) {
+        return null;
+      }
+      projectId = override;
+    }
+
     const budget = await budgetFor(ctx, row.ownerId);
     return {
       ownerId: row.ownerId,
-      projectId: row.projectId,
+      projectId,
       exhausted: budget.exhausted,
+    };
+  },
+});
+
+/**
+ * The owner's projects, for the popup's per-clip dropdown — same bearer-token
+ * auth as /clip, resolved by GET /clip/projects. Names only: the popup needs
+ * nothing else, and this endpoint is reachable with just the token.
+ */
+export const projectsFor = internalQuery({
+  args: { token: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({
+      defaultProjectId: v.id("projects"),
+      projects: v.array(
+        v.object({ id: v.id("projects"), name: v.string() })
+      ),
+    })
+  ),
+  handler: async (ctx, args) => {
+    if (!args.token) return null;
+    const row = await ctx.db
+      .query("clipperTokens")
+      .withIndex("by_token", (q) => q.eq("token", args.token))
+      .unique();
+    if (!row) return null;
+    const owned = await ctx.db
+      .query("projects")
+      .withIndex("by_owner", (q) => q.eq("ownerId", row.ownerId))
+      .collect();
+    // The token's project can lapse (deleted, changed hands) — same check as
+    // resolve, expressed through the list the owner actually owns.
+    if (!owned.some((p) => p._id === row.projectId)) return null;
+    return {
+      defaultProjectId: row.projectId,
+      projects: owned.map((p) => ({ id: p._id, name: p.name })),
     };
   },
 });

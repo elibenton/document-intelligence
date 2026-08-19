@@ -57,18 +57,10 @@ http.route({
   handler: httpAction(async (ctx, req) => {
     const auth = req.headers.get("Authorization") ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-    const resolved = await ctx.runQuery(internal.clipperTokens.resolve, {
-      token,
-    });
-    if (!resolved) {
-      return jsonResponse(401, { error: "Invalid or missing clipper token" });
-    }
-    if (resolved.exhausted) {
-      return jsonResponse(402, {
-        error: "This account is out of processing budget",
-      });
-    }
 
+    // Body is parsed before auth only because the optional per-clip
+    // `projectId` override rides in it and resolve validates token and
+    // override together, in one query.
     let body: unknown;
     try {
       body = await req.json();
@@ -79,6 +71,21 @@ http.route({
       return jsonResponse(400, { error: "Body must be a JSON object" });
     }
     const b = body as Record<string, unknown>;
+
+    const resolved = await ctx.runQuery(internal.clipperTokens.resolve, {
+      token,
+      projectId: optionalString(b.projectId),
+    });
+    if (!resolved) {
+      return jsonResponse(401, {
+        error: "Invalid clipper token or project",
+      });
+    }
+    if (resolved.exhausted) {
+      return jsonResponse(402, {
+        error: "This account is out of processing budget",
+      });
+    }
 
     if (typeof b.url !== "string" || !/^https?:\/\//.test(b.url)) {
       return jsonResponse(400, { error: "'url' must be an http(s) URL" });
@@ -138,6 +145,24 @@ http.route({
     });
 
     return jsonResponse(200, { documentId });
+  }),
+});
+
+// GET /clip/projects — the owner's projects for the popup's per-clip
+// dropdown, authenticated by the same bearer token as POST /clip.
+http.route({
+  path: "/clip/projects",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const auth = req.headers.get("Authorization") ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    const result = await ctx.runQuery(internal.clipperTokens.projectsFor, {
+      token,
+    });
+    if (!result) {
+      return jsonResponse(401, { error: "Invalid or missing clipper token" });
+    }
+    return jsonResponse(200, result);
   }),
 });
 
