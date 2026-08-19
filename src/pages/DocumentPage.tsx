@@ -939,6 +939,11 @@ export default function DocumentPage({ id }: { id: string }) {
                                   entityId={crossDoc.entityId}
                                   currentDocumentId={documentId}
                                 />
+                                <EntityReassign
+                                  documentId={documentId}
+                                  entityId={crossDoc.entityId}
+                                  entityName={item}
+                                />
                                 <Link
                                   to={`/entity/${entitySlug(item)}${
                                     document.projectId
@@ -1177,6 +1182,123 @@ export default function DocumentPage({ id }: { id: string }) {
             </div>
           }
         />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "This document's Michael is a different Michael": move this ONE document's
+ * link to another entity — an existing one picked from the live-search list,
+ * or a new one made from whatever name is typed. Other documents' links stay
+ * where they are; entities.reassignInDocument moves the evidence rows.
+ */
+function EntityReassign({
+  documentId,
+  entityId,
+  entityName,
+}: {
+  documentId: Id<"documents">;
+  entityId: Id<"entities">;
+  entityName: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const reassign = useMutation(api.entities.reassignInDocument);
+  // Live candidates for what was typed — only queried while the form is open
+  // and something is typed, so the sidebar costs nothing at rest.
+  const options = useQuery(
+    api.entities.reassignOptions,
+    open && name.trim().length >= 2 ? { documentId, query: name.trim() } : "skip"
+  );
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="self-start text-2xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+      >
+        Wrong person? Reassign in this document…
+      </button>
+    );
+  }
+
+  const commit = async (targetEntityId?: Id<"entities">) => {
+    setBusy(true);
+    try {
+      await reassign({
+        documentId,
+        entityId,
+        ...(targetEntityId ? { targetEntityId } : { name: name.trim() }),
+      });
+      setOpen(false);
+      setName("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const candidates = (options ?? []).filter((o) => o._id !== entityId);
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border p-2">
+      <p className="text-2xs leading-snug text-muted-foreground">
+        Only this document's “{entityName}” moves — pick who it really is, or
+        type a fuller name to make a new entity.
+      </p>
+      <Input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        autoFocus
+        placeholder="Full name (e.g. Michael Polson)"
+        className="h-8 text-xs"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && name.trim() && !busy) void commit();
+        }}
+      />
+      {candidates.length > 0 && (
+        <div className="flex flex-col">
+          {candidates.map((option) => (
+            <Button
+              key={option._id}
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => void commit(option._id)}
+              className="h-7 justify-start px-1.5 text-xs font-normal"
+            >
+              <span className="min-w-0 truncate">{option.name}</span>
+              <span className="shrink-0 text-2xs capitalize text-muted-foreground">
+                {option.type} · {option.documentCount} doc
+                {option.documentCount === 1 ? "" : "s"}
+              </span>
+            </Button>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-1.5">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!name.trim() || busy}
+          onClick={() => void commit()}
+          className="flex-1"
+        >
+          {busy ? "Moving…" : `Use “${name.trim() || "…"}”`}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={() => {
+            setOpen(false);
+            setName("");
+          }}
+        >
+          Cancel
+        </Button>
       </div>
     </div>
   );

@@ -1,7 +1,12 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
-import { STABLE_TO_LEGACY } from "./entityResolution";
+import {
+  LEGACY_TO_STABLE,
+  recountEntity,
+  resolveEntity,
+  STABLE_TO_LEGACY,
+} from "./entityResolution";
 import {
   requireDocument,
   requireEntity,
@@ -219,6 +224,161 @@ export const byDocument = authedQuery({
         // so "Eli Cohen" still highlights a transcript that only says "Eli".
         aliases: e.aliases,
       }));
+  },
+});
+
+/**
+ * Candidate entities for reassigning a document's link — a project-scoped name
+ * search, driving the "is this actually someone else?" picker in the sidebar.
+ */
+export const reassignOptions = authedQuery({
+  args: { documentId: v.id("documents"), query: v.string() },
+  handler: async (ctx, args) => {
+    const document = await requireDocument(ctx, args.documentId);
+    const q = args.query.trim();
+    if (q.length < 2) return [];
+    const rows = await ctx.db
+      .query("entities")
+      .withSearchIndex("search_name", (s) =>
+        s.search("name", q).eq("projectId", document.projectId)
+      )
+      .take(8);
+    return rows.map((e) => ({
+      _id: e._id,
+      name: e.name,
+      type: displayType(e),
+      documentCount: e.documentCount,
+    }));
+  },
+});
+
+/**
+ * "This document's Michael is a different Michael": move ONE document's link
+ * — its mentions, roles, relationships, and speaker rows — from `entityId` to
+ * another entity, leaving every other document's link untouched.
+ *
+ * The target is an existing entity (picked from reassignOptions) or a name,
+ * which goes through the shared resolver: an exact/alias match links rather
+ * than duplicating, anything else becomes a new entity, and lookalikes queue
+ * merge suggestions exactly as extraction's do.
+ */
+export const reassignInDocument = authedMutation({
+  args: {
+    documentId: v.id("documents"),
+    entityId: v.id("entities"),
+    targetEntityId: v.optional(v.id("entities")),
+    name: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const document = await requireDocument(ctx, args.documentId);
+    const source = await requireEntity(ctx, args.entityId);
+    if (source.projectId !== document.projectId) {
+      throw new Error("Reassignment stays within the document's project");
+    }
+    if ((args.targetEntityId === undefined) === (args.name === undefined)) {
+      throw new Error("Pass exactly one of targetEntityId or name");
+    }
+
+    let targetId;
+    if (args.targetEntityId !== undefined) {
+      const target = await requireEntity(ctx, args.targetEntityId);
+      if (target.projectId !== document.projectId) {
+        throw new Error("Reassignment stays within the document's project");
+      }
+      targetId = target._id;
+    } else {
+      const name = args.name!.trim().replace(/\s+/g, " ");
+      if (!name) throw new Error("An entity needs a name");
+      const resolved = await resolveEntity(ctx, {
+        name,
+        // The person is the same *kind* of thing they were, just a different
+        // instance of it.
+        stableType:
+          source.types?.[0] ?? LEGACY_TO_STABLE[source.type] ?? "person",
+        documentId: args.documentId,
+      });
+      targetId = resolved.entityId;
+    }
+    if (targetId === source._id) return null;
+
+    // This document's mentions move wholesale — they are occurrences of a
+    // name, and the reassignment is precisely the statement that in THIS
+    // document that name means the target.
+    const mentions = await ctx.db
+      .query("mentions")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    for (const mention of mentions) {
+      if (mention.entityId === source._id) {
+        await ctx.db.patch(mention._id, { entityId: targetId });
+      }
+    }
+
+    // Roles, skipping ones the target already asserts here.
+    const roles = await ctx.db
+      .query("entityRoles")
+      .withIndex("by_entity_and_document", (q) =>
+        q.eq("entityId", source._id).eq("documentId", args.documentId)
+      )
+      .collect();
+    const targetRoles = await ctx.db
+      .query("entityRoles")
+      .withIndex("by_entity_and_document", (q) =>
+        q.eq("entityId", targetId).eq("documentId", args.documentId)
+      )
+      .collect();
+    // Tracked as a live set, not the snapshot alone: two identical source
+    // roles must not both move and land as duplicates on the target.
+    const rolesOnTarget = new Set(targetRoles.map((r) => r.role));
+    for (const role of roles) {
+      if (rolesOnTarget.has(role.role)) {
+        await ctx.db.delete(role._id);
+      } else {
+        rolesOnTarget.add(role.role);
+        await ctx.db.patch(role._id, { entityId: targetId });
+      }
+    }
+
+    // This document's relationship endpoints follow; an edge that would now
+    // connect the target to itself is deleted rather than kept as a loop.
+    const relationships = await ctx.db
+      .query("relationships")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    for (const rel of relationships) {
+      const nextSource =
+        rel.sourceEntityId === source._id ? targetId : rel.sourceEntityId;
+      const nextTarget =
+        rel.targetEntityId === source._id ? targetId : rel.targetEntityId;
+      if (nextSource === rel.sourceEntityId && nextTarget === rel.targetEntityId) {
+        continue;
+      }
+      if (nextSource === nextTarget) {
+        await ctx.db.delete(rel._id);
+      } else {
+        await ctx.db.patch(rel._id, {
+          sourceEntityId: nextSource,
+          targetEntityId: nextTarget,
+        });
+      }
+    }
+
+    // A named speaker linked to the old entity follows too — the voice was
+    // the same misidentification.
+    const speakers = await ctx.db
+      .query("documentSpeakers")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    for (const speaker of speakers) {
+      if (speaker.entityId === source._id) {
+        await ctx.db.patch(speaker._id, { entityId: targetId });
+      }
+    }
+
+    await recountEntity(ctx, source._id);
+    await recountEntity(ctx, targetId);
+    return null;
   },
 });
 
