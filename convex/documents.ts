@@ -108,7 +108,16 @@ export const processingBlocker = authedQuery({
  * it since this merge.
  */
 async function withUrl(ctx: QueryCtx, document: Doc<"documents">) {
-  return { ...document, url: await ctx.storage.getUrl(document.storageId) };
+  return {
+    ...document,
+    url: await ctx.storage.getUrl(document.storageId),
+    // Web clips also store the parsed article markdown; the viewer's text
+    // fallback reads it when the archive itself is unusable (a baked-in
+    // popup, broken styles).
+    textUrl: document.textStorageId
+      ? await ctx.storage.getUrl(document.textStorageId)
+      : null,
+  };
 }
 
 /**

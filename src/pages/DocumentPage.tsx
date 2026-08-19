@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router";
-import { ExternalLink, Folder, Sparkles } from "lucide-react";
+import { ExternalLink, FileText, Folder, Globe, Sparkles } from "lucide-react";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
@@ -299,6 +299,9 @@ export default function DocumentPage({ id }: { id: string }) {
   const totalPages = document?.pageCount ?? (pages?.length || undefined);
   const isRecording = Boolean(document && isAudioVideo(document));
   const isWebClip = document?.mediaType === "webScrape";
+  // The clip's escape hatch: swap the archived snapshot for the parsed
+  // article text when the archive is unusable (a captured popup, dead CSS).
+  const [clipView, setClipView] = useState<"archive" | "text">("archive");
 
   // Recordings get the Contents panel too: transcript segments are blocks,
   // so search works, and the understand pass writes a table of contents for
@@ -610,6 +613,27 @@ export default function DocumentPage({ id }: { id: string }) {
               viewer: highlighter, then zoom + page counter, quietly right of
               the title. Pipeline status lives at the top of the Details
               column, where a step list has the room a header bar doesn't. */}
+          {isWebClip && document.textUrl && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setClipView((v) => (v === "archive" ? "text" : "archive"))
+              }
+            >
+              {clipView === "archive" ? (
+                <>
+                  <FileText className="size-3.5" />
+                  Text view
+                </>
+              ) : (
+                <>
+                  <Globe className="size-3.5" />
+                  Archive view
+                </>
+              )}
+            </Button>
+          )}
           {isWebClip && document.sourceUrl && (
             <a
               href={document.sourceUrl}
@@ -734,6 +758,8 @@ export default function DocumentPage({ id }: { id: string }) {
                 <WebClipViewer
                   documentId={documentId}
                   url={url}
+                  textUrl={document.textUrl}
+                  view={clipView}
                   penColor={penColor}
                   activeAnnotation={activeAnnotation}
                   onActiveAnnotationChange={setActiveAnnotation}

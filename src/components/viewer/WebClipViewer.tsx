@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -28,6 +30,11 @@ import {
 interface WebClipViewerProps {
   documentId: Id<"documents">;
   url: string; // storage URL of the archived single-file HTML snapshot
+  /** Storage URL of the clip's parsed article markdown — the text fallback. */
+  textUrl?: string | null;
+  /** "archive" renders the snapshot; "text" renders the parsed article
+   *  markdown — the escape hatch when the archive itself is unusable. */
+  view?: "archive" | "text";
   /** Armed highlighter color: a selection commits straight to a highlight
    *  on pointer-up, skipping the offer popover. */
   penColor?: AnnotationColor | null;
@@ -78,9 +85,39 @@ interface PendingNote {
   quote: QuoteAnchor;
 }
 
+/**
+ * Archived pages often ship a modal captured mid-display — a subscribe
+ * prompt, a cookie wall — and with scripts stripped, its close button is
+ * dead. Remove modal roles and fixed overlays covering a meaningful share of
+ * the viewport, then undo the scroll lock they installed. Small fixed chrome
+ * (a site header, a bottom banner) is under the coverage bar and stays.
+ */
+function removeArchivedOverlays(doc: Document, win: Window): void {
+  const vw = win.innerWidth;
+  const vh = win.innerHeight;
+  if (!vw || !vh) return;
+  for (const el of Array.from(doc.body.querySelectorAll<HTMLElement>("*"))) {
+    if (!el.isConnected) continue; // inside an overlay already removed
+    const isModal = el.matches("dialog[open], [aria-modal='true']");
+    if (!isModal && win.getComputedStyle(el).position !== "fixed") continue;
+    const rect = el.getBoundingClientRect();
+    const coverage =
+      (Math.min(rect.width, vw) * Math.min(rect.height, vh)) / (vw * vh);
+    if (isModal || coverage >= 0.25) el.remove();
+  }
+  for (const el of [doc.documentElement, doc.body]) {
+    const { overflow, overflowY } = win.getComputedStyle(el);
+    if (overflow === "hidden" || overflowY === "hidden") {
+      el.style.setProperty("overflow", "visible", "important");
+    }
+  }
+}
+
 export function WebClipViewer({
   documentId,
   url,
+  textUrl = null,
+  view = "archive",
   penColor = null,
   activeAnnotation = null,
   onActiveAnnotationChange,
@@ -89,12 +126,18 @@ export function WebClipViewer({
     { html: string } | { error: string } | null
   >(null);
 
+  // The text fallback's markdown, fetched lazily by the effect below.
+  const [textState, setTextState] = useState<
+    { markdown: string } | { error: string } | null
+  >(null);
+
   // Reset for a new document during render, not in the effect — the effect
   // only starts the fetch.
   const [seenUrl, setSeenUrl] = useState(url);
   if (url !== seenUrl) {
     setSeenUrl(url);
     setState(null);
+    setTextState(null);
   }
 
   useEffect(() => {
@@ -148,6 +191,33 @@ export function WebClipViewer({
     () => (annotations ?? []).filter((a) => a.quote),
     [annotations]
   );
+
+  // Once per load, before the text index is built: clear captured popups and
+  // scroll locks. Declared ahead of the paint effect so removal has already
+  // reshaped the DOM when the index snapshots it.
+  useEffect(() => {
+    const frame = iframeRef.current;
+    const doc = frame?.contentDocument;
+    const win = frame?.contentWindow;
+    if (doc?.body && win) removeArchivedOverlays(doc, win);
+  }, [frameGen]);
+
+  // The text fallback's markdown, fetched only once that view is asked for.
+  useEffect(() => {
+    if (view !== "text" || !textUrl || textState !== null) return;
+    const controller = new AbortController();
+    void fetch(textUrl, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Download failed (${response.status})`);
+        return response.text();
+      })
+      .then((markdown) => setTextState({ markdown }))
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return;
+        setTextState({ error: e instanceof Error ? e.message : String(e) });
+      });
+    return () => controller.abort();
+  }, [view, textUrl, textState]);
 
   // Re-anchor and paint whenever the archive loads or the rows change.
   useEffect(() => {
@@ -342,6 +412,31 @@ export function WebClipViewer({
     el.style.width = `${rect.width}px`;
     el.style.height = `${rect.height}px`;
   }, [activeDocId, anchorVersion, frameGen]);
+
+  if (view === "text") {
+    return (
+      <div className="h-full w-full min-w-0 overflow-y-auto">
+        {textState === null ? (
+          <div className="flex h-full items-center justify-center">
+            <Spinner />
+          </div>
+        ) : "error" in textState ? (
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+            <AlertCircle className="size-4" />
+            Couldn&apos;t load the article text ({textState.error})
+          </div>
+        ) : (
+          <div className="mx-auto max-w-3xl px-6 py-8">
+            <div className="prose prose-sm dark:prose-invert max-w-none [&_p]:leading-relaxed">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {textState.markdown}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full w-full min-w-0">
