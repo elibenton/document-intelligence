@@ -484,7 +484,9 @@ function ProjectHome({ project }: { project: Doc<"projects"> }) {
         field: commit.field as
           | "primaryCategory"
           | "documentDate"
+          | "createdDate"
           | "documentPlace"
+          | "author"
           | "sourceLanguageCode",
         value: commit.value || undefined,
         precision: commit.precision ?? undefined,

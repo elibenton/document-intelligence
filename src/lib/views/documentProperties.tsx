@@ -5,9 +5,11 @@ import { DocStatusIndicator } from "@/components/documents/DocStatusIndicator";
 import { libraryStatus } from "@/components/documents/docStatus";
 import {
   documentDateSortKey,
+  formatDated,
   formatDocumentDate,
   hasDocumentDate,
 } from "@/lib/documentDate";
+import { formatDuration } from "@/lib/duration";
 import { documentTitles } from "@/lib/documentTitle";
 import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
 import { cn } from "@/lib/utils";
@@ -261,6 +263,45 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     editor: { control: "text", field: "documentPlace" },
   },
   {
+    id: "createdDate",
+    label: "Created",
+    kind: "date",
+    filterable: true,
+    sortable: true,
+    groupable: true,
+    // When the SOURCE says it was made (published/recorded/EXIF/CreationDate)
+    // — distinct from documentDate, what the text establishes. Never derived
+    // from uploadedAt; absent means the source stated nothing.
+    value: (doc) => doc.createdDate ?? null,
+    format: (doc) =>
+      doc.createdDate
+        ? formatDated({
+            value: doc.createdDate,
+            precision:
+              doc.createdDatePrecision === "month" ||
+              doc.createdDatePrecision === "year"
+                ? doc.createdDatePrecision
+                : "day",
+          })
+        : null,
+    options: (rows) =>
+      [...new Set(rows.map((doc) => doc.createdDate?.slice(0, 4)).filter(Boolean))]
+        .sort()
+        .reverse()
+        .map((year) => ({ value: year as string, label: year as string })),
+    editor: { control: "date", field: "createdDate" },
+  },
+  {
+    id: "duration",
+    label: "Duration",
+    kind: "number",
+    filterable: true,
+    sortable: true,
+    value: (doc) => doc.durationSeconds ?? null,
+    // Silent when absent, the noteCount pattern — only recordings have one.
+    format: (doc) => formatDuration(doc.durationSeconds),
+  },
+  {
     id: "uploadedAt",
     label: "Added",
     kind: "date",
@@ -351,9 +392,22 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
     sortable: true,
     groupable: true,
     searchable: true,
-    value: (doc) => definite(metadataOf(doc).author),
-    format: (doc) => definite(metadataOf(doc).author),
-    options: (rows) => observedOptions(rows, (doc) => definite(metadataOf(doc).author), (v) => v),
+    // The promoted column, with the metadata-blob fallback for rows analyzed
+    // before it existed (never behind a stamp — a stamped-but-empty author is
+    // a human tombstone, and the blob must not resurrect it).
+    value: (doc) =>
+      doc.author ?? (doc.authorSource ? null : definite(metadataOf(doc).author)),
+    format: (doc) =>
+      doc.author ?? (doc.authorSource ? null : definite(metadataOf(doc).author)),
+    options: (rows) =>
+      observedOptions(
+        rows,
+        (doc) =>
+          doc.author ??
+          (doc.authorSource ? null : definite(metadataOf(doc).author)),
+        (v) => v
+      ),
+    editor: { control: "text", field: "author" },
   },
   {
     id: "domain",
@@ -374,7 +428,14 @@ export const DOCUMENT_PROPERTIES: PropertyDef<LibraryDoc>[] = [
  * properties menu, not by us rewriting the user's config.
  */
 export const DEFAULT_LIBRARY_VIEW = {
-  visibleProperties: ["status", "category", "kind", "noteCount", "documentDate"],
+  visibleProperties: [
+    "status",
+    "category",
+    "kind",
+    "noteCount",
+    "createdDate",
+    "documentDate",
+  ],
   filters: [],
   sorts: [{ property: "documentDate", direction: "desc" as const }],
 };
