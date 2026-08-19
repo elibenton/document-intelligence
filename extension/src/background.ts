@@ -10,6 +10,14 @@ interface ClipStatus {
   message?: string;
   documentId?: string;
   tabId?: number;
+  /** Metadata the capture extracted, shown as a preview once clipped. */
+  meta?: {
+    title?: string;
+    byline?: string;
+    siteName?: string;
+    publishedAt?: string;
+    description?: string;
+  };
 }
 
 interface Settings {
@@ -30,22 +38,75 @@ async function getSettings(): Promise<Settings> {
   };
 }
 
+const STATUS_COLORS: Record<ClipStatus["state"], string> = {
+  capturing: "#f59e0b",
+  uploading: "#3b82f6",
+  done: "#22c55e",
+  error: "#ef4444",
+};
+
+let baseIconBitmap: Promise<ImageBitmap> | undefined;
+
+/** Toolbar icon with a small colored status dot in the bottom-right corner. */
+async function setStatusIcon(state: ClipStatus["state"]): Promise<void> {
+  baseIconBitmap ??= fetch(chrome.runtime.getURL("icons/128.png"))
+    .then((r) => r.blob())
+    .then((b) => createImageBitmap(b));
+  const icon = await baseIconBitmap;
+  const imageData: Record<number, ImageData> = {};
+  for (const size of [16, 32]) {
+    const canvas = new OffscreenCanvas(size, size);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(icon, 0, 0, size, size);
+    const r = size * 0.22;
+    const cx = size - r - 1;
+    const cy = size - r - 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 1, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff"; // thin ring so the dot reads on any toolbar
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = STATUS_COLORS[state];
+    ctx.fill();
+    imageData[size] = ctx.getImageData(0, 0, size, size);
+  }
+  await chrome.action.setIcon({ imageData });
+}
+
 async function setStatus(status: ClipStatus): Promise<void> {
   await chrome.storage.session.set({ clipStatus: status });
   chrome.runtime.sendMessage({ type: "clipStatus", status }).catch(() => {
     /* popup may be closed */
   });
-  const badge = {
-    capturing: { text: "…", color: "#f59e0b" },
-    uploading: { text: "↑", color: "#3b82f6" },
-    done: { text: "✓", color: "#22c55e" },
-    error: { text: "!", color: "#ef4444" },
-  }[status.state];
-  await chrome.action.setBadgeText({ text: badge.text });
-  await chrome.action.setBadgeBackgroundColor({ color: badge.color });
+  await setStatusIcon(status.state).catch(() => {
+    /* icon decoration is cosmetic; never fail the clip over it */
+  });
   if (status.state === "done" || status.state === "error") {
-    setTimeout(() => chrome.action.setBadgeText({ text: "" }), 8000);
+    setTimeout(() => {
+      void chrome.action.setIcon({
+        path: { 16: "icons/16.png", 32: "icons/32.png" },
+      });
+    }, 8000);
   }
+}
+
+const MAX_CLIPPED_URLS = 200;
+
+/** Remember what we clipped, so the popup can warn before a re-clip. */
+async function recordClip(url: string, documentId: string): Promise<void> {
+  const { clippedUrls } = await chrome.storage.local.get(["clippedUrls"]);
+  const map: Record<string, { at: number; documentId: string }> =
+    clippedUrls ?? {};
+  map[url] = { at: Date.now(), documentId };
+  const entries = Object.entries(map);
+  if (entries.length > MAX_CLIPPED_URLS) {
+    entries.sort((a, b) => b[1].at - a[1].at);
+    for (const [staleUrl] of entries.slice(MAX_CLIPPED_URLS)) {
+      delete map[staleUrl];
+    }
+  }
+  await chrome.storage.local.set({ clippedUrls: map });
 }
 
 async function capture(
@@ -72,8 +133,6 @@ async function runClip(
   tabId: number,
   extras: {
     title?: string;
-    tags: string[];
-    notes?: string;
     projectId?: string;
   }
 ): Promise<void> {
@@ -101,8 +160,6 @@ async function runClip(
     }
 
     if (extras.title?.trim()) payload.title = extras.title.trim();
-    payload.tags = extras.tags;
-    if (extras.notes?.trim()) payload.notes = extras.notes.trim();
     // Per-clip project from the popup's dropdown; the server falls back to
     // the token's own project when absent.
     if (extras.projectId) payload.projectId = extras.projectId;
@@ -129,7 +186,22 @@ async function runClip(
     }
 
     const { documentId } = (await res.json()) as { documentId: string };
-    await setStatus({ state: "done", documentId, tabId });
+    const captured = payload.metadata as
+      | Record<string, string | undefined>
+      | undefined;
+    await recordClip(payload.url as string, documentId);
+    await setStatus({
+      state: "done",
+      documentId,
+      tabId,
+      meta: {
+        title: payload.title as string | undefined,
+        byline: captured?.byline,
+        siteName: captured?.siteName,
+        publishedAt: captured?.publishedAt,
+        description: captured?.description ?? captured?.excerpt,
+      },
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     await setStatus({ state: "error", message, tabId });
@@ -174,8 +246,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "clip" && typeof msg.tabId === "number") {
     void runClip(msg.tabId, {
       title: msg.title,
-      tags: Array.isArray(msg.tags) ? msg.tags : [],
-      notes: msg.notes,
       projectId: typeof msg.projectId === "string" ? msg.projectId : undefined,
     });
     sendResponse({ started: true });

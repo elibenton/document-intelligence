@@ -16,7 +16,14 @@
       width: 100%; box-sizing: border-box; padding: 6px 8px;
       border: 1px solid #ccc; border-radius: 6px; font: inherit;
     }
-    textarea { resize: vertical; min-height: 44px; }
+    .warn { margin-top: 10px; font-size: 12px; color: #d97706; }
+    #metaPreview {
+      margin: 10px 0 0; padding: 8px 10px; font-size: 12px;
+      border: 1px solid light-dark(#e5e5e5, #444); border-radius: 6px;
+      display: grid; grid-template-columns: auto 1fr; column-gap: 8px; row-gap: 3px;
+    }
+    #metaPreview dt { font-weight: 600; color: #888; }
+    #metaPreview dd { margin: 0; overflow: hidden; text-overflow: ellipsis; }
     button {
       width: 100%; margin-top: 12px; padding: 8px; border: 0; border-radius: 6px;
       background: light-dark(#000, #fff); color: light-dark(#fff, #000); font: inherit; font-weight: 600; cursor: pointer;
@@ -31,7 +38,7 @@
   </style>
 </head>
 <body>
-  <h1><img id="favicon" alt="" hidden /><span>Clip this page</span></h1>
+  <h1><img src="icons/32.png" alt="" /><span>Clip this page</span></h1>
   <div class="site" id="pageUrl"></div>
 
   <label for="project">Project</label>
@@ -42,14 +49,11 @@
   <label for="title">Title</label>
   <input id="title" type="text" />
 
-  <label for="tags">Tags <span style="font-weight:400;color:#888">(comma-separated)</span></label>
-  <input id="tags" type="text" placeholder="research, finance" />
-
-  <label for="notes">Notes</label>
-  <textarea id="notes" placeholder="Why are you clipping this?"></textarea>
+  <div id="reclipWarning" class="warn" hidden></div>
 
   <button id="clip">Clip &amp; Archive</button>
   <div id="status"></div>
+  <dl id="metaPreview" hidden></dl>
 
   <div class="footer"><a href="#" id="openOptions">Settings</a></div>
   <script src="popup.js"></script>

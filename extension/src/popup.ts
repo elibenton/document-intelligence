@@ -3,20 +3,56 @@ const $ = <T extends HTMLElement>(id: string) =>
 
 const projectSelect = $<HTMLSelectElement>("project");
 const titleInput = $<HTMLInputElement>("title");
-const tagsInput = $<HTMLInputElement>("tags");
-const notesInput = $<HTMLTextAreaElement>("notes");
 const clipButton = $<HTMLButtonElement>("clip");
 const statusEl = $<HTMLDivElement>("status");
+const reclipWarning = $<HTMLDivElement>("reclipWarning");
+const metaPreview = $<HTMLDListElement>("metaPreview");
 
 let activeTabId: number | undefined;
+
+function timeAgo(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} minute${m === 1 ? "" : "s"} ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? "" : "s"} ago`;
+}
+
+/** Preview of the metadata the capture extracted from the page. */
+function showMetaPreview(meta: Record<string, string | undefined>): void {
+  const rows: [string, string | undefined][] = [
+    ["Title", meta.title],
+    ["Author", meta.byline],
+    ["Site", meta.siteName],
+    ["Published", meta.publishedAt],
+    ["Summary", meta.description],
+  ];
+  metaPreview.replaceChildren(
+    ...rows
+      .filter(([, value]) => value?.trim())
+      .flatMap(([label, value]) => {
+        const dt = document.createElement("dt");
+        dt.textContent = label;
+        const dd = document.createElement("dd");
+        dd.textContent = value!;
+        return [dt, dd];
+      })
+  );
+  metaPreview.hidden = metaPreview.childElementCount === 0;
+}
 
 function showStatus(status: {
   state: string;
   message?: string;
   documentId?: string;
+  meta?: Record<string, string | undefined>;
 }): void {
   statusEl.className = "";
   clipButton.disabled = status.state === "capturing" || status.state === "uploading";
+  metaPreview.hidden = true;
   switch (status.state) {
     case "capturing":
       statusEl.textContent = "Capturing page…";
@@ -35,6 +71,7 @@ function showStatus(status: {
         link.textContent = "Open in Haystack";
         statusEl.appendChild(link);
       });
+      if (status.meta) showMetaPreview(status.meta);
       break;
     }
     case "error":
@@ -92,10 +129,16 @@ async function init(): Promise<void> {
 
   titleInput.value = tab.title ?? "";
   $<HTMLDivElement>("pageUrl").textContent = tab.url;
-  if (tab.favIconUrl) {
-    const fav = $<HTMLImageElement>("favicon");
-    fav.src = tab.favIconUrl;
-    fav.hidden = false;
+
+  // Warn before clipping a page the user already clipped.
+  const { clippedUrls } = await chrome.storage.local.get(["clippedUrls"]);
+  const previous = (
+    clippedUrls as Record<string, { at: number; documentId: string }> | undefined
+  )?.[tab.url];
+  if (previous) {
+    reclipWarning.textContent = `⚠ Already clipped ${timeAgo(previous.at)} — clipping again creates a duplicate.`;
+    reclipWarning.hidden = false;
+    clipButton.textContent = "Clip again";
   }
 
   // Resume in-flight/finished status if the popup was reopened
@@ -105,10 +148,6 @@ async function init(): Promise<void> {
 
 clipButton.addEventListener("click", () => {
   if (activeTabId === undefined) return;
-  const tags = tagsInput.value
-    .split(",")
-    .map((t) => t.trim())
-    .filter(Boolean);
   const projectId = projectSelect.value || undefined;
   if (projectId) {
     void chrome.storage.sync.set({ lastProjectId: projectId });
@@ -117,8 +156,6 @@ clipButton.addEventListener("click", () => {
     type: "clip",
     tabId: activeTabId,
     title: titleInput.value,
-    tags,
-    notes: notesInput.value,
     projectId,
   });
   showStatus({ state: "capturing" });
