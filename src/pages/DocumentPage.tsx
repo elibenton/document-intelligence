@@ -46,6 +46,7 @@ import { DocTypePills } from "@/components/documents/DocTypePills";
 import { ProjectSearchDialog } from "@/components/search/ProjectSearchDialog";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -151,6 +152,25 @@ export default function DocumentPage({ id }: { id: string }) {
   const scrollToPage = useCallback((page: number) => {
     viewerRef.current?.scrollToPage(page);
   }, []);
+
+  // Jump the viewer to an entity's first occurrence: page scroll for paged
+  // documents, a seek for recordings (the mention's block is a transcript
+  // mirror row, whose blockId names the segment and so the second).
+  const jumpToFirstMention = (
+    first: ReturnType<typeof findPersonMentions>[number] | undefined
+  ) => {
+    if (!first) return;
+    if (isRecordingDoc) {
+      const row = blocks?.find((b) => b._id === first.blockId);
+      const seg = row?.blockId?.match(/^transcript_seg(\d+)$/);
+      const time = seg
+        ? transcriptSegments?.[Number(seg[1])]?.startTime
+        : undefined;
+      if (time !== undefined) seekTo(time);
+      return;
+    }
+    scrollToPage(first.pageNumber + 1);
+  };
 
   const seekTo = useCallback((seconds: number) => {
     recordingRef.current?.seekTo(seconds);
@@ -806,13 +826,14 @@ export default function DocumentPage({ id }: { id: string }) {
                                     return next;
                                   })
                                 }
-                                disabled={connections.length === 0}
-                                title={
-                                  connections.length === 0
-                                    ? "No connections in this document"
-                                    : `${connections.length} connection${connections.length === 1 ? "" : "s"}`
+                                title={isExpanded ? "Hide details" : "Show details"}
+                                aria-label={
+                                  isExpanded
+                                    ? `Hide details for ${item}`
+                                    : `Show details for ${item}`
                                 }
-                                className="shrink-0 pl-1 pr-0.5 py-1.5 disabled:opacity-25"
+                                aria-expanded={isExpanded}
+                                className="shrink-0 pl-1 pr-0.5 py-1.5"
                               >
                                 <svg
                                   width="10"
@@ -844,6 +865,7 @@ export default function DocumentPage({ id }: { id: string }) {
                                   } else {
                                     setSelectedItem(item);
                                     setSearchQuery(searchTerm);
+                                    jumpToFirstMention(mentions[0]);
                                   }
                                 }}
                                 onKeyDown={(e) => {
@@ -851,6 +873,7 @@ export default function DocumentPage({ id }: { id: string }) {
                                   e.preventDefault();
                                   setSelectedItem(isActive ? null : item);
                                   setSearchQuery(isActive ? "" : searchTerm);
+                                  if (!isActive) jumpToFirstMention(mentions[0]);
                                 }}
                                 title={
                                   isActive
@@ -866,18 +889,12 @@ export default function DocumentPage({ id }: { id: string }) {
                                     : "hover:bg-accent"
                                 )}
                               >
-                                <Link
-                                  to={`/entity/${entitySlug(item)}${
-                                    document.projectId
-                                      ? `?project=${document.projectId}`
-                                      : ""
-                                  }`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  title={`Open ${item}`}
-                                  className="min-w-0 flex-1 truncate hover:underline"
-                                >
+                                {/* Plain text: the whole row is the highlight
+                                    gesture, and the entity page moved into
+                                    the row's dropdown. */}
+                                <span className="min-w-0 flex-1 truncate">
                                   {item}
-                                </Link>
+                                </span>
                                 {/* What this entity is to this document, held
                                     to the right edge so the roles line up as
                                     their own column rather than trailing each
@@ -898,20 +915,46 @@ export default function DocumentPage({ id }: { id: string }) {
                             </div>
 
                             {isExpanded && crossDoc && (
-                              <div className="pb-1.5 pl-5 pr-2">
-                                <EntityConnectionList
-                                  connections={connections}
-                                  subjectId={crossDoc.entityId}
-                                  documentId={documentId}
-                                  projectId={document.projectId ?? null}
-                                  onLocate={(text, isEntity, pageNumber) => {
-                                    setSelectedItem(isEntity ? text : null);
-                                    setSearchQuery(text);
-                                    if (pageNumber !== undefined) {
-                                      scrollToPage(pageNumber + 1);
-                                    }
-                                  }}
+                              <div className="flex flex-col gap-2 pb-2 pl-5 pr-2">
+                                {connections.length > 0 ? (
+                                  <EntityConnectionList
+                                    connections={connections}
+                                    subjectId={crossDoc.entityId}
+                                    documentId={documentId}
+                                    projectId={document.projectId ?? null}
+                                    onLocate={(text, isEntity, pageNumber) => {
+                                      setSelectedItem(isEntity ? text : null);
+                                      setSearchQuery(text);
+                                      if (pageNumber !== undefined) {
+                                        scrollToPage(pageNumber + 1);
+                                      }
+                                    }}
+                                  />
+                                ) : (
+                                  <p className="text-xs text-muted-foreground">
+                                    No connections in this document.
+                                  </p>
+                                )}
+                                <EntityOtherDocuments
+                                  entityId={crossDoc.entityId}
+                                  currentDocumentId={documentId}
                                 />
+                                <Link
+                                  to={`/entity/${entitySlug(item)}${
+                                    document.projectId
+                                      ? `?project=${document.projectId}`
+                                      : ""
+                                  }`}
+                                  className={cn(
+                                    buttonVariants({
+                                      variant: "outline",
+                                      size: "sm",
+                                    }),
+                                    "self-start"
+                                  )}
+                                >
+                                  Open entity page
+                                </Link>
                               </div>
                             )}
 
@@ -1135,6 +1178,56 @@ export default function DocumentPage({ id }: { id: string }) {
           }
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * The other documents an entity appears in — the cross-document half of an
+ * entity row's dropdown. Fetched only once a row is expanded (this component
+ * mounts then), so a sidebar of forty entities costs no extra reads at rest.
+ */
+function EntityOtherDocuments({
+  entityId,
+  currentDocumentId,
+}: {
+  entityId: Id<"entities">;
+  currentDocumentId: Id<"documents">;
+}) {
+  const docs = useQuery(api.entities.documentsForEntity, { entityId });
+  if (docs === undefined) {
+    return <Skeleton className="h-4 w-40" />;
+  }
+  const others = docs.filter((d) => d._id !== currentDocumentId);
+  if (others.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Not mentioned in any other document.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      <h4 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Also appears in
+      </h4>
+      {others.slice(0, 5).map((d) => (
+        <Link
+          key={d._id}
+          to={`/documents/${d._id}`}
+          className="flex items-baseline gap-1.5 text-xs text-foreground hover:underline"
+        >
+          <span className="min-w-0 truncate">{d.displayName ?? d.name}</span>
+          <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
+            ×{d.mentionCount}
+          </span>
+        </Link>
+      ))}
+      {others.length > 5 && (
+        <p className="text-2xs text-muted-foreground">
+          and {others.length - 5} more — see the entity page.
+        </p>
+      )}
     </div>
   );
 }
