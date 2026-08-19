@@ -3,6 +3,7 @@ import { httpRouter } from "convex/server";
 import { ConvexError } from "convex/values";
 import { httpAction } from "./_generated/server";
 import { components, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { authComponent, createAuth } from "./auth";
 
 const http = httpRouter();
@@ -224,6 +225,53 @@ http.route({
       url,
     });
     return jsonResponse(200, { existing });
+  }),
+});
+
+// PATCH /clip/metadata — human corrections from the popup's post-clip
+// preview. Fields absent from the body are untouched; empty strings clear.
+http.route({
+  path: "/clip/metadata",
+  method: "PATCH",
+  handler: httpAction(async (ctx, req) => {
+    const auth = req.headers.get("Authorization") ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return jsonResponse(400, { error: "Body must be JSON" });
+    }
+    if (typeof body !== "object" || body === null) {
+      return jsonResponse(400, { error: "Body must be a JSON object" });
+    }
+    const b = body as Record<string, unknown>;
+    if (typeof b.documentId !== "string" || !b.documentId) {
+      return jsonResponse(400, { error: "'documentId' is required" });
+    }
+    const field = (value: unknown): string | undefined =>
+      typeof value === "string" ? value : undefined;
+    try {
+      await ctx.runMutation(internal.clips.updateClipMetadata, {
+        token,
+        documentId: b.documentId as Id<"documents">,
+        title: field(b.title),
+        author: field(b.author),
+        publishedAt: field(b.publishedAt),
+        siteName: field(b.siteName),
+        description: field(b.description),
+      });
+    } catch (e) {
+      if (e instanceof ConvexError) {
+        const message =
+          typeof e.data === "string" ? e.data : "Invalid request";
+        const status = message.startsWith("Invalid clipper") ? 401 : 400;
+        return jsonResponse(status, { error: message });
+      }
+      // An id from the wrong table fails the mutation's arg validator.
+      return jsonResponse(400, { error: "Invalid document id" });
+    }
+    return jsonResponse(200, { ok: true });
   }),
 });
 

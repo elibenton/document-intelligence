@@ -2,6 +2,7 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { sanitizeNativeDate } from "./nativeDate";
+import { recordOverride } from "./apiLogs";
 import { cleanPdfAuthor } from "./pdfNativeMetadata";
 
 // ---------------------------------------------------------------------------
@@ -232,5 +233,127 @@ export const createFromClip = internalMutation({
     });
 
     return documentId;
+  },
+});
+
+/**
+ * Human corrections to a clip's metadata, from the popup's post-clip preview
+ * (PATCH /clip/metadata). Same bearer-token auth as the other clip endpoints;
+ * a field absent from args is untouched, an empty string clears it.
+ *
+ * Persistence mirrors the app's own editors so the edit reads identically
+ * there: title follows updateIdentity's displayName rule; author and the
+ * published date follow the native-field rule (clearing leaves a "human"
+ * tombstone); site and summary live in the metadata JSON blob the Info tab
+ * displays, and any blob edit stamps metadataSource "human" the way
+ * updateDocumentMeta does. sourceMetadata stays untouched — it records what
+ * the page stated, not what the human corrected.
+ */
+export const updateClipMetadata = internalMutation({
+  args: {
+    token: v.string(),
+    documentId: v.id("documents"),
+    title: v.optional(v.string()),
+    author: v.optional(v.string()),
+    publishedAt: v.optional(v.string()),
+    siteName: v.optional(v.string()),
+    description: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const row = args.token
+      ? await ctx.db
+          .query("clipperTokens")
+          .withIndex("by_token", (q) => q.eq("token", args.token))
+          .unique()
+      : null;
+    const doc = row ? await ctx.db.get(args.documentId) : null;
+    const project = doc?.projectId ? await ctx.db.get(doc.projectId) : null;
+    if (!row || !doc || !project || project.ownerId !== row.ownerId) {
+      // One opaque failure — same oracle reason as clipperTokens.resolve.
+      throw new ConvexError("Invalid clipper token or document");
+    }
+
+    const patch: Record<string, unknown> = {};
+    let blob: Record<string, unknown> = {};
+    try {
+      blob = doc.metadata ? JSON.parse(doc.metadata) : {};
+    } catch {
+      /* unparseable blob — rebuild from the edits alone */
+    }
+    let blobChanged = false;
+
+    if (args.title !== undefined) {
+      const title = args.title.trim();
+      const keep = title && title !== doc.name;
+      patch.displayName = keep ? title : undefined;
+      patch.displayNameSource = keep ? "human" : undefined;
+      if (title) {
+        blob.title = title;
+        blobChanged = true;
+      }
+    }
+
+    if (args.author !== undefined) {
+      const author = args.author.trim();
+      patch.author = author || undefined;
+      patch.authorSource = "human"; // cleared = human tombstone
+      blob.author = author || undefined;
+      blobChanged = true;
+    }
+
+    if (args.publishedAt !== undefined) {
+      const text = args.publishedAt.trim();
+      if (text) {
+        // No future-date guard (Infinity): that guard exists for drifted
+        // clocks and hallucinations; a human typing a date is asserting one.
+        const date = sanitizeNativeDate(text, Number.POSITIVE_INFINITY);
+        if (!date) {
+          throw new ConvexError(
+            "Not a valid date: use YYYY, YYYY-MM, or YYYY-MM-DD"
+          );
+        }
+        patch.createdDate = date.value;
+        patch.createdDatePrecision = date.precision;
+        blob.date = date.value;
+      } else {
+        patch.createdDate = undefined;
+        patch.createdDatePrecision = undefined;
+        blob.date = undefined;
+      }
+      patch.createdDateSource = "human"; // cleared = human tombstone
+      blobChanged = true;
+    }
+
+    if (args.siteName !== undefined) {
+      const site = args.siteName.trim();
+      const additional = (
+        Array.isArray(blob.additional) ? blob.additional : []
+      ).filter(
+        (entry) => (entry as Record<string, unknown> | null)?.key !== "site"
+      );
+      if (site) additional.push({ key: "site", value: site });
+      blob.additional = additional;
+      blobChanged = true;
+    }
+
+    if (args.description !== undefined) {
+      blob.summary = args.description.trim() || undefined;
+      blobChanged = true;
+    }
+
+    if (blobChanged) {
+      if (doc.metadataSource !== "human") {
+        await recordOverride(ctx, {
+          documentId: args.documentId,
+          field: "metadata",
+        });
+      }
+      patch.metadata = JSON.stringify(blob);
+      patch.metadataSource = "human";
+    }
+
+    await ctx.db.patch(args.documentId, patch);
+    return null;
   },
 });

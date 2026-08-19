@@ -38,27 +38,134 @@ function timeAgo(ms: number): string {
   return `${d} day${d === 1 ? "" : "s"} ago`;
 }
 
-/** Preview of the metadata the capture extracted from the page. */
+/** "August 19, 2026 - 1:44 PM"; date-only values omit the time part. */
+function formatDateTime(raw: string): string {
+  // A bare date must parse as local, not UTC — new Date("2021-08-07") is UTC
+  // midnight, which shifts a day west of Greenwich.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  const d = dateOnly
+    ? new Date(+dateOnly[1], +dateOnly[2] - 1, +dateOnly[3])
+    : new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const date = d.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+  if (dateOnly || !/[T ]\d{2}[:.]/.test(raw)) return date;
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${date} - ${time}`;
+}
+
+/** A human-entered date back to the YYYY-MM-DD the server stores. */
+function toServerDate(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed || /^\d{4}(-\d{2}(-\d{2})?)?$/.test(trimmed)) return trimmed;
+  const d = new Date(trimmed.replace(" - ", " "));
+  if (Number.isNaN(d.getTime())) return trimmed; // let the server reject it
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Field key = the PATCH /clip/metadata body key.
+const META_FIELDS: { key: string; label: string; multiline?: boolean }[] = [
+  { key: "title", label: "Title" },
+  { key: "author", label: "Author" },
+  { key: "siteName", label: "Site" },
+  { key: "publishedAt", label: "Published" },
+  { key: "description", label: "Summary", multiline: true },
+];
+
+let clippedDocumentId: string | undefined;
+
+/**
+ * Editable preview of the metadata the capture extracted. Edits save back to
+ * the document via PATCH /clip/metadata.
+ */
 function showMetaPreview(meta: Record<string, string | undefined>): void {
-  const rows: [string, string | undefined][] = [
-    ["Title", meta.title],
-    ["Author", meta.byline],
-    ["Site", meta.siteName],
-    ["Published", meta.publishedAt],
-    ["Summary", meta.description],
-  ];
+  const values: Record<string, string> = {
+    title: meta.title ?? "",
+    author: meta.byline ?? "",
+    siteName: meta.siteName ?? "",
+    publishedAt: meta.publishedAt ? formatDateTime(meta.publishedAt) : "",
+    description: meta.description ?? "",
+  };
+  const saveButton = document.createElement("button");
+  saveButton.id = "saveMeta";
+  saveButton.textContent = "Save changes";
+  saveButton.hidden = true;
+
   metaPreview.replaceChildren(
-    ...rows
-      .filter(([, value]) => value?.trim())
-      .flatMap(([label, value]) => {
-        const dt = document.createElement("dt");
-        dt.textContent = label;
-        const dd = document.createElement("dd");
-        dd.textContent = value!;
-        return [dt, dd];
-      })
+    ...META_FIELDS.flatMap(({ key, label, multiline }) => {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      const input = document.createElement(multiline ? "textarea" : "input");
+      input.value = values[key];
+      input.dataset.key = key;
+      input.dataset.original = values[key];
+      input.addEventListener("input", () => {
+        saveButton.hidden = false;
+        saveButton.textContent = "Save changes";
+        saveButton.disabled = false;
+      });
+      dd.appendChild(input);
+      return [dt, dd];
+    }),
+    saveButton
   );
-  metaPreview.hidden = metaPreview.childElementCount === 0;
+  saveButton.addEventListener("click", () => void saveMetaEdits(saveButton));
+  metaPreview.hidden = false;
+}
+
+/** PATCH only the fields the user actually changed. */
+async function saveMetaEdits(saveButton: HTMLButtonElement): Promise<void> {
+  if (!clippedDocumentId) return;
+  const changes: Record<string, string> = {};
+  const edited: (HTMLInputElement | HTMLTextAreaElement)[] = [];
+  for (const input of metaPreview.querySelectorAll<
+    HTMLInputElement | HTMLTextAreaElement
+  >("input, textarea")) {
+    if (input.value === input.dataset.original) continue;
+    const key = input.dataset.key!;
+    changes[key] =
+      key === "publishedAt" ? toServerDate(input.value) : input.value;
+    edited.push(input);
+  }
+  if (edited.length === 0) {
+    saveButton.hidden = true;
+    return;
+  }
+  saveButton.disabled = true;
+  saveButton.textContent = "Saving…";
+  const { endpoint } = await chrome.storage.sync.get(["endpoint"]);
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+  try {
+    const res = await fetch(`${endpoint as string}/clip/metadata`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey as string}`,
+      },
+      body: JSON.stringify({ documentId: clippedDocumentId, ...changes }),
+    });
+    if (!res.ok) {
+      const { error } = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      throw new Error(error ?? `HTTP ${res.status}`);
+    }
+    for (const input of edited) input.dataset.original = input.value;
+    saveButton.textContent = "Saved ✓";
+    setTimeout(() => {
+      saveButton.hidden = true;
+    }, 1500);
+  } catch (e) {
+    saveButton.disabled = false;
+    saveButton.textContent = `Save failed: ${e instanceof Error ? e.message : "error"} — retry`;
+  }
 }
 
 function showStatus(status: {
@@ -80,6 +187,7 @@ function showStatus(status: {
     case "done": {
       statusEl.className = "ok";
       statusEl.textContent = "✓ Clipped! ";
+      clippedDocumentId = status.documentId;
       if (status.documentId) {
         appendOpenLink(statusEl, status.documentId, "Open in Haystack");
       }
