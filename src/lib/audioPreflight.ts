@@ -1,5 +1,6 @@
 import { PROVIDER_FILE_PART_SAFE_BYTES } from "../../convex/interfazeLimits";
 import { formatBytes } from "./formatBytes";
+import { formatDuration } from "./duration";
 
 const AUDIO_EXTENSIONS = new Set([
   "aac",
@@ -118,16 +119,6 @@ function containerFromExtension(file: File): AudioContainer {
   return AUDIO_EXTENSIONS.has(ext) ? (ext as AudioContainer) : "unknown";
 }
 
-function formatDuration(seconds: number | null): string | null {
-  if (seconds === null) return null;
-  const rounded = Math.round(seconds);
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-  const remainingSeconds = rounded % 60;
-  return hours > 0
-    ? `${hours}h ${minutes}m`
-    : `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-}
 
 /** Media length via the browser's own demuxer; null when it can't decode. */
 export function readMediaDuration(

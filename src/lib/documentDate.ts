@@ -45,7 +45,7 @@ const MONTH_NAMES = [
 /** Words Analyze uses for "no date", which must not parse as one. */
 const NOT_A_DATE = /^(unknown|unspecified|none|n\/?a|n\.?d\.?|undated)$/i;
 
-interface DatedTo {
+export interface DatedTo {
   value: string;
   precision: "day" | "month" | "year";
 }
@@ -150,14 +150,17 @@ export function formatDocumentDate(doc: {
   metadata?: string;
 }): string {
   const dated = documentDateOf(doc);
-  if (!dated) return UNKNOWN_DATE_LABEL;
-  if (dated.precision === "year") return dated.value;
+  return dated ? formatDated(dated) : UNKNOWN_DATE_LABEL;
+}
 
+/** The same precision-honoring rendering for any ISO prefix + precision —
+ *  createdDate, edit-combobox candidates — not just documentDate. */
+export function formatDated(dated: DatedTo): string {
+  if (dated.precision === "year") return dated.value;
   const parsed = new Date(
     dated.precision === "month" ? `${dated.value}-01T00:00:00Z` : `${dated.value}T00:00:00Z`
   );
   if (Number.isNaN(parsed.getTime())) return UNKNOWN_DATE_LABEL;
-
   return dated.precision === "month" ? MONTH.format(parsed) : DAY.format(parsed);
 }
 
