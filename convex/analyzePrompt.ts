@@ -208,14 +208,8 @@ export function buildAnalyzePrompt(options: {
    * to the analysis-only shape.
    */
   graphExtraTypes?: { key: string; label: string; description: string }[];
-  /**
-   * True when the call sends the original file rather than page-marked OCR
-   * text — the lead sentence stops describing page markers the model will
-   * never see and asks for 1-based page numbers from the document itself.
-   */
-  fileInput?: boolean;
-  /** Recording rather than paged document: the lead asks for a time-based
-   *  table of contents (see AUDIO_TOC_CLAUSE) and drops page talk. */
+  /** Recording rather than paged document: the lead describes the transcript
+   *  format and asks for a time-based table of contents (AUDIO_TOC_CLAUSE). */
   audio?: boolean;
   /** Fields the file's own metadata already answers — see NativeMetadataOmissions. */
   omit?: NativeMetadataOmissions;
@@ -237,14 +231,8 @@ export function buildAnalyzePrompt(options: {
   const lead = options.csv
     ? "Analyze this CSV dataset: its columns, row semantics, subject, and notable structure."
     : options.audio
-      ? "Analyze the attached recording and return the requested metadata. Listen to the whole recording." +
+      ? "Analyze this recording's transcript and return the requested metadata. Each line reads '<speaker> [<N>s]: <text>', where N is the second the line starts. Read the whole transcript." +
         (omit?.tableOfContents ? "" : AUDIO_TOC_CLAUSE)
-      : options.fileInput
-      ? "Analyze the attached document and return the requested metadata. Read the entire document." +
-        (omit?.tableOfContents
-          ? ""
-          : " Build the table of contents from headings that actually appear in it, with each entry's page number as the 1-based page it starts on.") +
-        " Flag any page ranges that look like a separate document stapled into the same file."
       : "Analyze this document and return the requested metadata. The text is the document's OCR output, page by page, with each page preceded by a '--- Page N ---' marker." +
         (omit?.tableOfContents
           ? ""

@@ -24,7 +24,7 @@
  * second, text-in call (`analyzeDocumentText`) over that stored text.
  *
  * This module keeps a small set of app-facing helpers (`chatCompletion`,
- * `understandDocument`, `ocrDocument`, `analyzeDocumentText`, and
+ * `ocrDocument`, `analyzeDocumentText`, `translateUnits`, and
  * `transcribe`) so the cross-cutting concerns the app owns — usage/cost
  * logging and mapping HTTP failures onto the UI's FailureCodes — live in one
  * place.
@@ -757,68 +757,16 @@ export async function analyzeDocumentText(
   });
 }
 
-/**
- * REINSTATED (2026-08-18) — one full-model completion over the original file:
- * structured analysis (with the entity graph riding along) on `content`, and
- * the specialist output (OCR geometry / transcript) expected on `precontext`.
- *
- * An earlier version was removed with two measured objections, overturned
- * deliberately rather than forgotten:
- *
- *  - Correctness: the full model's OCR precontext was non-deterministic
- *    (duplicate entries, wrong entry count, pages collapsed onto page 1).
- *    Measured 2026-08-18: OCR precontext works again on healthy documents
- *    (it is empty only for files hit by the provider's `empty_ocr_response`
- *    bug), while STT precontext arrives without speaker labels. Both gaps are
- *    reported to Interfaze; callers shim what is missing from the dedicated
- *    task (see processingStages.runPipeline), so neither absence nor the old
- *    non-determinism can bite.
- *  - Cost: ~$0.18 a call against ~$0.037 for task + text-Analyze. Accepted:
- *    the merged call replaces Analyze + relationships + rename in one request,
- *    and the decision (2026-08-18) is to buy the simpler architecture and
- *    watch the measured cost in apiLogs rather than assume it.
+/*
+ * RETIRED (2026-08-19): `understandDocument`, the merged file-in completion
+ * (analysis on `content`, OCR/transcript expected on `precontext`). Removed
+ * for the second and final time: the precontext ride-along it was priced on
+ * arrives empty (reported provider bug), so every document paid for the
+ * merged call AND the dedicated task shim. Measured medians at removal:
+ * $0.27/call merged vs ~$0.08 for task + text-in analyze. The pipeline is
+ * task-first now — see docs/split-pipeline-spec.md; git history has the
+ * implementation and the original reinstatement rationale.
  */
-export async function understandDocument(
-  fileUrl: string,
-  filename: string,
-  apiKey: string,
-  options: {
-    systemPrompt: string;
-    prompt: string;
-    responseSchema: { name: string; schema: Record<string, unknown> };
-    log?: UsageLogger;
-    bypassCache?: boolean;
-  }
-): Promise<ChatResult> {
-  return chatCompletion(apiKey, {
-    systemPrompt: options.systemPrompt,
-    content: [
-      { type: "text", text: options.prompt },
-      fileUrlContent(fileUrl, filename),
-    ],
-    responseSchema: options.responseSchema,
-    bypassCache: options.bypassCache,
-    usage: options.log
-      ? {
-          log: options.log,
-          operation: "understand",
-          // Same arithmetic geometry check ocrDocument runs, over the pages
-          // this call's own precontext carries — so the main path's accuracy
-          // rate lands on its apiLogs row, not just the shim's.
-          quality: ({ precontext }) => {
-            const pages = ocrPrecontextToPages(
-              precontext.filter((p) => p.name === "ocr")
-            );
-            if (pages.length === 0) return undefined;
-            const { checked, violations, byKind } = checkGeometry(pages);
-            return { checked, violations, byKind };
-          },
-        }
-      : undefined,
-  });
-}
-
-
 // ---------------------------------------------------------------------------
 // Transcribe — audio/video → diarized segments with word-level timestamps,
 // via the dedicated `speech_to_text` task.
@@ -851,10 +799,14 @@ export async function understandDocument(
 export async function transcribe(
   fileUrl: string,
   apiKey: string,
-  log?: UsageLogger
+  log?: UsageLogger,
+  options?: { bypassCache?: boolean }
 ): Promise<TranscriptResult> {
   const { content, completionTokens } = await chatCompletion(apiKey, {
     task: "speech_to_text",
+    // A user re-transcribing wants a fresh pass, not the verified cache
+    // replaying the transcription they are trying to escape.
+    bypassCache: options?.bypassCache,
     usage: log ? { log, operation: "transcribe" } : undefined,
     content: [
       {

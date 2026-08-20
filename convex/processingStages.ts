@@ -12,13 +12,9 @@ import {
   ocrDocument,
   analyzeDocumentText,
   transcribe,
-  understandDocument,
-  ocrPrecontextToPages,
-  chunksToSegments,
   failureCodeOf,
 } from "./interfaze";
-import type { OcrPageResult, Precontext } from "./interfaze";
-import type { SttTaskResult } from "./interfazeStt";
+import type { OcrPageResult } from "./interfaze";
 import { normalizeGraphResponse } from "./relationships";
 import type { GraphResponse } from "./relationships";
 import {
@@ -155,10 +151,9 @@ async function projectTaxonomy(
 }
 
 /**
- * Build the understanding request — system prompt, user prompt, and schema —
- * for either input shape. One home, so the file-in and text-in calls cannot
- * drift: the only branch is `fileInput`, which changes the prompt's lead
- * sentence and nothing else.
+ * Build the understanding request — system prompt, user prompt, and schema.
+ * One home for every analyze call, so first-pass and re-run requests cannot
+ * drift.
  */
 async function understandingRequest(
   ctx: ActionCtx,
@@ -169,7 +164,6 @@ async function understandingRequest(
     categories: Doc<"documentCategories">[];
     fileName?: string;
     promptOverride?: string;
-    fileInput?: boolean;
     /** Recording rather than paged document: the table of contents is asked
      *  for by start time in seconds instead of page number. */
     audio?: boolean;
@@ -220,7 +214,6 @@ async function understandingRequest(
         categories: categoryDefs,
         fileName: options.fileName,
         graphExtraTypes: extraTypes,
-        fileInput: options.fileInput,
         audio: options.audio,
         omit,
         askCreatedDate: options.askCreatedDate,
@@ -442,23 +435,17 @@ async function requireFileUrl(
 
 
 // ---------------------------------------------------------------------------
-// The merged pipeline: one full-model call per document.
+// The task-first pipeline: extraction and understanding are separate calls.
 //
-// Structured analysis (metadata + title + language + entity graph) arrives on
-// `content`; the specialist output (OCR geometry for documents, the transcript
-// for recordings) is expected on `precontext` per the provider's docs. As of
-// 2026-08-18 precontext comes back empty on every full-model call — reported
-// to Interfaze as a bug — so the geometry is shimmed from the dedicated task
-// at exactly one seam below. The shim's task call logs its own apiLogs row,
-// which is how we will see the day their fix lands: the `ocr`/`transcribe`
-// rows disappear and only `understand` remains.
+// The dedicated task (`ocr` for paged documents, `speech_to_text` for
+// recordings) is the only call that ever sends the original file, and its
+// payload — text, geometry, word timestamps — becomes the stored ground
+// truth. Understanding is then the same text-in `analyze` call every re-run
+// uses, over that stored text. One representation, priced once, re-analyzable
+// for the cost of the text call alone (measured medians at the split:
+// task+analyze ~$0.08/document vs $0.27 for the retired merged call — see
+// docs/split-pipeline-spec.md).
 // ---------------------------------------------------------------------------
-
-/** Read the specialist entry off precontext, if the provider sent one. */
-function precontextResult<T>(precontext: Precontext[], name: string): T | undefined {
-  const entry = precontext.find((p) => p.name === name);
-  return entry?.result as T | undefined;
-}
 
 export const runPipeline = internalAction({
   args: {
@@ -552,49 +539,17 @@ export const runPipeline = internalAction({
         }
       }
 
-      // --- The one call ----------------------------------------------------
-      const result = await understandDocument(fileUrl, document.name, apiKey, {
-        ...(await understandingRequest(ctx, {
-          projectId: document.projectId,
-          csv,
-          kindNames,
-          categories,
-          fileName: document.name,
-          fileInput: true,
-          audio: isRecording,
-          // A partially-native PDF still preempts the fields its own file
-          // metadata answers, even though the text goes through OCR.
-          sourceMetadata: document.sourceMetadata,
-          omitTableOfContents: document.mediaType === "webScrape",
-          askCreatedDate:
-            document.mediaType === "webScrape" &&
-            !document.sourceMetadata?.createdDate,
-        })),
-        log,
-        bypassCache: args.bypassCache,
-      });
-
-      // --- Text + geometry: precontext, or the task-call shim --------------
+      // --- Extraction: the one call that sends the file --------------------
       let parsedPages: OcrPageResult[];
-      let transcriptSegments: ReturnType<typeof chunksToSegments> | null = null;
+      let transcriptSegments:
+        | Awaited<ReturnType<typeof transcribe>>["segments"]
+        | null = null;
       if (isRecording) {
-        const stt = precontextResult<SttTaskResult>(
-          result.precontext,
-          "speech_to_text"
-        ) ?? // The provider's docs name this entry "stt" in their own example
-          // while the task is "speech_to_text" — accept both spellings.
-          precontextResult<SttTaskResult>(result.precontext, "stt");
-        // Measured 2026-08-18: the merged call's STT precontext arrives without
-        // per-chunk speaker labels, so an hour of interview collapsed into one
-        // "Speaker 1" segment. Diarization is the transcript UI's structure —
-        // trust precontext only when it actually carries speakers, else pay for
-        // the task call, which does.
-        const diarized = stt?.chunks?.some((c) => c.speaker) ?? false;
-        const segments = stt && diarized ? chunksToSegments(stt.chunks ?? []) : [];
-        transcriptSegments =
-          segments.length > 0
-            ? segments
-            : (await transcribe(fileUrl, apiKey, log)).segments;
+        transcriptSegments = (
+          await transcribe(fileUrl, apiKey, log, {
+            bypassCache: args.bypassCache,
+          })
+        ).segments;
         const transcriptText = transcriptSegments
           .map((s) => `${s.speaker} [${Math.round(s.start)}s]: ${s.text}`)
           .join("\n\n");
@@ -613,18 +568,12 @@ export const runPipeline = internalAction({
       } else if (csv) {
         parsedPages = await csvSearchPages(ctx, document);
       } else {
-        const fromPrecontext = ocrPrecontextToPages(
-          result.precontext.filter((p) => p.name === "ocr")
-        );
-        parsedPages =
-          fromPrecontext.length > 0
-            ? fromPrecontext
-            : (
-                await ocrDocument(fileUrl, document.name, apiKey, {
-                  log,
-                  bypassCache: args.bypassCache,
-                })
-              ).pages;
+        parsedPages = (
+          await ocrDocument(fileUrl, document.name, apiKey, {
+            log,
+            bypassCache: args.bypassCache,
+          })
+        ).pages;
       }
 
       if (parsedPages.length === 0) {
@@ -689,8 +638,27 @@ export const runPipeline = internalAction({
         status: "parsed",
       });
 
-      // --- Metadata + graph, off the same response -------------------------
-      await persistUnderstanding(ctx, args.documentId, result.content);
+      // --- Understanding: text-in over the text just stored ----------------
+      await analyzeAndStore(ctx, {
+        documentId: args.documentId,
+        projectId: document.projectId,
+        pageTexts: parsedPages.map((page) => page.text),
+        apiKey,
+        csv,
+        audio: isRecording,
+        kindNames,
+        categories,
+        log,
+        bypassCache: args.bypassCache,
+        fileName: document.name,
+        // A partially-native PDF still preempts the fields its own file
+        // metadata answers, even though the text went through OCR.
+        sourceMetadata: document.sourceMetadata,
+        omitTableOfContents: document.mediaType === "webScrape",
+        askCreatedDate:
+          document.mediaType === "webScrape" &&
+          !document.sourceMetadata?.createdDate,
+      });
 
       await ctx.runMutation(internal.processing.updateJobStatus, {
         documentId: args.documentId,
