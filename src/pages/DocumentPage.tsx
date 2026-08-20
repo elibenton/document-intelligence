@@ -65,7 +65,7 @@ import {
 import { ENTITY_TYPE_LABELS, entityTypeKey } from "@/lib/views/entityProperties";
 import { entitySlug } from "@/lib/entitySlug";
 import { useProjectSlug } from "@/hooks/useProjectSlug";
-import { DocTypePills } from "@/components/documents/DocTypePills";
+import { DocumentTypeEditor } from "@/components/documents/DocTypeEditor";
 import { ProjectSearchDialog } from "@/components/search/ProjectSearchDialog";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
@@ -778,12 +778,11 @@ export default function DocumentPage({ id }: { id: string }) {
                 )}
             <ViewerMetaBar document={document} />
           </div>
-          <DocTypePills
-            projectId={document.projectId}
-            primaryCategory={document.primaryCategory}
-            primaryKind={document.primaryKind}
-            className="shrink-0"
-          />
+          {/* The pills open the same category/kind picker the library chips
+              use — hover shows the ring, click swaps either value. */}
+          <span className="shrink-0">
+            <DocumentTypeEditor document={document} />
+          </span>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
