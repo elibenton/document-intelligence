@@ -62,12 +62,21 @@ export const saveMetadataResult = internalMutation({
     // the only one there is. Stored sanitized at commit, so used as-is here.
     const native = document.sourceMetadata;
 
-    const toc = native?.tableOfContents?.length
-      ? native.tableOfContents
-      : sanitizeTableOfContents(parsed.table_of_contents, document.pageCount, {
-          audio:
-            document.mediaType === "audio" || document.mediaType === "video",
-        });
+    // Web clips never store an outline. The request schema already deletes
+    // table_of_contents for them, but structured output is not strict — the
+    // model can volunteer the field anyway (observed 2026-08-19 on a
+    // heading-dense court order: fresh call, omitted schema, 27-entry outline
+    // in the response). An omission enforced only on the request side isn't
+    // enforced; the persist side is the door.
+    const toc =
+      document.mediaType === "webScrape"
+        ? undefined
+        : native?.tableOfContents?.length
+          ? native.tableOfContents
+          : sanitizeTableOfContents(parsed.table_of_contents, document.pageCount, {
+              audio:
+                document.mediaType === "audio" || document.mediaType === "video",
+            });
 
 
     const documentDate = sanitizeDocumentDate(parsed.document_date, Date.now());

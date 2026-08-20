@@ -222,3 +222,32 @@ export const reclipFromArchive = internalAction({
     return null;
   },
 });
+
+/**
+ * Clear stored outlines from web clips. Clips never store a table of
+ * contents, but before saveMetadataResult enforced that at persist time the
+ * model could volunteer the field past the omitted request schema, and a few
+ * clips kept the result. One-shot sweep:
+ *
+ *   npx convex run backfill:clearClipOutlines
+ */
+export const clearClipOutlines = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("documents")
+      .paginate({ numItems: 200, cursor: args.cursor ?? null });
+    for (const doc of page.page) {
+      if (doc.mediaType === "webScrape" && doc.tableOfContents?.length) {
+        await ctx.db.patch(doc._id, { tableOfContents: undefined });
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.backfill.clearClipOutlines, {
+        cursor: page.continueCursor,
+      });
+    }
+    return null;
+  },
+});
