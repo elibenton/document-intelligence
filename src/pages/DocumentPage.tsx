@@ -14,6 +14,7 @@ import {
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc } from "../../convex/_generated/dataModel";
+import { languageName } from "@/lib/languages";
 import {
   PdfViewer,
   type ActiveAnnotation,
@@ -117,7 +118,7 @@ export default function DocumentPage({ id }: { id: string }) {
   const translatedPages = useQuery(api.translations.pagesByDocument, {
     documentId,
   });
-  const retryTranslation = useMutation(api.translations.retry);
+  const startTranslation = useMutation(api.translations.start);
   const rotateDocument = useMutation(api.documents.rotateDocument);
   const updateIdentity = useMutation(api.documents.updateIdentity);
   const runSuggestedExtraction = useAction(api.suggestedEntities.runExtraction);
@@ -794,9 +795,29 @@ export default function DocumentPage({ id }: { id: string }) {
               variant="outline"
               size="sm"
               title={document.translationError}
-              onClick={() => void retryTranslation({ documentId })}
+              onClick={() => void startTranslation({ documentId })}
             >
               Retry translation
+            </Button>
+          )}
+          {document.translationStatus === "offer" && (
+            <Button
+              variant="outline"
+              size="sm"
+              title={`Detected language: ${languageName(document.sourceLanguageCode)}`}
+              onClick={() => void startTranslation({ documentId })}
+            >
+              Translate to {languageName(document.translationLanguageCode)}
+            </Button>
+          )}
+          {document.translationStatus === "unknown_language" && (
+            <Button
+              variant="outline"
+              size="sm"
+              title="The document's language could not be detected"
+              onClick={() => void startTranslation({ documentId, force: true })}
+            >
+              Translate anyway
             </Button>
           )}
           {hasTranslatedContent && (

@@ -9,6 +9,10 @@ import { languageForDocument, languageForProject } from "./settings";
 import { requireBudget } from "./budget";
 import { translateUnits } from "./interfaze";
 import { usageLogger } from "./apiLogs";
+import {
+  normalizeLanguageCode,
+  translationDecision,
+} from "./translationGate";
 
 const MAX_TRANSLATED_PAGES_PER_DOCUMENT = 2_000;
 
@@ -153,18 +157,63 @@ export const setSourceLanguage = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const sourceLanguageCode = args.sourceLanguageCode
-      .trim()
-      .toLowerCase()
-      .replaceAll("_", "-");
-    if (/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(sourceLanguageCode)) {
-      await ctx.db.patch(args.documentId, {
-        sourceLanguageCode,
-        ...(args.sourceLanguageIsMixed === undefined
-          ? {}
-          : { sourceLanguageIsMixed: args.sourceLanguageIsMixed }),
-      });
-    }
+    // Detection state must always be determinate: a code that doesn't parse
+    // is written as "und" (known-unknown), never silently skipped — an
+    // unwritten field used to leave the old skip gate permanently un-armable.
+    const sourceLanguageCode =
+      normalizeLanguageCode(args.sourceLanguageCode) ?? "und";
+    await ctx.db.patch(args.documentId, {
+      sourceLanguageCode,
+      ...(args.sourceLanguageIsMixed === undefined
+        ? {}
+        : { sourceLanguageIsMixed: args.sourceLanguageIsMixed }),
+    });
+    return null;
+  },
+});
+
+/**
+ * Classify the document against its owner's default language and stamp the
+ * result as a translation status: "offer", "not_needed", or
+ * "unknown_language". Stamping is the ONLY thing detection does — translation
+ * itself is prompt-only and starts exclusively from translations.start.
+ *
+ * Never disturbs a lifecycle the user is already looking at: an in-flight
+ * run, a failure awaiting their retry, or a completed translation that is
+ * still current all win over a re-stamp.
+ */
+export const stampDecision = internalMutation({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const document = await ctx.db.get(args.documentId);
+    if (!document) return null;
+    const { defaultLanguageCode, translationVersion } =
+      await languageForDocument(ctx, args.documentId);
+    const currentLifecycle =
+      document.translationLanguageCode === defaultLanguageCode &&
+      document.translationVersion === translationVersion &&
+      (document.translationStatus === "queued" ||
+        document.translationStatus === "translating" ||
+        document.translationStatus === "failed" ||
+        document.translationStatus === "complete");
+    if (currentLifecycle) return null;
+    const decision = translationDecision({
+      sourceLanguageCode: document.sourceLanguageCode,
+      sourceLanguageIsMixed: document.sourceLanguageIsMixed,
+      targetLanguageCode: defaultLanguageCode,
+    });
+    await ctx.db.patch(args.documentId, {
+      translationLanguageCode: defaultLanguageCode,
+      translationStatus:
+        decision === "offer"
+          ? "offer"
+          : decision === "not_needed"
+            ? "not_needed"
+            : "unknown_language",
+      translationError: undefined,
+      translationVersion,
+    });
     return null;
   },
 });
@@ -202,6 +251,16 @@ export const beginTranslation = internalMutation({
     }
     const document = await ctx.db.get(args.documentId);
     if (!document) return false;
+    // A lifecycle that already finished for this exact language + version
+    // stays finished: without this, any repeat scheduling re-walked the
+    // document and flipped the UI back to "translating".
+    if (
+      document.translationStatus === "complete" &&
+      document.translationLanguageCode === args.languageCode &&
+      document.translationVersion === args.translationVersion
+    ) {
+      return false;
+    }
     await ctx.db.patch(args.documentId, {
       translationLanguageCode: args.languageCode,
       translationStatus: "translating",
@@ -238,6 +297,7 @@ export const queueTranslation = internalMutation({
     documentId: v.id("documents"),
     languageCode: v.string(),
     translationVersion: v.number(),
+    force: v.optional(v.boolean()),
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
@@ -256,38 +316,9 @@ export const queueTranslation = internalMutation({
       documentId: args.documentId,
       languageCode: args.languageCode,
       translationVersion: args.translationVersion,
+      force: args.force,
     });
     return true;
-  },
-});
-
-export const markNotNeeded = internalMutation({
-  args: {
-    documentId: v.id("documents"),
-    languageCode: v.string(),
-    translationVersion: v.number(),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    if (!(await isCurrent(ctx, args.documentId, args.languageCode, args.translationVersion))) {
-      return null;
-    }
-    await ctx.db.patch(args.documentId, {
-      translationLanguageCode: args.languageCode,
-      translationStatus: "not_needed",
-      translationError: undefined,
-      translationVersion: args.translationVersion,
-    });
-    const job = await ctx.db
-      .query("processingJobs")
-      .withIndex("by_document", (q) =>
-        q.eq("documentId", args.documentId).eq("stage", "translate")
-      )
-      .unique();
-    if (job) {
-      await ctx.db.patch(job._id, { status: "completed", completedAt: Date.now() });
-    }
-    return null;
   },
 });
 
@@ -529,35 +560,44 @@ export const pagesByDocument = authedQuery({
   },
 });
 
-export const retry = authedMutation({
-  args: { documentId: v.id("documents") },
+/**
+ * The ONLY way a translation run starts — translation is prompt-only, so a
+ * user click is what spends. Legal from "offer", "unknown_language", "failed",
+ * or a stale lifecycle; refuses "not_needed" unless the caller forces it.
+ */
+export const start = authedMutation({
+  args: {
+    documentId: v.id("documents"),
+    force: v.optional(v.boolean()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireBudget(ctx, ctx.user._id);
-    await requireDocument(ctx, args.documentId);
+    const document = await requireDocument(ctx, args.documentId);
     const { defaultLanguageCode: languageCode, translationVersion } =
       await languageForDocument(ctx, args.documentId);
+    const decision = translationDecision({
+      sourceLanguageCode: document.sourceLanguageCode,
+      sourceLanguageIsMixed: document.sourceLanguageIsMixed,
+      targetLanguageCode: languageCode,
+    });
+    if (decision === "not_needed" && !args.force) {
+      throw new Error(
+        "Translation not needed — the document is already in your language"
+      );
+    }
     await ctx.runMutation(internal.translations.queueTranslation, {
       documentId: args.documentId,
       languageCode,
       translationVersion,
+      // The click IS the consent; the in-run gate must not second-guess it.
+      force: true,
     });
     return null;
   },
 });
 
 const MAX_CHUNK_CHARS = 12_000;
-
-function normalizeLanguageCode(value: string | undefined): string | undefined {
-  const code = value?.trim().toLowerCase().replaceAll("_", "-");
-  if (!code || !/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(code)) return undefined;
-  return code;
-}
-
-function languageMatches(source: string | undefined, target: string): boolean {
-  if (!source || source === "und") return false;
-  return source === target || source.split("-")[0] === target.split("-")[0];
-}
 
 /** Small deterministic fingerprint; used only to invalidate derived text. */
 function fingerprint(text: string): string {
@@ -609,6 +649,7 @@ export const translateDocument = internalAction({
     pageOffset: v.optional(v.number()),
     afterSegmentIndex: v.optional(v.number()),
     started: v.optional(v.boolean()),
+    force: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -628,15 +669,13 @@ export const translateDocument = internalAction({
     }
 
     const sourceLanguageCode = normalizeLanguageCode(context.sourceLanguageCode);
-    if (
-      !args.started &&
-      context.sourceLanguageIsMixed === false &&
-      languageMatches(sourceLanguageCode, languageCode)
-    ) {
-      await ctx.runMutation(internal.translations.markNotNeeded, {
+    // Safety net only: translation is prompt-only, so every non-continuation
+    // arrival here carries force from translations.start. An unforced call
+    // (a stale scheduled run from before the model changed) is classified and
+    // stamped instead of spending.
+    if (!args.started && !args.force) {
+      await ctx.runMutation(internal.translations.stampDecision, {
         documentId: args.documentId,
-        languageCode,
-        translationVersion,
       });
       return null;
     }

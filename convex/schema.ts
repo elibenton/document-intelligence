@@ -358,7 +358,11 @@ export default defineSchema({
         v.literal("translating"),
         v.literal("complete"),
         v.literal("not_needed"),
-        v.literal("failed")
+        v.literal("failed"),
+        // Prompt-only lifecycle: detection stamps one of these two, and only
+        // a user click (translations.start) turns either into a real run.
+        v.literal("offer"),
+        v.literal("unknown_language")
       )
     ),
     translationError: v.optional(v.string()),
@@ -1182,7 +1186,15 @@ export default defineSchema({
         })
       )
     ),
-    answer: v.optional(v.string()), // markdown, cites sources as [n]
+    // Which synthesis engine(s) the run used: "interfaze" | "cohere" | "both".
+    // Absent on rows written before the A/B test existed (= interfaze).
+    engine: v.optional(v.string()),
+    answer: v.optional(v.string()), // Interfaze markdown, cites sources as [n]
+    // Command A+ answer, same [n] markers into `results`. Deliberately no
+    // verification for it: Cohere's citations are generated in-model, and
+    // whether that holds up without the post-hoc rejector is what the A/B
+    // test measures (convex/cohere.ts).
+    cohereAnswer: v.optional(v.string()),
     // What retrieval actually had to work with. Two different silences are
     // being broken here: how much of the matching corpus the answer was
     // written from (the SYNTHESIS_PAGES cut is lossy and was invisible), and

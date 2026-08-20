@@ -1,4 +1,4 @@
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -6,6 +6,7 @@ import type { Id } from "./_generated/dataModel";
 import { authedMutation, authedQuery } from "./authz";
 import { ownedProjects } from "./ownership";
 import { requireBudget } from "./budget";
+import { translationDecision } from "./translationGate";
 
 const DEFAULT_LANGUAGE_CODE = "en";
 const BACKFILL_BATCH_SIZE = 12;
@@ -93,13 +94,6 @@ export const get = authedQuery({
   handler: async (ctx) => await languageForOwner(ctx, ctx.user._id),
 });
 
-/** The pipeline's read, resolved from the document rather than the caller. */
-export const forDocumentInternal = internalQuery({
-  args: { documentId: v.id("documents") },
-  returns: settingsResultValidator,
-  handler: async (ctx, args) => await languageForDocument(ctx, args.documentId),
-});
-
 export const updateDefaultLanguage = authedMutation({
   args: { languageCode: v.string() },
   returns: settingsResultValidator,
@@ -144,8 +138,14 @@ export const updateDefaultLanguage = authedMutation({
 });
 
 /**
- * Queue a re-translation of everything this user owns, a page of rows at a
- * time, walking their projects one after another.
+ * Re-classify everything this user owns against the new default language, a
+ * page of rows at a time, walking their projects one after another.
+ *
+ * Classification only — translation is prompt-only, so a language change
+ * never queues a paid run. Documents in another language flip to "offer" (a
+ * prompt in the UI); already-matching documents flip to "not_needed".
+ * Existing pageTranslations are kept: if the user later clicks translate, the
+ * sourceFingerprint cache reuses whatever still matches. Zero API calls.
  *
  * Two levels of iteration rather than one: documents are only reachable per
  * project through `by_project`, and scanning the whole table to filter would
@@ -183,9 +183,20 @@ export const backfillTranslations = internalMutation({
       .paginate({ numItems: BACKFILL_BATCH_SIZE, cursor: args.cursor });
 
     for (const document of page.page) {
-      await ctx.runMutation(internal.translations.queueTranslation, {
-        documentId: document._id,
-        languageCode: args.languageCode,
+      const decision = translationDecision({
+        sourceLanguageCode: document.sourceLanguageCode,
+        sourceLanguageIsMixed: document.sourceLanguageIsMixed,
+        targetLanguageCode: args.languageCode,
+      });
+      await ctx.db.patch(document._id, {
+        translationLanguageCode: args.languageCode,
+        translationStatus:
+          decision === "offer"
+            ? "offer"
+            : decision === "not_needed"
+              ? "not_needed"
+              : "unknown_language",
+        translationError: undefined,
         translationVersion: args.translationVersion,
       });
     }

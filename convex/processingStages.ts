@@ -98,31 +98,20 @@ async function csvSearchPages(
   });
 }
 
-/** Translation is derived and must never turn a successful parse into a
- * failed source document. Queueing errors are surfaced on the translation
- * lifecycle when a retry is attempted, while the canonical source stays live. */
-async function scheduleTranslation(
+/** Translation is prompt-only: the pipeline never schedules a translate
+ * call. It only re-classifies the document against the owner's default
+ * language so the UI can show (or clear) the translate prompt. Classification
+ * is derived state and must never turn a successful parse into a failed
+ * source document, hence the swallow. */
+async function stampTranslationDecision(
   ctx: ActionCtx,
   documentId: Id<"documents">
 ): Promise<void> {
   try {
-    // Resolved from the document rather than from a deployment-wide row: the
-    // target language belongs to whoever owns it, and the scheduler this runs
-    // under carries no identity to ask.
-    const translationSettings: {
-      defaultLanguageCode: string;
-      translationVersion: number;
-    } = await ctx.runQuery(internal.settings.forDocumentInternal, {
-      documentId,
-    });
-    await ctx.scheduler.runAfter(0, internal.translations.translateDocument, {
-      documentId,
-      languageCode: translationSettings.defaultLanguageCode,
-      translationVersion: translationSettings.translationVersion,
-    });
+    await ctx.runMutation(internal.translations.stampDecision, { documentId });
   } catch (error) {
     console.error(
-      "Failed to queue derived translation:",
+      "Failed to stamp translation decision:",
       error instanceof Error ? error.message : String(error)
     );
   }
@@ -428,16 +417,12 @@ export const runAnalyze = internalAction({
         errorMessage: stageMessage("Analyze", e, msg),
       });
     } finally {
-      // Queued here rather than by the Scan that enqueued this stage, because
-      // the skip gate needs `sourceLanguageCode` + `sourceLanguageIsMixed` and
-      // Analyze is what writes them.
-      //
-      // In a `finally` because a document whose Analyze failed must still get
-      // translated — it just gets translated without the hint, the way every
-      // document used to. Re-running Analyze re-queues it harmlessly:
-      // translations.beginTranslation returns false for a lifecycle that has
-      // already started, so a repeat is one query and an early return.
-      await scheduleTranslation(ctx, args.documentId);
+      // In a `finally` because the classification must be determinate either
+      // way: success stamps offer/not_needed from the detected language, and
+      // a failed Analyze stamps unknown_language so the UI can offer a manual
+      // "translate anyway" instead of showing a phantom failure. Stamping
+      // never starts a run — translation is prompt-only.
+      await stampTranslationDecision(ctx, args.documentId);
     }
     return null;
   },
@@ -734,9 +719,9 @@ export const runPipeline = internalAction({
         });
       }
     } finally {
-      // Translation is derived and survives an enrichment failure; the skip
-      // gate reads the language fields written above when they exist.
-      if (textStored) await scheduleTranslation(ctx, args.documentId);
+      // Classification survives an enrichment failure: with text stored the
+      // user can be offered (or spared) a translation either way.
+      if (textStored) await stampTranslationDecision(ctx, args.documentId);
     }
     return null;
   },

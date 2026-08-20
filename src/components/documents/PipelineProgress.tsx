@@ -179,6 +179,12 @@ export function PipelineProgress({
         return `Translated to ${languageName(document.translationLanguageCode)}`;
       case "failed":
         return "Translation failed";
+      // Prompt-only states: the translate button lives in the document
+      // header; the note here just says why no translation exists yet.
+      case "offer":
+        return `${languageName(document.sourceLanguageCode)} — translation available`;
+      case "unknown_language":
+        return "Language unknown";
       default:
         return undefined;
     }

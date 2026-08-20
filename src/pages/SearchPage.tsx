@@ -19,12 +19,28 @@ import { entitySlug } from "@/lib/entitySlug";
 import { useProjectSlug } from "@/hooks/useProjectSlug";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 
 const STAGES = [
   { key: "planning", label: "Understanding the question" },
   { key: "searching", label: "Searching text, meaning & connections" },
   { key: "synthesizing", label: "Composing a cited answer" },
 ] as const;
+
+/** Which synthesis engine(s) answer — the A/B test control. Retrieval and
+ *  ranked results are identical either way. */
+type Engine = "interfaze" | "cohere" | "both";
+
+const ENGINE_ITEMS: { value: Engine; label: string }[] = [
+  { value: "interfaze", label: "Interfaze" },
+  { value: "cohere", label: "Cohere A+" },
+  { value: "both", label: "Both (A/B)" },
+];
+
+// New questions run both engines unless the URL or the picker says otherwise.
+function parseEngine(value: string | null): Engine {
+  return value === "cohere" || value === "interfaze" ? value : "both";
+}
 
 export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -40,6 +56,11 @@ export default function SearchPage() {
   useSearchHotkey(useCallback(() => setSearchFocus((n) => n + 1), []));
 
   const start = useMutation(api.search.start);
+  // The engine for the *next* run this page starts. Seeds from ?engine= so a
+  // deep link can pick the B side; loaded searches label their own answers.
+  const [engine, setEngine] = useState<Engine>(() =>
+    parseEngine(searchParams.get("engine"))
+  );
   // Tagged with the query it was started for, so a run belonging to a previous
   // q is discarded during render instead of being cleared by a setState in the
   // effect below.
@@ -50,26 +71,52 @@ export default function SearchPage() {
   useEffect(() => {
     if (idParam || !q || !projectParam || startedFor.current === q) return;
     startedFor.current = q;
-    void start({ query: q, projectId: projectParam }).then((id) => {
+    void start({ query: q, projectId: projectParam, engine }).then((id) => {
       setStarted({ q, id });
       setSearchParams({ id }, { replace: true });
     });
-  }, [idParam, q, projectParam, start, setSearchParams]);
+  }, [idParam, q, projectParam, start, setSearchParams, engine]);
 
   const startedId = started && started.q === q ? started.id : null;
   const searchId = idParam ?? startedId;
   const search = useQuery(api.search.get, searchId ? { id: searchId } : "skip");
+  // When a stored search loads, point the picker at what it actually ran —
+  // once per row, during render, so the user's next pick isn't fought over.
+  const [seenSearchId, setSeenSearchId] = useState<Id<"searches"> | null>(null);
+  if (search && search._id !== seenSearchId) {
+    setSeenSearchId(search._id);
+    if (
+      search.engine === "interfaze" ||
+      search.engine === "cohere" ||
+      search.engine === "both"
+    ) {
+      setEngine(search.engine);
+    }
+  }
   const queryText = search?.query ?? q;
   // Project context: from the loaded search row, else the URL
   const projectId = search?.projectId ?? projectParam ?? null;
   const projectSlug = useProjectSlug(projectId);
 
-  async function rerun() {
+  async function startWith(nextEngine: Engine, force: boolean) {
     if (!queryText || !projectId) return;
     startedFor.current = queryText;
-    const id = await start({ query: queryText, projectId, force: true });
+    const id = await start({
+      query: queryText,
+      projectId,
+      force,
+      engine: nextEngine,
+    });
     setStarted({ q: queryText, id });
     setSearchParams({ id }, { replace: true });
+  }
+
+  // Swapping the engine on a loaded question shows that engine's answer for
+  // the same query: instantly when it already ran (start returns the cached
+  // row), as a fresh run when it hasn't.
+  function changeEngine(next: Engine) {
+    setEngine(next);
+    void startWith(next, false);
   }
 
   const stageIndex = search
@@ -112,15 +159,23 @@ export default function SearchPage() {
                   <span className="truncate">{queryText}</span>
                 </h1>
                 {search?.status === "completed" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void rerun()}
-                    className="ml-auto shrink-0"
-                    title="Run this search again with fresh results"
-                  >
-                    <RefreshCw className="size-3" /> Re-run
-                  </Button>
+                  <div className="ml-auto flex shrink-0 items-center gap-2">
+                    <Select
+                      value={engine}
+                      onValueChange={changeEngine}
+                      items={ENGINE_ITEMS}
+                      aria-label="Synthesis engine"
+                      className="h-8"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void startWith(engine, true)}
+                      title="Run this search again with fresh results"
+                    >
+                      <RefreshCw className="size-3" /> Re-run
+                    </Button>
+                  </div>
                 )}
               </div>
 
@@ -185,15 +240,40 @@ export default function SearchPage() {
                 </div>
               )}
 
-              {/* Answer */}
-              {search?.answer ? (
-                <ResearchAnswerWithEvidence
-                  answer={search.answer}
-                  results={search.results ?? []}
-                  projectId={projectId}
-                  verification={search.verification ?? null}
-                  retrieval={search.retrieval ?? null}
-                />
+              {/* Answer(s) — two labeled sections when the A/B ran both engines */}
+              {search?.answer || search?.cohereAnswer ? (
+                <div className="space-y-10">
+                  {search.answer && (
+                    <section>
+                      {search.cohereAnswer && (
+                        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Interfaze · citations verified post-hoc
+                        </h2>
+                      )}
+                      <ResearchAnswerWithEvidence
+                        answer={search.answer}
+                        results={search.results ?? []}
+                        projectId={projectId}
+                        verification={search.verification ?? null}
+                        retrieval={search.retrieval ?? null}
+                      />
+                    </section>
+                  )}
+                  {search.cohereAnswer && (
+                    <section>
+                      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Cohere Command A+ · citations in-model, unverified
+                      </h2>
+                      <ResearchAnswerWithEvidence
+                        answer={search.cohereAnswer}
+                        results={search.results ?? []}
+                        projectId={projectId}
+                        verification={null}
+                        retrieval={search.retrieval ?? null}
+                      />
+                    </section>
+                  )}
+                </div>
               ) : search?.status === "synthesizing" ? (
                 <div className="max-w-3xl space-y-2 mb-8">
                   <Skeleton className="h-4 w-full" />

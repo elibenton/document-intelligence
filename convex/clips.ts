@@ -4,6 +4,11 @@ import { internal } from "./_generated/api";
 import { sanitizeNativeDate } from "./nativeDate";
 import { recordOverride } from "./apiLogs";
 import { cleanPdfAuthor } from "./pdfNativeMetadata";
+import { languageForProject } from "./settings";
+import {
+  normalizeLanguageCode,
+  translationDecision,
+} from "./translationGate";
 
 // ---------------------------------------------------------------------------
 // Web clip ingestion. The extension already parsed the page (Readability →
@@ -168,6 +173,17 @@ export const createFromClip = internalMutation({
     // scrape), so they land on the live columns as "native" and in
     // sourceMetadata, which survives every later Analyze run and human edit.
     const createdDate = sanitizeNativeDate(args.publishedAt, Date.now());
+    // The page's own lang is trusted as the language seed, so the translate
+    // prompt (translation is prompt-only — never automatic) is right from the
+    // moment the clip lands, before Analyze refines the detection. A lying
+    // lang header can only mis-word a prompt, never spend anything.
+    const seededLanguage = normalizeLanguageCode(args.lang);
+    const languagePreference = await languageForProject(ctx, args.projectId);
+    const seededDecision = translationDecision({
+      sourceLanguageCode: seededLanguage,
+      sourceLanguageIsMixed: undefined,
+      targetLanguageCode: languagePreference.defaultLanguageCode,
+    });
     // The byline junk filter is the PDF author's: CMS residue ("admin",
     // software names) is the same failure mode as Info.Author residue.
     const author = cleanPdfAuthor(args.byline);
@@ -207,6 +223,15 @@ export const createFromClip = internalMutation({
           }
         : {}),
       ...(author ? { author, authorSource: "native" } : {}),
+      ...(seededLanguage ? { sourceLanguageCode: seededLanguage } : {}),
+      translationLanguageCode: languagePreference.defaultLanguageCode,
+      translationStatus:
+        seededDecision === "offer"
+          ? "offer"
+          : seededDecision === "not_needed"
+            ? "not_needed"
+            : "unknown_language",
+      translationVersion: languagePreference.translationVersion,
       sourceMetadata: {
         title: trimmed(args.title),
         author,

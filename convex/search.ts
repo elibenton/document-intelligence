@@ -30,6 +30,7 @@ import { STABLE_TO_LEGACY } from "./entityResolution";
 import { languageForDocument, languageForProject } from "./settings";
 import { requireBudget } from "./budget";
 import { chatCompletion } from "./interfaze";
+import { cohereGroundedAnswer } from "./cohere";
 import { usageLogger } from "./apiLogs";
 import { healthReporter } from "./providerHealth";
 import { embeddingsApiKey, embedTexts } from "./embeddings";
@@ -386,12 +387,17 @@ export const start = authedMutation({
     query: v.string(),
     projectId: v.id("projects"),
     force: v.optional(v.boolean()),
+    // Which synthesis engine(s) answer — retrieval is identical either way.
+    engine: v.optional(
+      v.union(v.literal("interfaze"), v.literal("cohere"), v.literal("both"))
+    ),
   },
   handler: async (ctx, args) => {
     await requireBudget(ctx, ctx.user._id);
     await requireProject(ctx, args.projectId);
     const q = args.query.trim();
     if (!q) throw new Error("Empty search query");
+    const engine = args.engine ?? "both";
 
     // History cache: an identical completed search in the same project is
     // returned as-is — no new Interfaze / embedding calls. `force` re-runs.
@@ -402,7 +408,10 @@ export const start = authedMutation({
         .order("desc")
         .take(MAX_SAVED_SEARCHES);
       const cached = recentRows.find(
-        (r) => r.status === "completed" && r.query === q
+        (r) =>
+          r.status === "completed" &&
+          r.query === q &&
+          (r.engine ?? "interfaze") === engine
       );
       if (cached) return cached._id;
     }
@@ -411,12 +420,14 @@ export const start = authedMutation({
       projectId: args.projectId,
       query: q,
       status: "planning",
+      engine,
       createdAt: Date.now(),
     });
     await ctx.scheduler.runAfter(0, internal.search.execute, {
       searchId,
       query: q,
       projectId: args.projectId,
+      engine,
     });
 
     // Prune this project's history beyond the cap (oldest first).
@@ -498,6 +509,7 @@ export const update = internalMutation({
       )
     ),
     answer: v.optional(v.string()),
+    cohereAnswer: v.optional(v.string()),
     retrieval: v.optional(
       v.object({
         candidates: v.number(),
@@ -1042,9 +1054,12 @@ export const execute = internalAction({
     searchId: v.id("searches"),
     query: v.string(),
     projectId: v.id("projects"),
+    engine: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const interfazeKey = process.env.INTERFAZE_API_KEY;
+    const cohereKey = process.env.COHERE_API_KEY;
+    const engine = args.engine ?? "interfaze";
     try {
       // ---- 1. Plan ------------------------------------------------------
       let plan: Plan = {
@@ -1216,56 +1231,84 @@ export const execute = internalAction({
       });
 
       // ---- 3. Synthesize --------------------------------------------------
+      // The A/B fork: retrieval above is engine-independent, only who writes
+      // the cited answer differs. The Interfaze answer passes through the
+      // deterministic citation rejector (verifyAnswer); the Cohere answer
+      // deliberately does not — Command A+ generates its citations in-model,
+      // and whether that grounding holds without the rejector is what the A/B
+      // exists to measure. The engines run in parallel and fail independently:
+      // in "both" mode one engine's error must not cost the other's answer.
       let answer = "";
+      let cohereAnswer = "";
       let verification:
         | { totalClaims: number; removedClaims: string[] }
         | undefined;
-      if (interfazeKey && (hydrated.length > 0 || entityResult.facts.length > 0)) {
-        const sourcesBlock = hydrated
-          .map(
-            (h, i) =>
-              `[${i + 1}] "${h.documentName}", page ${h.pageNumber + 1}:\n${h.text}`
-          )
-          .join("\n\n");
-        const factsBlock =
-          entityResult.facts.length > 0
-            ? `\n\nKNOWN FACTS (from the entity graph extracted across the corpus):\n- ${entityResult.facts.join("\n- ")}`
-            : "";
-        try {
-          const { content } = await chatCompletion(interfazeKey, {
-            usage: {
-              log: usageLogger(ctx, { projectId: args.projectId }),
-              operation: "search_answer",
-            },
-            systemPrompt:
-              "You answer questions about a private document corpus. Write ONLY what the numbered sources or the known facts explicitly state. You very likely know more about this topic than the sources do — that knowledge is forbidden here: never fill gaps, infer, estimate, or combine facts the sources do not state themselves. Never write a name, date, number, or percentage that you cannot point to in a source. An incomplete answer is correct; an answer completed from memory is worthless. Every sentence that states a fact must end with the citation(s) backing it, as bare bracketed numbers, one per bracket: [2][7], never [Source 2] or [2, 7]. If the sources answer only part of the question, answer that part and say plainly what the corpus does not establish.",
-            content: [
-              {
-                type: "text",
-                text: `QUESTION: ${args.query}\n\nSOURCES:\n${sourcesBlock}${factsBlock}`,
+      if (hydrated.length > 0 || entityResult.facts.length > 0) {
+        const runInterfaze = async () => {
+          if (!interfazeKey || engine === "cohere") return;
+          const sourcesBlock = hydrated
+            .map(
+              (h, i) =>
+                `[${i + 1}] "${h.documentName}", page ${h.pageNumber + 1}:\n${h.text}`
+            )
+            .join("\n\n");
+          const factsBlock =
+            entityResult.facts.length > 0
+              ? `\n\nKNOWN FACTS (from the entity graph extracted across the corpus):\n- ${entityResult.facts.join("\n- ")}`
+              : "";
+          try {
+            const { content } = await chatCompletion(interfazeKey, {
+              usage: {
+                log: usageLogger(ctx, { projectId: args.projectId }),
+                operation: "search_answer",
               },
-            ],
-            responseSchema: { name: "grounded_answer", schema: ANSWER_SCHEMA },
-            maxTokens: 2000,
-          });
-          answer = (JSON.parse(content) as { answer?: string }).answer ?? "";
-          // The deterministic gate behind the prompt above: every cited claim
-          // is checked against the pages it cites, and claims those pages
-          // don't support are removed before the answer is stored. Verified
-          // against the same text the model was shown.
-          const checked = verifyAnswer(
-            answer,
-            hydrated.map((h) => h.text),
-            entityResult.facts.join("\n")
-          );
-          answer = checked.answer;
-          verification = {
-            totalClaims: checked.totalClaims,
-            removedClaims: checked.removedClaims,
-          };
-        } catch {
-          // Synthesis failure still leaves useful ranked results.
-        }
+              systemPrompt:
+                "You answer questions about a private document corpus. Write ONLY what the numbered sources or the known facts explicitly state. You very likely know more about this topic than the sources do — that knowledge is forbidden here: never fill gaps, infer, estimate, or combine facts the sources do not state themselves. Never write a name, date, number, or percentage that you cannot point to in a source. An incomplete answer is correct; an answer completed from memory is worthless. Every sentence that states a fact must end with the citation(s) backing it, as bare bracketed numbers, one per bracket: [2][7], never [Source 2] or [2, 7]. If the sources answer only part of the question, answer that part and say plainly what the corpus does not establish.",
+              content: [
+                {
+                  type: "text",
+                  text: `QUESTION: ${args.query}\n\nSOURCES:\n${sourcesBlock}${factsBlock}`,
+                },
+              ],
+              responseSchema: { name: "grounded_answer", schema: ANSWER_SCHEMA },
+              maxTokens: 2000,
+            });
+            answer = (JSON.parse(content) as { answer?: string }).answer ?? "";
+            // The deterministic gate behind the prompt above: every cited claim
+            // is checked against the pages it cites, and claims those pages
+            // don't support are removed before the answer is stored. Verified
+            // against the same text the model was shown.
+            const checked = verifyAnswer(
+              answer,
+              hydrated.map((h) => h.text),
+              entityResult.facts.join("\n")
+            );
+            answer = checked.answer;
+            verification = {
+              totalClaims: checked.totalClaims,
+              removedClaims: checked.removedClaims,
+            };
+          } catch {
+            // Synthesis failure still leaves useful ranked results.
+          }
+        };
+        const runCohere = async () => {
+          if (!cohereKey || engine === "interfaze") return;
+          try {
+            cohereAnswer = await cohereGroundedAnswer(cohereKey, {
+              question: args.query,
+              sources: hydrated.map((h) => ({
+                title: `"${h.documentName}", page ${h.pageNumber + 1}`,
+                text: h.text,
+              })),
+              facts: entityResult.facts,
+              log: usageLogger(ctx, { projectId: args.projectId }),
+            });
+          } catch {
+            // Same bargain as the Interfaze catch above.
+          }
+        };
+        await Promise.all([runInterfaze(), runCohere()]);
       }
 
       await ctx.runMutation(internal.search.update, {
@@ -1276,6 +1319,7 @@ export const execute = internalAction({
           (results.length === 0
             ? "No matching content found in the corpus for this query."
             : ""),
+        cohereAnswer: cohereAnswer || undefined,
         verification,
       });
     } catch (e) {

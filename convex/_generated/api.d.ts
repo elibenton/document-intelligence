@@ -21,6 +21,7 @@ import type * as blocks from "../blocks.js";
 import type * as budget from "../budget.js";
 import type * as clipperTokens from "../clipperTokens.js";
 import type * as clips from "../clips.js";
+import type * as cohere from "../cohere.js";
 import type * as crons from "../crons.js";
 import type * as dedupeStats from "../dedupeStats.js";
 import type * as demo from "../demo.js";
@@ -87,6 +88,7 @@ import type * as speakerSignature from "../speakerSignature.js";
 import type * as speakers from "../speakers.js";
 import type * as suggestedEntities from "../suggestedEntities.js";
 import type * as transcripts from "../transcripts.js";
+import type * as translationGate from "../translationGate.js";
 import type * as translations from "../translations.js";
 import type * as upload from "../upload.js";
 
@@ -110,6 +112,7 @@ declare const fullApi: ApiFromModules<{
   budget: typeof budget;
   clipperTokens: typeof clipperTokens;
   clips: typeof clips;
+  cohere: typeof cohere;
   crons: typeof crons;
   dedupeStats: typeof dedupeStats;
   demo: typeof demo;
@@ -176,6 +179,7 @@ declare const fullApi: ApiFromModules<{
   speakers: typeof speakers;
   suggestedEntities: typeof suggestedEntities;
   transcripts: typeof transcripts;
+  translationGate: typeof translationGate;
   translations: typeof translations;
   upload: typeof upload;
 }>;
