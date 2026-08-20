@@ -213,6 +213,7 @@ export async function cohereGroundedAnswer(
     finishReason?: string;
     error?: string;
     errorCode?: string;
+    retryCount?: number;
   }) => {
     const promptTokens = r.promptTokens ?? 0;
     const completionTokens = r.completionTokens ?? 0;
@@ -232,6 +233,7 @@ export async function cohereGroundedAnswer(
       finishReason: r.finishReason,
       error: r.error,
       errorCode: r.errorCode,
+      retryCount: r.retryCount,
       buildSha: process.env.BUILD_SHA?.slice(0, 7),
     });
   };
@@ -263,62 +265,80 @@ export async function cohereGroundedAnswer(
     });
   }
 
-  const res = await fetch("https://api.cohere.com/v2/chat", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: COHERE_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You answer questions about a private document corpus. Write ONLY what the provided documents explicitly state — never fill gaps, infer, estimate, or combine facts the documents do not state themselves. An incomplete answer is correct; an answer completed from memory is worthless. If the documents answer only part of the question, answer that part and say plainly what the corpus does not establish. Use markdown structure where it helps the reader.",
-        },
-        { role: "user", content: args.question },
-      ],
-      documents,
-      max_tokens: 2000,
-    }),
+  const requestBody = JSON.stringify({
+    model: COHERE_MODEL,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You answer questions about a private document corpus. Write ONLY what the provided documents explicitly state — never fill gaps, infer, estimate, or combine facts the documents do not state themselves. An incomplete answer is correct; an answer completed from memory is worthless. If the documents answer only part of the question, answer that part and say plainly what the corpus does not establish. Use markdown structure where it helps the reader.",
+      },
+      { role: "user", content: args.question },
+    ],
+    documents,
+    max_tokens: 2000,
+    // No citation_options: command-a-plus rejects mode "accurate" in any
+    // casing (measured 2026-08-19) — that mode belongs to the older Command
+    // models; A+ has only its native inline path.
   });
 
-  if (!res.ok) {
-    const body = (await res.text()).slice(0, 300);
-    await report({
-      status: "error",
-      error: `HTTP ${res.status}. ${body}`,
-      errorCode: `http_${res.status}`,
+  // The flaky citation generator has a second face besides degenerate
+  // attribution: some responses arrive with no citations at all (observed on
+  // consecutive production runs, 2026-08-19). An uncited grounded answer is
+  // far more often the generator failing than the model declining to cite,
+  // so one retry is spent on it; each attempt logs its own usage row.
+  let content: CohereContentBlock[] = [];
+  let rawCitations: CohereCitation[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch("https://api.cohere.com/v2/chat", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: requestBody,
     });
-    throw new Error(`Cohere chat failed (HTTP ${res.status}). ${body}`);
-  }
 
-  const data = (await res.json()) as CohereChatResponse;
-  const content = data.message?.content ?? [];
-  const citations = repairCitationSources(
-    data.message?.citations ?? [],
-    documents.map((d) => ({ id: d.id, text: d.data.snippet }))
-  );
-  const answer = insertCitationMarkers(content, citations);
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 300);
+      await report({
+        status: "error",
+        error: `HTTP ${res.status}. ${body}`,
+        errorCode: `http_${res.status}`,
+      });
+      throw new Error(`Cohere chat failed (HTTP ${res.status}). ${body}`);
+    }
 
-  if (!answer.trim()) {
+    const data = (await res.json()) as CohereChatResponse;
+    content = data.message?.content ?? [];
+    rawCitations = data.message?.citations ?? [];
+    const hasText = content.some(
+      (block) => block.type === "text" && block.text?.trim()
+    );
+    if (!hasText) {
+      await report({
+        status: "error",
+        promptTokens: data.usage?.billed_units?.input_tokens,
+        completionTokens: data.usage?.billed_units?.output_tokens,
+        finishReason: data.finish_reason,
+        error: "Empty answer text in a 200 response",
+        errorCode: "empty_response",
+      });
+      throw new Error("empty_cohere_response");
+    }
     await report({
-      status: "error",
+      status: "ok",
       promptTokens: data.usage?.billed_units?.input_tokens,
       completionTokens: data.usage?.billed_units?.output_tokens,
       finishReason: data.finish_reason,
-      error: "Empty answer text in a 200 response",
-      errorCode: "empty_response",
+      retryCount: attempt,
     });
-    throw new Error("empty_cohere_response");
+    if (rawCitations.length > 0) break;
   }
 
-  await report({
-    status: "ok",
-    promptTokens: data.usage?.billed_units?.input_tokens,
-    completionTokens: data.usage?.billed_units?.output_tokens,
-    finishReason: data.finish_reason,
-  });
-  return answer;
+  const citations = repairCitationSources(
+    rawCitations,
+    documents.map((d) => ({ id: d.id, text: d.data.snippet }))
+  );
+  return insertCitationMarkers(content, citations);
 }
