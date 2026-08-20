@@ -100,23 +100,40 @@ export const runExtraction = authedAction({
       },
     };
 
-    const result = await analyzeDocumentText(pageTexts, apiKey, {
-      systemPrompt: analyzeSystemPrompt(false),
-      prompt,
-      responseSchema,
-      log: usageLogger(ctx, { documentId: args.documentId }),
-    });
-
-    const parsed = JSON.parse(result.content) as {
-      entities?: Array<{ name?: string; type?: string }>;
-    };
+    const log = usageLogger(ctx, { documentId: args.documentId });
     const validKeys = new Set(types.map((t) => t.key));
-    const entities = (parsed.entities ?? [])
-      .map((e) => ({
-        name: (e.name ?? "").trim(),
-        type: (e.type ?? "").trim(),
-      }))
-      .filter((e) => e.name && validKeys.has(e.type));
+    const extractOnce = async (bypassCache: boolean) => {
+      const result = await analyzeDocumentText(pageTexts, apiKey, {
+        systemPrompt: analyzeSystemPrompt(false),
+        prompt,
+        responseSchema,
+        log,
+        bypassCache: bypassCache || undefined,
+      });
+      const parsed = JSON.parse(result.content) as {
+        entities?: Array<{ name?: string; type?: string }>;
+      };
+      return {
+        vcache: result.vcache,
+        entities: (parsed.entities ?? [])
+          .map((e) => ({
+            name: (e.name ?? "").trim(),
+            type: (e.type ?? "").trim(),
+          }))
+          .filter((e) => e.name && validKeys.has(e.type)),
+      };
+    };
+
+    const first = await extractOnce(false);
+    let entities = first.entities;
+    // The provider's cache matches "a very similar prompt" (docs/caching), and
+    // this prompt differs from the previous extraction's by little more than
+    // the type list — so a cached response that addresses none of the
+    // requested types is indistinguishable from a stale hit. One fresh retry
+    // settles it; a fresh empty answer is then trusted as a real absence.
+    if (first.vcache && entities.length === 0) {
+      ({ entities } = await extractOnce(true));
+    }
 
     await ctx.runMutation(internal.relationships.ingestAdditionalEntities, {
       documentId: args.documentId,
