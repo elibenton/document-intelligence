@@ -42,11 +42,12 @@ export function firstCitationNumber(answer: string): number | null {
   return first ? Number(first[1].split(",")[0].trim()) : null;
 }
 
-/** Every source number the answer cites, ascending, deduped. */
+/** Every source number the answer cites, deduped, in reading order — the
+ *  order numbered citation styles assign their numbers in. */
 export function citedNumbers(answer: string): number[] {
   const numbers = new Set<number>();
   for (const match of answer.matchAll(CITATION_MARKER)) {
     for (const digit of match[1].split(",")) numbers.add(Number(digit.trim()));
   }
-  return [...numbers].sort((a, b) => a - b);
+  return [...numbers];
 }

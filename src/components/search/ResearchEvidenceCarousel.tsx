@@ -487,14 +487,22 @@ export function ResearchAnswerWithEvidence({
   const inlineCitations = hasInlineCitations(style);
   // Only pages the answer actually cites earn an evidence card — retrieval
   // returns up to 24 ranked hits, and a sparsely-citing answer would bury its
-  // few real sources behind uncited ones. Numbering is positional in
-  // `results` (marker [n] is results[n-1]), so cards keep their original
-  // numbers across the gaps. An answer citing nothing falls back to showing
-  // the ranked hits, which is all there is to show.
+  // few real sources behind uncited ones. An answer citing nothing falls
+  // back to showing the ranked hits, which is all there is to show.
+  //
+  // Two numberings coexist: stored markers are positions in `results`
+  // (marker [n] is results[n-1]) and every behavior — anchors, refs,
+  // activeCitation — stays keyed on them; what the reader SEES is a clean
+  // 1..k in reading order (`displayOf`), so an answer citing pages 5, 8 and
+  // 13 prints [1][2][3] and never discloses how deep the ranking went.
   const cardNumbers = useMemo(() => {
     const cited = citedNumbers(answer).filter((n) => results[n - 1]);
     return cited.length > 0 ? cited : results.map((_, i) => i + 1);
   }, [answer, results]);
+  const displayOf = useMemo(
+    () => new Map(cardNumbers.map((n, i) => [n, i + 1])),
+    [cardNumbers]
+  );
   const firstCitation = useMemo(() => {
     const number = firstCitationNumber(answer) ?? 1;
     return results[number - 1] ? number : cardNumbers[0] ?? 1;
@@ -555,7 +563,7 @@ export function ResearchAnswerWithEvidence({
       if (!result) return <>{children}</>;
       return (
         <CitationButton
-          number={number}
+          number={displayOf.get(number) ?? number}
           label={inlineCitations ? formatter?.inText(number - 1) : undefined}
           result={result}
           active={activeCitation === number}
@@ -707,14 +715,14 @@ export function ResearchAnswerWithEvidence({
             ref={carouselRef}
             className="flex snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain pb-4"
           >
-            {cardNumbers.map((number) => {
+            {cardNumbers.map((number, i) => {
               const result = results[number - 1];
               return (
                 <CitationPage
                   key={`${result.documentId}:${result.pageNumber}:${number}`}
                   result={result}
                   file={fileByDocument.get(result.documentId) ?? null}
-                  number={number}
+                  number={i + 1}
                   active={activeCitation === number}
                   cardRef={(element) => {
                     if (element) cardRefs.current.set(number, element);
