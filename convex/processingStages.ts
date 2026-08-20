@@ -625,6 +625,12 @@ export const runPipeline = internalAction({
         ),
         pageCount: parsedPages.length,
       });
+      // A re-OCR replaced the blocks any existing highlights referenced;
+      // re-point their blockIds at the new blocks by geometry. First runs
+      // have no annotations, so this is a no-op there.
+      await ctx.runMutation(internal.annotations.reanchorBlocks, {
+        documentId: args.documentId,
+      });
       textStored = true;
       console.log(
         `Pipeline stored ${parsedPages.length} pages and ` +

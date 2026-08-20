@@ -153,7 +153,8 @@ export const bailIfPaused = internalMutation({
 
 
 // ---------------------------------------------------------------------------
-// Upload pipeline: every medium goes through the one understanding call.
+// Upload pipeline: task-first — the extraction task sends the file once,
+// then understanding runs text-in over the stored result.
 // ---------------------------------------------------------------------------
 
 export const runFullPipeline = authedMutation({
@@ -163,7 +164,15 @@ export const runFullPipeline = authedMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireDocument(ctx, args.documentId);
+    const document = await requireDocument(ctx, args.documentId);
+    // A web clip has no scannable file — its storageId is the archived page
+    // HTML, which this pipeline would happily feed to OCR as if it were a
+    // scan. The clip re-run is clips.reclip (local re-parse of the archive).
+    if (document.mediaType === "webScrape") {
+      throw new Error(
+        "Web clips are not scanned — use re-clip from archive instead"
+      );
+    }
     await requireBudget(ctx, ctx.user._id);
 
     const enqueued = await enqueueStage(ctx, args.documentId, "parse", {

@@ -98,6 +98,7 @@ export function PipelineProgress({
 }) {
   const documentId = document._id as Id<"documents">;
   const retryPipeline = useMutation(api.processing.runFullPipeline);
+  const reclip = useMutation(api.clips.reclip);
   const retryAnalyze = useMutation(api.processing.runAnalyze);
   const [retrying, setRetrying] = useState(false);
   const [dialog, setDialog] = useState<"analyze" | null>(null);
@@ -159,15 +160,27 @@ export function PipelineProgress({
       ? "failed"
       : parseStatus;
 
+  const isClip = document.mediaType === "webScrape";
+
   async function runScanRetry() {
     if (retrying) return;
     setRetrying(true);
     try {
-      await retryPipeline({ documentId });
+      // A clip's re-run is a local re-parse of its archived HTML; everything
+      // else re-runs the extraction task (which must bypass the provider's
+      // cache — a replay of the bad extraction is what the user is escaping).
+      if (isClip) await reclip({ documentId });
+      else await retryPipeline({ documentId, bypassCache: true });
     } finally {
       setRetrying(false);
     }
   }
+
+  const scanRetryLabel = isClip
+    ? "Re-clip from archive"
+    : recording
+      ? "Re-transcribe"
+      : "Re-OCR";
 
   const translationNote = (): string | undefined => {
     switch (document.translationStatus) {
@@ -214,11 +227,13 @@ export function PipelineProgress({
             ? "running"
             : "completed",
       status: scanStatus,
-      // No re-scan of a good scan: extractions, entities and page geometry are
-      // all built on it, so silently replacing it would invalidate them.
+      // Available on good scans too — bad early OCRs are exactly what the
+      // user re-runs this to fix. The re-run replaces pages and blocks, then
+      // re-analyzes from the new text and re-anchors highlight blockIds by
+      // geometry (annotations.reanchorBlocks).
       retry:
-        scanStatus === "failed"
-          ? { label: "Retry scan", onActivate: () => void runScanRetry() }
+        scanStatus === "failed" || parseDone
+          ? { label: scanRetryLabel, onActivate: () => void runScanRetry() }
           : undefined,
       startedAt: parseJob?.startedAt,
       completedAt: parseJob?.completedAt,

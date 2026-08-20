@@ -784,7 +784,9 @@ export const RecordingView = forwardRef<
     }
     setRetrying(true);
     try {
-      await retranscribe({ documentId: doc._id });
+      // Bypass the provider cache: a re-transcription exists to escape the
+      // previous transcription, not to replay it for free.
+      await retranscribe({ documentId: doc._id, bypassCache: true });
     } finally {
       setRetrying(false);
     }

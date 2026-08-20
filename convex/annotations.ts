@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internalMutation } from "./_generated/server";
 import { authedMutation, authedQuery } from "./authz";
 import { requireAnnotation, requireDocument } from "./ownership";
 
@@ -207,5 +208,69 @@ export const remove = authedMutation({
   handler: async (ctx, args) => {
     await requireAnnotation(ctx, args.id);
     await ctx.db.delete(args.id);
+  },
+});
+
+/**
+ * Repair `blockIds` after a re-OCR replaced the document's blocks.
+ *
+ * The visible highlight needs no repair: `rects` live in the page's own
+ * coordinate space and the page image is unchanged by a re-OCR, so it keeps
+ * painting where the user drew it. Only the block references go stale —
+ * rewritten here as the new blocks whose bbox intersects the stored rects
+ * (same coordinate space by construction, see the schema comment). An empty
+ * intersection stores [], which quote-anchored clip rows already use.
+ * Time- and quote-anchored annotations carry no rects and are skipped.
+ */
+export const reanchorBlocks = internalMutation({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const annotations = await ctx.db
+      .query("annotations")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    const blocksByPage = new Map<
+      number,
+      { blockId: string; bbox?: { x: number; y: number; width: number; height: number } }[]
+    >();
+    for (const annotation of annotations) {
+      if (annotation.rects.length === 0) continue;
+      let pageBlocks = blocksByPage.get(annotation.pageNumber);
+      if (!pageBlocks) {
+        pageBlocks = await ctx.db
+          .query("blocks")
+          .withIndex("by_document", (q) =>
+            q
+              .eq("documentId", args.documentId)
+              .eq("pageNumber", annotation.pageNumber)
+          )
+          .collect();
+        blocksByPage.set(annotation.pageNumber, pageBlocks);
+      }
+      const blockIds = pageBlocks
+        .filter((block) => {
+          const box = block.bbox;
+          if (!box) return false;
+          return annotation.rects.some(
+            (rect) =>
+              rect.x < box.x + box.width &&
+              box.x < rect.x + rect.width &&
+              rect.y < box.y + box.height &&
+              box.y < rect.y + rect.height
+          );
+        })
+        .map((block) => block.blockId);
+      const unchanged =
+        blockIds.length === annotation.blockIds.length &&
+        blockIds.every((id, index) => annotation.blockIds[index] === id);
+      if (!unchanged) {
+        await ctx.db.patch(annotation._id, {
+          blockIds,
+          updatedAt: Date.now(),
+        });
+      }
+    }
+    return null;
   },
 });

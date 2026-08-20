@@ -38,15 +38,6 @@ describe("native metadata omissions", () => {
     const without = prompt({ tableOfContents: true });
     expect(without).not.toContain("Build the table of contents");
     expect(without).toContain("Flag any page ranges");
-    const fileLead = buildAnalyzePrompt({
-      csv: false,
-      kindNames: [],
-      categories: CATEGORIES,
-      fileInput: true,
-      omit: { tableOfContents: true },
-    });
-    expect(fileLead).not.toContain("Build the table of contents");
-    expect(fileLead).toContain("Flag any page ranges");
   });
 
   it("omitting the title removes the title rule", () => {
