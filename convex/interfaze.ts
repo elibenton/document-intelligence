@@ -175,10 +175,15 @@ function classifyHttpError(status: number, body: WireError): InterfazeFailure {
   const haystack = `${providerCode} ${message}`.toLowerCase();
 
   if (
-    providerCode === "insufficient_quota" ||
-    /no credits|insufficient (quota|credit|funds)|out of credits|billing/.test(
-      haystack
-    )
+    // Never on a 401: the provider stamps code "insufficient_quota" even on
+    // "API key not valid or revoked" (observed 2026-08-19, req-fa886563…),
+    // which had every invalid-key failure telling the user to buy credits.
+    // A genuinely exhausted balance arrives as a 403 with this code.
+    status !== 401 &&
+    (providerCode === "insufficient_quota" ||
+      /no credits|insufficient (quota|credit|funds)|out of credits|billing/.test(
+        haystack
+      ))
   ) {
     return new InterfazeFailure(
       "Interfaze API credits exhausted — add credits at interfaze.ai to resume processing.",
