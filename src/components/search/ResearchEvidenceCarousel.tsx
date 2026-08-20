@@ -24,7 +24,11 @@ import {
 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { useCitations } from "@/lib/citation/useCitations";
-import { citationMarkdown, firstCitationNumber } from "@/lib/citation/markers";
+import {
+  citationMarkdown,
+  citedNumbers,
+  firstCitationNumber,
+} from "@/lib/citation/markers";
 import type { CitationStyle } from "../../../convex/projectTemplates";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -481,10 +485,20 @@ export function ResearchAnswerWithEvidence({
     [files]
   );
   const inlineCitations = hasInlineCitations(style);
+  // Only pages the answer actually cites earn an evidence card — retrieval
+  // returns up to 24 ranked hits, and a sparsely-citing answer would bury its
+  // few real sources behind uncited ones. Numbering is positional in
+  // `results` (marker [n] is results[n-1]), so cards keep their original
+  // numbers across the gaps. An answer citing nothing falls back to showing
+  // the ranked hits, which is all there is to show.
+  const cardNumbers = useMemo(() => {
+    const cited = citedNumbers(answer).filter((n) => results[n - 1]);
+    return cited.length > 0 ? cited : results.map((_, i) => i + 1);
+  }, [answer, results]);
   const firstCitation = useMemo(() => {
     const number = firstCitationNumber(answer) ?? 1;
-    return results[number - 1] ? number : 1;
-  }, [answer, results]);
+    return results[number - 1] ? number : cardNumbers[0] ?? 1;
+  }, [answer, results, cardNumbers]);
   const [activeCitation, setActiveCitation] = useState(firstCitation);
   const carouselRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<number, HTMLDivElement>());
@@ -662,8 +676,11 @@ export function ResearchAnswerWithEvidence({
             <div className="ml-auto flex gap-1">
               <button
                 type="button"
-                onClick={() => selectCitation(Math.max(1, activeCitation - 1))}
-                disabled={activeCitation === 1}
+                onClick={() => {
+                  const at = cardNumbers.indexOf(activeCitation);
+                  selectCitation(cardNumbers[Math.max(0, at - 1)]);
+                }}
+                disabled={activeCitation === cardNumbers[0]}
                 className="inline-flex size-8 items-center justify-center rounded-full border bg-background hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Previous evidence page"
               >
@@ -671,10 +688,13 @@ export function ResearchAnswerWithEvidence({
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  selectCitation(Math.min(results.length, activeCitation + 1))
-                }
-                disabled={activeCitation === results.length}
+                onClick={() => {
+                  const at = cardNumbers.indexOf(activeCitation);
+                  selectCitation(
+                    cardNumbers[Math.min(cardNumbers.length - 1, at + 1)]
+                  );
+                }}
+                disabled={activeCitation === cardNumbers[cardNumbers.length - 1]}
                 className="inline-flex size-8 items-center justify-center rounded-full border bg-background hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Next evidence page"
               >
@@ -687,19 +707,22 @@ export function ResearchAnswerWithEvidence({
             ref={carouselRef}
             className="flex snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain pb-4"
           >
-            {results.map((result, index) => (
-              <CitationPage
-                key={`${result.documentId}:${result.pageNumber}:${index}`}
-                result={result}
-                file={fileByDocument.get(result.documentId) ?? null}
-                number={index + 1}
-                active={activeCitation === index + 1}
-                cardRef={(element) => {
-                  if (element) cardRefs.current.set(index + 1, element);
-                  else cardRefs.current.delete(index + 1);
-                }}
-              />
-            ))}
+            {cardNumbers.map((number) => {
+              const result = results[number - 1];
+              return (
+                <CitationPage
+                  key={`${result.documentId}:${result.pageNumber}:${number}`}
+                  result={result}
+                  file={fileByDocument.get(result.documentId) ?? null}
+                  number={number}
+                  active={activeCitation === number}
+                  cardRef={(element) => {
+                    if (element) cardRefs.current.set(number, element);
+                    else cardRefs.current.delete(number);
+                  }}
+                />
+              );
+            })}
           </div>
         </section>
       )}
