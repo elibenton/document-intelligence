@@ -33,6 +33,18 @@ const COHERE_USD_PER_M_OUTPUT = 10;
  *  like the Interfaze prompt's known-facts block. */
 const FACTS_DOCUMENT_ID = "facts";
 
+/**
+ * How much document text one grounded call may carry. Spent in rank order,
+ * the same bargain as SYNTHESIS_CHAR_BUDGET in search.ts: the best hits go
+ * whole, and a long page costs later ones their slot rather than everyone a
+ * slice. A skipped source keeps its number — ids are positions in the
+ * caller's list — so it simply cannot be cited, which is honest: the model
+ * never saw it. ~20k tokens, so one call is ~$0.05 of input.
+ */
+const COHERE_DOC_CHAR_BUDGET = 80_000;
+/** Below this, a page's remaining slice isn't worth a citation slot. */
+const MIN_USEFUL_DOC_CHARS = 500;
+
 interface CohereContentBlock {
   type?: string;
   text?: string;
@@ -41,6 +53,8 @@ interface CohereContentBlock {
 export interface CohereCitation {
   start?: number;
   end?: number;
+  /** The answer text the span covers — what the citation claims to ground. */
+  text?: string;
   /** Which content block the offsets index into. */
   content_index?: number;
   sources?: Array<{ id?: string; document?: { id?: string } }>;
@@ -111,6 +125,71 @@ export function insertCitationMarkers(
   return out;
 }
 
+/** Words and numbers that carry attribution signal for one cited span. */
+function attributionTokens(text: string): string[] {
+  return text
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3);
+}
+
+/** How much of a span's vocabulary a source must contain to claim it. */
+const ATTRIBUTION_FLOOR = 0.5;
+
+/**
+ * Command A+'s native span attribution collapses non-deterministically on
+ * multi-document payloads: measured 2026-08-19 replaying one real search,
+ * identical ~9k-token requests attributed citations across 7 sources on one
+ * run and stamped every one of 13 citations onto document "1" on the next.
+ * Temperature 0, smaller documents, fewer documents, and chunking all failed
+ * to stabilize it; the spans themselves stay correct — only the document ids
+ * degenerate, always onto the first document.
+ *
+ * So when a response shows the degenerate signature — several documents
+ * provided, three or more citations, every one naming the same source — the
+ * ids are noise, and each span is re-pointed at the source whose text
+ * actually contains its vocabulary (ties to the higher-ranked source). Spans
+ * no source can claim lose their citation rather than keep a false one. The
+ * answer text is never touched: this is attribution repair, deliberately not
+ * the claim-removal gate the Interfaze side runs (answerVerification.ts) —
+ * bypassing that gate is the point of the A/B.
+ */
+export function repairCitationSources(
+  citations: CohereCitation[],
+  documents: Array<{ id: string; text: string }>
+): CohereCitation[] {
+  if (documents.length <= 1 || citations.length < 3) return citations;
+  const citedIds = new Set(
+    citations.flatMap((c) =>
+      (c.sources ?? []).flatMap((s) => {
+        const id = s.document?.id ?? s.id;
+        return id === undefined ? [] : [id];
+      })
+    )
+  );
+  if (citedIds.size !== 1) return citations;
+
+  const docTokens = documents.map((d) => ({
+    id: d.id,
+    tokens: new Set(attributionTokens(d.text)),
+  }));
+  return citations.map((citation) => {
+    const tokens = attributionTokens(citation.text ?? "");
+    let best: { id: string; score: number } | null = null;
+    for (const doc of docTokens) {
+      const score =
+        tokens.length === 0
+          ? 0
+          : tokens.filter((t) => doc.tokens.has(t)).length / tokens.length;
+      if (score >= ATTRIBUTION_FLOOR && (!best || score > best.score)) {
+        best = { id: doc.id, score };
+      }
+    }
+    return { ...citation, sources: best ? [{ id: best.id }] : [] };
+  });
+}
+
 /**
  * Ask Command A+ the question over the numbered sources. Returns the answer
  * as markdown with `[n]` markers. Throws on transport errors and on an empty
@@ -157,23 +236,32 @@ export async function cohereGroundedAnswer(
     });
   };
 
-  const documents = [
-    ...args.sources.map((source, i) => ({
+  const documents: Array<{
+    id: string;
+    data: { title: string; snippet: string };
+  }> = [];
+  let remaining = COHERE_DOC_CHAR_BUDGET;
+  args.sources.forEach((source, i) => {
+    if (remaining < MIN_USEFUL_DOC_CHARS) return;
+    const text =
+      source.text.length <= remaining
+        ? source.text
+        : source.text.slice(0, remaining);
+    remaining -= text.length;
+    documents.push({
       id: String(i + 1),
-      data: { title: source.title, snippet: source.text },
-    })),
-    ...(args.facts.length > 0
-      ? [
-          {
-            id: FACTS_DOCUMENT_ID,
-            data: {
-              title: "Known facts (from the entity graph extracted across the corpus)",
-              snippet: args.facts.map((fact) => `- ${fact}`).join("\n"),
-            },
-          },
-        ]
-      : []),
-  ];
+      data: { title: source.title, snippet: text },
+    });
+  });
+  if (args.facts.length > 0) {
+    documents.push({
+      id: FACTS_DOCUMENT_ID,
+      data: {
+        title: "Known facts (from the entity graph extracted across the corpus)",
+        snippet: args.facts.map((fact) => `- ${fact}`).join("\n"),
+      },
+    });
+  }
 
   const res = await fetch("https://api.cohere.com/v2/chat", {
     method: "POST",
@@ -208,7 +296,11 @@ export async function cohereGroundedAnswer(
 
   const data = (await res.json()) as CohereChatResponse;
   const content = data.message?.content ?? [];
-  const answer = insertCitationMarkers(content, data.message?.citations ?? []);
+  const citations = repairCitationSources(
+    data.message?.citations ?? [],
+    documents.map((d) => ({ id: d.id, text: d.data.snippet }))
+  );
+  const answer = insertCitationMarkers(content, citations);
 
   if (!answer.trim()) {
     await report({
