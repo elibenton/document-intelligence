@@ -225,15 +225,19 @@ in `apiUsageTotals`, which is never pruned.
   baseline — measured drifting 2 → 4 → 3 within minutes. It makes the fence
   below fire at edit time; it does not replace `npm run lint`.
 
-## Cost shape (measured 2026-08-18, 5-page PDF / 1-hour recording)
+## Cost shape (task-first since 2026-08-19)
 
-One `understand` call per document: ~$0.21 for the PDF; the recording adds the
-diarization shim's `transcribe` task (~$0.11) for ~$0.34 total. That replaced
-the old Scan+Analyze+Rename+Extract chain (~$0.07–0.37/doc) — the PDF got more
-expensive and the recording broke even, bought deliberately for the one-call
-architecture (see the reinstatement note on `understandDocument`). An exact
-re-run is a free vcache hit. Re-measure from `apiLogs` (`operation:
-"understand"`), not from this paragraph.
+The pipeline is task-first (docs/split-pipeline-spec.md): the extraction task
+(`ocr` / `speech_to_text`) is the only call that sends the file, and
+understanding is the text-in `analyze` call over the stored text. Medians at
+the split: ocr $0.002, analyze $0.08, transcribe $0.13 — vs $0.27/call for the
+retired merged `understand` (its precontext ride-along arrived empty, so every
+document paid for both). Translation is prompt-only: no code path may start a
+translate call except `translations.start` (a user click) — a `translate` row
+in `apiLogs` without one is a regression. An exact re-run is a free vcache
+hit; user-initiated re-extractions deliberately bypass it. Re-measure from
+`apiLogs` (`operation: "ocr" | "analyze" | "transcribe"`), not from this
+paragraph.
 
 ## UI
 

@@ -1,6 +1,10 @@
 # Split-pipeline implementation spec
 
-**Status:** approved direction, not yet implemented (2026-08-19)
+**Status:** implemented and deployed 2026-08-19 (Phases 1, 3–6; Phase 7
+deliberately deferred). Phase 2's live audio-TOC validation is still owed:
+Interfaze credits were exhausted at build time — once credits are added, run
+two recordings through `processing.runAnalyze` with bypassCache and check
+`time_seconds` monotonicity before trusting timestamp TOCs.
 **Decision:** retire the merged file-in `understand` call in favor of task-first
 extraction + text-in analysis, make translation prompt-only (never automatic),
 and expose per-type re-run affordances. Direction agreed after measuring live `apiLogs`: median
