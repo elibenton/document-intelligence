@@ -190,19 +190,22 @@ export const stampDecision = internalMutation({
     if (!document) return null;
     const { defaultLanguageCode, translationVersion } =
       await languageForDocument(ctx, args.documentId);
-    const currentLifecycle =
-      document.translationLanguageCode === defaultLanguageCode &&
-      document.translationVersion === translationVersion &&
-      (document.translationStatus === "queued" ||
-        document.translationStatus === "translating" ||
-        document.translationStatus === "failed" ||
-        document.translationStatus === "complete");
-    if (currentLifecycle) return null;
     const decision = translationDecision({
       sourceLanguageCode: document.sourceLanguageCode,
       sourceLanguageIsMixed: document.sourceLanguageIsMixed,
       targetLanguageCode: defaultLanguageCode,
     });
+    const currentLifecycle =
+      document.translationLanguageCode === defaultLanguageCode &&
+      document.translationVersion === translationVersion &&
+      (document.translationStatus === "queued" ||
+        document.translationStatus === "translating" ||
+        document.translationStatus === "complete" ||
+        // A failure stays visible only while a translation is still wanted;
+        // when detection says the document is already in the user's language,
+        // "Translation failed" is a phantom and not_needed wins.
+        (document.translationStatus === "failed" && decision !== "not_needed"));
+    if (currentLifecycle) return null;
     await ctx.db.patch(args.documentId, {
       translationLanguageCode: defaultLanguageCode,
       translationStatus:

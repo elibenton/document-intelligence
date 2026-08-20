@@ -757,7 +757,7 @@ export const BASE_ENTITY_TYPES = ["person", "organization"];
  * (when, where), then confidence last — so the score is formed with every other
  * field already in context.
  */
-function graphSchemaProperties(extraTypes: string[]) {
+export function graphSchemaProperties(extraTypes: string[]) {
   // Sorted and deduped: this enum is part of the prompt, and the prompt is the
   // Interfaze cache key. Project categories arrive in table order, so two
   // documents in the same project could otherwise produce two different

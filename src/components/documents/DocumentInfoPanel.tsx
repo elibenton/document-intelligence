@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { useNavigate } from "react-router";
 import { ListFilter, Plus, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
@@ -241,6 +241,8 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
 
       <TagsEditor document={document} />
 
+      <RescanSection document={document} />
+
       {additional.length > 0 && (
         <div className="flex flex-col gap-1.5 border-t pt-3 text-sm">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -391,6 +393,99 @@ function KindsEditor({ document }: { document: Doc<"documents"> }) {
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The Info tab's re-run controls, available on every document — bad early
+ * extractions are what they exist to fix. Three tiers, cheapest last:
+ * re-scan re-runs the extraction (task call for files, local re-parse for
+ * clips) then everything downstream; re-analyze re-reads the stored text;
+ * re-extract redoes only the entity graph. Every re-run bypasses the
+ * provider cache — a replay of the result the user is escaping is worthless.
+ */
+function RescanSection({ document }: { document: Doc<"documents"> }) {
+  const rerunPipeline = useMutation(api.processing.runFullPipeline);
+  const reclip = useMutation(api.clips.reclip);
+  const reanalyze = useMutation(api.processing.runAnalyze);
+  const reextract = useAction(api.relationships.reextract);
+  const [busy, setBusy] = useState<"scan" | "analyze" | "extract" | null>(null);
+
+  const isClip = document.mediaType === "webScrape";
+  const isRecording =
+    document.mediaType === "audio" || document.mediaType === "video";
+  const scanLabel = isClip
+    ? "Re-clip from archive"
+    : isRecording
+      ? "Re-transcribe"
+      : "Re-scan";
+
+  const run = (kind: "scan" | "analyze" | "extract") => async () => {
+    if (busy) return;
+    setBusy(kind);
+    try {
+      if (kind === "scan") {
+        if (isClip) await reclip({ documentId: document._id });
+        else
+          await rerunPipeline({ documentId: document._id, bypassCache: true });
+      } else if (kind === "analyze") {
+        await reanalyze({ documentId: document._id, bypassCache: true });
+      } else {
+        await reextract({ documentId: document._id });
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 border-t pt-3">
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Processing
+      </h4>
+      <div className="flex flex-wrap gap-1.5">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy !== null || document.status === "parsing"}
+          title={
+            isClip
+              ? "Re-reads the saved page locally, then re-analyzes — free"
+              : isRecording
+                ? "Fresh transcription of the recording, then re-analyze — replaces the transcript"
+                : "Fresh scan of the file, then re-analyze — replaces the text; highlights keep their place"
+          }
+          onClick={() => void run("scan")()}
+        >
+          {busy === "scan" || document.status === "parsing"
+            ? "Re-scanning…"
+            : scanLabel}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy !== null}
+          title="Re-reads the stored text — type, title, dates, contents, and entities"
+          onClick={() => void run("analyze")()}
+        >
+          {busy === "analyze" ? "Re-analyzing…" : "Re-analyze"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy !== null}
+          title="Redoes only the entity graph from the stored text — keeps the analysis"
+          onClick={() => void run("extract")()}
+        >
+          {busy === "extract" ? "Re-extracting…" : "Re-extract entities"}
+        </Button>
+      </div>
+      <p className="text-2xs leading-snug text-muted-foreground">
+        Re-scan redoes everything from the original
+        {isClip ? " archive" : " file"}; re-analyze and re-extract work from
+        the stored text.
+      </p>
+    </div>
   );
 }
 

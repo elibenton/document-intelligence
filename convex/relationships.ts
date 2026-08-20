@@ -12,9 +12,22 @@ import {
   relationSortIndex,
 } from "./relationTypes";
 import { buildNameIndex, matchedBlockIndexes } from "./nameMatch";
-import { authedQuery } from "./authz";
-import { requireDocument, requireEntity, requireProject } from "./ownership";
+import { authedAction, authedQuery } from "./authz";
+import {
+  requireDocument,
+  requireDocumentFromAction,
+  requireEntity,
+  requireProject,
+} from "./ownership";
 import { sanitizeDocumentDate } from "./metadata";
+import { internal } from "./_generated/api";
+import { analyzeDocumentText } from "./interfaze";
+import {
+  analyzeSystemPrompt,
+  buildGraphRule,
+  graphSchemaProperties,
+} from "./analyzePrompt";
+import { usageLogger } from "./apiLogs";
 
 /**
  * An event date the by_project_event index can order: an ISO prefix, or
@@ -731,5 +744,74 @@ export const forProjectTimeline = authedQuery({
     }
     events.sort((a, b) => a.eventDate.localeCompare(b.eventDate));
     return { events, capped };
+  },
+});
+
+/**
+ * Re-extract the entity graph alone — text-in, graph-only schema, no
+ * metadata fields. The graph normally rides on Analyze; this is the
+ * standalone re-run for when the entities are wrong but the analysis is
+ * fine, at a fraction of a full re-analyze's output. Replaces the AI graph
+ * wholesale via ingestGraph (human-added entities are preserved by it).
+ * Cache is bypassed: a user re-extracting wants a fresh read, not the
+ * cached graph they are trying to escape.
+ */
+export const reextract = authedAction({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireDocumentFromAction(ctx, args.documentId);
+    const document = await ctx.runQuery(internal.documents.getInternal, {
+      id: args.documentId,
+    });
+    if (!document) throw new Error("Document not found");
+    const apiKey = process.env.INTERFAZE_API_KEY;
+    if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
+
+    const pages: { pageNumber: number; text: string }[] = await ctx.runQuery(
+      internal.pages.textByDocument,
+      { documentId: args.documentId }
+    );
+    const pageTexts = pages
+      .sort((a, b) => a.pageNumber - b.pageNumber)
+      .map((page) => page.text);
+    if (pageTexts.length === 0 || pageTexts.every((text) => !text.trim())) {
+      throw new Error("No scanned text to extract from — run Scan first");
+    }
+
+    const extraTypes: { key: string; label: string; description: string }[] =
+      document.projectId
+        ? await ctx.runQuery(internal.projectEntityTypes.listInternal, {
+            projectId: document.projectId,
+          })
+        : [];
+    const { content } = await analyzeDocumentText(pageTexts, apiKey, {
+      systemPrompt: analyzeSystemPrompt(false),
+      prompt:
+        "Extract the entity graph from this document's text. " +
+        buildGraphRule(extraTypes),
+      responseSchema: {
+        name: "entity_graph",
+        schema: {
+          type: "object",
+          properties: graphSchemaProperties(extraTypes.map((t) => t.key)),
+          required: ["entities", "relationships", "suggested_entity_types"],
+        },
+      },
+      log: usageLogger(ctx, { documentId: args.documentId }),
+      bypassCache: true,
+    });
+
+    const graph = normalizeGraphResponse(JSON.parse(content) as GraphResponse);
+    await ctx.runMutation(internal.relationships.ingestGraph, {
+      documentId: args.documentId,
+      entities: graph.entities,
+      relationships: graph.relationships,
+    });
+    await ctx.runMutation(internal.metadata.setSuggestedEntityTypes, {
+      documentId: args.documentId,
+      suggestions: graph.suggestions,
+    });
+    return null;
   },
 });
