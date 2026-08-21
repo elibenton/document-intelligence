@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Plus, X } from "lucide-react";
+import { useNavigate } from "react-router";
+import { ListFilter, Plus, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,13 @@ import {
   type MetadataFact,
 } from "@/lib/documentFacts";
 import { formatDated } from "@/lib/documentDate";
+import { useProjectSlug } from "@/hooks/useProjectSlug";
+import { DEFAULT_LIBRARY_VIEW } from "@/lib/views/documentProperties";
+import {
+  metadataFilterCondition,
+  type MetadataFilterField,
+} from "@/lib/views/metadataFilters";
+import type { FilterCondition, ViewConfig } from "@/lib/views/types";
 import { INTERFAZE_LANGUAGES, languageName } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +43,56 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
   const setField = useMutation(api.documents.setField);
   const updateIdentity = useMutation(api.documents.updateIdentity);
   const facts = buildDocumentFacts(document);
+
+  // "Find others" writes the Library's own saved filter and sends the user
+  // there, rather than inventing a second search surface. Read and write go
+  // direct instead of through useProjectViews: that hook layers local edits
+  // over stored ones behind a debounce, which is right for a toolbar being
+  // dragged and wrong for a single deliberate write we then navigate away
+  // from. The document may predate projects, hence the "skip".
+  const navigate = useNavigate();
+  const projectSlug = useProjectSlug(document.projectId);
+  const storedViews = useQuery(
+    api.projectViews.get,
+    document.projectId ? { projectId: document.projectId } : "skip"
+  );
+  const saveViews = useMutation(api.projectViews.save);
+
+  const applyFilter = async (condition: FilterCondition) => {
+    if (!document.projectId) return;
+    const base = (storedViews?.library as ViewConfig | undefined) ??
+      (DEFAULT_LIBRARY_VIEW as ViewConfig);
+    // Replaces rather than appends: "show me these" is what the gesture
+    // promises, and silently narrowing an existing filter set would answer a
+    // question the user did not ask.
+    await saveViews({
+      projectId: document.projectId,
+      library: { ...base, filters: [condition] },
+    });
+    navigate(projectSlug ? `/p/${projectSlug}` : "/");
+  };
+
+  /** The row-hover affordance, or nothing when the document never said. */
+  const findOthers = (
+    field: MetadataFilterField,
+    value: string | null | undefined,
+    noun: string
+  ) => {
+    const condition = metadataFilterCondition(field, value);
+    if (!condition || !document.projectId) return null;
+    return (
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        title={`Find other documents with the same ${noun}`}
+        aria-label={`Find other documents with the same ${noun}`}
+        className="opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100"
+        onClick={() => void applyFilter(condition)}
+      >
+        <ListFilter aria-hidden="true" />
+      </Button>
+    );
+  };
 
   const commitText =
     (field: "author" | "documentPlace" | "sourceLanguageCode") =>
@@ -89,10 +147,16 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
             }
           />
         </Row>
-        <Row label="Type">
+        <Row
+          label="Type"
+          action={findOthers("primaryKind", document.primaryKind, "type")}
+        >
           <KindsEditor document={document} />
         </Row>
-        <Row label="Author">
+        <Row
+          label="Author"
+          action={findOthers("author", facts.author.value, "author")}
+        >
           <EditableText
             value={facts.author.value}
             label="Edit author"
@@ -102,7 +166,14 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
             onCommit={commitText("author")}
           />
         </Row>
-        <Row label={madeLabel}>
+        <Row
+          label={madeLabel}
+          action={findOthers(
+            "createdDate",
+            facts.createdDate.value,
+            `${madeLabel.toLowerCase()} date`
+          )}
+        >
           <EditableDate
             value={facts.createdDate.value}
             display={dateDisplay(facts.createdDate)}
@@ -113,7 +184,10 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
             onCommit={commitDate("createdDate")}
           />
         </Row>
-        <Row label="Date">
+        <Row
+          label="Date"
+          action={findOthers("documentDate", facts.documentDate.value, "date")}
+        >
           <EditableDate
             value={facts.documentDate.value}
             display={dateDisplay(facts.documentDate)}
@@ -124,7 +198,10 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
             onCommit={commitDate("documentDate")}
           />
         </Row>
-        <Row label="Place">
+        <Row
+          label="Place"
+          action={findOthers("documentPlace", facts.documentPlace.value, "place")}
+        >
           <EditableText
             value={facts.documentPlace.value}
             label="Edit place"
@@ -134,7 +211,10 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
             onCommit={commitText("documentPlace")}
           />
         </Row>
-        <Row label="Language">
+        <Row
+          label="Language"
+          action={findOthers("sourceLanguageCode", facts.language.value, "language")}
+        >
           <EditableSelect
             value={facts.language.value}
             options={INTERFAZE_LANGUAGES.map((l) => ({
@@ -182,15 +262,21 @@ export function DocumentInfoPanel({ document }: { document: Doc<"documents"> }) 
 
 function Row({
   label,
+  action,
   children,
 }: {
   label: string;
+  /** Revealed on hover or keyboard focus; absent for rows with no value. */
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 text-xs">
+    <div className="group/row flex items-baseline justify-between gap-3 text-xs">
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="flex min-w-0 justify-end text-right">{children}</span>
+      <span className="flex min-w-0 items-center justify-end gap-0.5 text-right">
+        {children}
+        {action}
+      </span>
     </div>
   );
 }
