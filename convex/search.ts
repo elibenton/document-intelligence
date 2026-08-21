@@ -68,6 +68,13 @@ export type PageHit = {
   snippet: string;
 };
 
+/** The vector leg's hits, plus why there are none when there are none. */
+type VectorLegResult = {
+  hits: PageHit[];
+  /** "not_configured" | "failed". Absent means the leg ran. */
+  unavailable?: string;
+};
+
 
 
 
@@ -479,6 +486,16 @@ export const update = internalMutation({
       )
     ),
     answer: v.optional(v.string()),
+    retrieval: v.optional(
+      v.object({
+        candidates: v.number(),
+        used: v.number(),
+        textHits: v.number(),
+        semanticHits: v.number(),
+        entityHits: v.number(),
+        semanticUnavailable: v.optional(v.string()),
+      })
+    ),
     verification: v.optional(
       v.object({
         totalClaims: v.number(),
@@ -1037,14 +1054,18 @@ export const execute = internalAction({
 
       // ---- 2. Retrieve (three legs in parallel) --------------------------
       const geminiKey = embeddingsApiKey();
-      const [textHits, vectorHits, entityResult] = await Promise.all([
+      const [textHits, vectorLeg, entityResult] = await Promise.all([
         ctx.runQuery(internal.search.textLeg, {
           keywords: plan.keywords,
           queryText: args.query,
           projectId: args.projectId,
         }) as Promise<PageHit[]>,
-        (async (): Promise<PageHit[]> => {
-          if (!geminiKey) return [];
+        // Still best-effort — a dead embeddings provider must not fail the
+        // search — but it now says WHY it came back empty. "No key" and "the
+        // provider errored" both used to look identical to "no matches", and
+        // the answer was written from two legs while reading as if from three.
+        (async (): Promise<VectorLegResult> => {
+          if (!geminiKey) return { hits: [], unavailable: "not_configured" };
           try {
             const [vector] = await embedTexts([plan.semantic_query], geminiKey, {
               log: usageLogger(ctx, { projectId: args.projectId }),
@@ -1055,12 +1076,13 @@ export const execute = internalAction({
               limit: VECTOR_LEG_HITS,
               filter: (q) => q.eq("projectId", args.projectId),
             });
-            return await ctx.runQuery(internal.search.hydratePageHits, {
-              pageIds: matches.map((m) => m._id),
-              queryText: args.query,
-            });
+            const hits: PageHit[] = await ctx.runQuery(
+              internal.search.hydratePageHits,
+              { pageIds: matches.map((m) => m._id), queryText: args.query }
+            );
+            return { hits };
           } catch {
-            return []; // vector leg is best-effort
+            return { hits: [], unavailable: "failed" };
           }
         })(),
         ctx.runQuery(internal.search.entityLeg, {
@@ -1079,11 +1101,15 @@ export const execute = internalAction({
         }>,
       ]);
 
-      const fused = rrfFuse([
+      const vectorHits = vectorLeg.hits;
+      // Kept whole before the cut: `candidates` is the honest denominator for
+      // "answered from N of M", and slicing first would throw it away.
+      const fusedAll = rrfFuse([
         { source: "text", hits: textHits },
         { source: "semantic", hits: vectorHits },
         { source: "entity", hits: entityResult.hits },
-      ]).slice(0, SYNTHESIS_PAGES);
+      ]);
+      const fused = fusedAll.slice(0, SYNTHESIS_PAGES);
 
       const hydrated: Array<{
         documentId: Id<"documents">;
@@ -1114,6 +1140,16 @@ export const execute = internalAction({
         status: "synthesizing",
         results,
         matchedEntities: entityResult.matchedEntities,
+        retrieval: {
+          candidates: fusedAll.length,
+          used: fused.length,
+          textHits: textHits.length,
+          semanticHits: vectorHits.length,
+          entityHits: entityResult.hits.length,
+          ...(vectorLeg.unavailable
+            ? { semanticUnavailable: vectorLeg.unavailable }
+            : {}),
+        },
       });
 
       // ---- 3. Synthesize --------------------------------------------------

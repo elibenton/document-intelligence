@@ -1129,6 +1129,34 @@ export default defineSchema({
       )
     ),
     answer: v.optional(v.string()), // markdown, cites sources as [n]
+    // What retrieval actually had to work with. Two different silences are
+    // being broken here: how much of the matching corpus the answer was
+    // written from (the SYNTHESIS_PAGES cut is lossy and was invisible), and
+    // whether all three legs were able to run at all — when Gemini's quota is
+    // gone the semantic leg contributes nothing and the answer reads exactly
+    // as confident as one written from three legs.
+    //
+    // Optional, so searches run before this existed render as they always did.
+    retrieval: v.optional(
+      v.object({
+        /** Distinct pages the fusion produced, before the synthesis cut. */
+        candidates: v.number(),
+        /** How many survived it and were actually read. */
+        used: v.number(),
+        // Per-leg counts, so "found nothing" is visible rather than inferred
+        // from a total.
+        textHits: v.number(),
+        semanticHits: v.number(),
+        entityHits: v.number(),
+        /**
+         * Why the semantic leg could not run: "not_configured" (no key on the
+         * deployment) or "failed" (the provider errored or was out of quota).
+         * Absent means it ran — zero hits then means zero matches, which is a
+         * different fact and must not read as an outage.
+         */
+        semanticUnavailable: v.optional(v.string()),
+      })
+    ),
     // Post-synthesis verification (convex/answerVerification.ts): every cited
     // claim was checked for token overlap against the pages it cites; claims
     // that failed were removed from `answer` and preserved here so the UI can

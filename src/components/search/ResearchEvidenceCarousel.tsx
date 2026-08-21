@@ -420,6 +420,7 @@ export function ResearchAnswerWithEvidence({
   results,
   projectId,
   verification,
+  retrieval,
 }: {
   answer: string;
   results: ResearchResult[];
@@ -427,6 +428,12 @@ export function ResearchAnswerWithEvidence({
   projectId: Id<"projects"> | null;
   /** What the post-synthesis check removed (convex/answerVerification.ts). */
   verification?: { totalClaims: number; removedClaims: string[] } | null;
+  /** How much of the corpus was read, and which legs ran (convex/search.ts). */
+  retrieval?: {
+    candidates: number;
+    used: number;
+    semanticUnavailable?: string;
+  } | null;
 }) {
   // Deduped: the same document can supply two evidence pages, and a
   // bibliography lists a source once however often it is cited.
@@ -525,6 +532,36 @@ export function ResearchAnswerWithEvidence({
           </ReactMarkdown>
         </div>
       </div>
+
+      {/* How much of the matching corpus this answer was written from. The
+          synthesis cut has always been lossy; saying so is the difference
+          between "this is the answer" and "this is the answer from what was
+          read". Quiet by default — it is context, not a warning. */}
+      {retrieval && retrieval.candidates > 0 && (
+        <p className="mb-4 max-w-3xl text-xs text-muted-foreground">
+          Answered from {retrieval.used} of {retrieval.candidates} matching{" "}
+          {retrieval.candidates === 1 ? "passage" : "passages"}.
+        </p>
+      )}
+
+      {/* A leg that could not run is a different fact, and does warrant a
+          warning: without it the answer is written from keyword and entity
+          matching alone while reading exactly as confident. */}
+      {retrieval?.semanticUnavailable && (
+        <div className="mb-8 max-w-3xl rounded-lg border border-warning/40 bg-warning/5 p-4 text-sm">
+          <div className="flex items-start gap-2">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div className="min-w-0">
+              <p className="font-medium">Semantic search was unavailable</p>
+              <p className="text-muted-foreground">
+                {retrieval.semanticUnavailable === "not_configured"
+                  ? "No embeddings key is configured on this deployment, so this answer came from keyword and entity matching only."
+                  : "The embeddings provider could not be reached, so this answer came from keyword and entity matching only. Check provider status in Settings."}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Disclosure of what the verification pass cut. Silence would read as
           "this is the whole answer"; the removed text stays inspectable so a
