@@ -9,6 +9,11 @@
  *
  * Everything degrades gracefully: when GEMINI_API_KEY is unset, embedding
  * runs are skipped and search falls back to full-text + entity-graph legs.
+ *
+ * The unit is a `chunks` row, not a page. See convex/chunking.ts for why —
+ * short version: a page was both too big (an hour of audio is one page, so one
+ * vector) and silently truncated at 8k characters, which removed ~92% of a web
+ * clip from the semantic leg without saying so.
  */
 
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
@@ -20,16 +25,28 @@ import { usageLogger } from "./apiLogs";
 import { healthReporter } from "./providerHealth";
 import type { HealthReporter, ProviderStatus } from "./providerHealth";
 import { authedAction } from "./authz";
+import { applySpeakerNames, embeddingText, type ChunkContext } from "./chunking";
+import { rebuildForDocument } from "./chunks";
+import { isRecordingDocument } from "./mediaTypes";
 
 export const EMBEDDING_MODEL = "gemini-embedding-2";
 export const EMBEDDING_DIMENSIONS = 1536;
 
-// Gemini Embedding 2 accepts 8192 tokens, but tokens-per-minute quotas are
-// finite and a page's leading text carries most of its retrieval signal —
-// 8k chars (~2k tokens) per page keeps batches comfortably inside them.
-const MAX_EMBED_CHARS = 8_000;
+/**
+ * The PROVIDER's ceiling, not a budget of ours.
+ *
+ * Gemini Embedding 2 accepts 8192 tokens; 30k characters sits under that in
+ * any script. Chunks target 1,800 characters, so the only thing that can reach
+ * this is a single transcript segment longer than it —
+ * `chunkTranscriptSegments` never cuts a turn, because half a turn has no
+ * anchor the player can seek to. Reaching it is logged rather than swallowed:
+ * an unannounced clip is exactly the defect this file used to have.
+ */
+const PROVIDER_MAX_EMBED_CHARS = 30_000;
 // Per-request embedding batch (batchEmbedContents itself allows up to 100).
-const BATCH_SIZE = 8;
+// Chunks outnumber pages, so the 1s inter-batch pace costs proportionally more
+// wall-clock than it did; 32 keeps headroom under the tokens-per-minute quota.
+const BATCH_SIZE = 32;
 // Paced BETWEEN API calls only, never while merely scanning.
 const BATCH_PACING_MS = 1_000;
 const RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
@@ -77,7 +94,21 @@ function classifyFailure(
   };
 }
 
+/**
+ * Which side of the retrieval pair this text is.
+ *
+ * Required, deliberately, rather than defaulted: a query and the passage that
+ * answers it are not the same kind of text, and a call site that forgets to
+ * say which it has poisons the vector space silently — no error, just worse
+ * results forever. The type checker is the only thing that can catch that.
+ *
+ * Changing this value changes every vector, so document and query must move
+ * together and stored vectors must be regenerated.
+ */
+export type EmbeddingTaskType = "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
+
 export type EmbedOptions = {
+  taskType: EmbeddingTaskType;
   /** Records token usage + cost into the API log. */
   log?: UsageLogger;
   /** Records provider reachability so the settings page can alarm on it. */
@@ -93,9 +124,9 @@ export type EmbedOptions = {
 export async function embedTexts(
   texts: string[],
   apiKey: string,
-  options: EmbedOptions = {}
+  options: EmbedOptions
 ): Promise<number[][]> {
-  const { log, health, retryOnRateLimit = true } = options;
+  const { taskType, log, health, retryOnRateLimit = true } = options;
   const startedAt = Date.now();
   let retryCount = 0;
   const reportUsage = async (report: {
@@ -123,9 +154,15 @@ export async function embedTexts(
     });
   };
 
-  const clipped = texts.map((t) =>
-    t.length > MAX_EMBED_CHARS ? t.slice(0, MAX_EMBED_CHARS) : t
-  );
+  const clipped = texts.map((t) => {
+    if (t.length <= PROVIDER_MAX_EMBED_CHARS) return t;
+    console.warn(
+      `Embedding input of ${t.length} chars exceeds the provider ceiling ` +
+        `(${PROVIDER_MAX_EMBED_CHARS}) and was cut. Expected only for a single ` +
+        `transcript segment longer than that; anything else means chunking broke.`
+    );
+    return t.slice(0, PROVIDER_MAX_EMBED_CHARS);
+  });
   let res: Response;
   for (let attempt = 0; ; attempt++) {
     res = await fetch(
@@ -140,6 +177,12 @@ export async function embedTexts(
           requests: clipped.map((text) => ({
             model: `models/${EMBEDDING_MODEL}`,
             content: { parts: [{ text }] },
+            // snake_case alongside camelCase `taskType` because that is what
+            // this call has always sent and the v1beta endpoint accepts
+            // either. Keep them as they are unless a probe says otherwise: a
+            // field name the API does not recognize is IGNORED, not rejected,
+            // so getting it wrong fails silently.
+            taskType,
             output_dimensionality: EMBEDDING_DIMENSIONS,
           })),
         }),
@@ -190,44 +233,115 @@ export async function embedTexts(
   return vectors;
 }
 
-export const pagesNeedingEmbedding = internalQuery({
+/**
+ * The next batch of chunks to embed, each already composed into the exact
+ * string the provider will see.
+ *
+ * Composition happens HERE rather than in the action because it reads the
+ * database: the document's own metadata, and the names a human has confirmed
+ * for this recording's diarized labels. Nothing composed is stored, so a
+ * corrected title or a newly named speaker improves every subsequent embed
+ * with no schema change and no backfill — and the chunk row keeps the raw
+ * passage a journalist reads in a search result.
+ */
+export const chunksNeedingEmbedding = internalQuery({
   args: {
     documentId: v.id("documents"),
     limit: v.number(),
   },
   handler: async (ctx, args) => {
-    const out: Array<{ _id: Id<"pages">; text: string }> = [];
-    for await (const page of ctx.db
-      .query("pages")
+    const document = await ctx.db.get(args.documentId);
+    if (!document) return [];
+
+    const speakerNames = new Map<string, string>();
+    if (isRecordingDocument(document)) {
+      for (const row of await ctx.db
+        .query("documentSpeakers")
+        .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+        .collect()) {
+        if (row.name.trim()) speakerNames.set(row.label, row.name);
+      }
+    }
+
+    // documentDate is what the text establishes, createdDate what the source
+    // claims; either dates the passage better than nothing, and the first is
+    // the stronger statement where both exist.
+    const context: ChunkContext = {
+      title: document.displayName ?? document.name,
+      kind: document.primaryKind,
+      date: document.documentDate ?? document.createdDate,
+      place: document.documentPlace,
+      author: document.author,
+    };
+
+    const out: Array<{ _id: Id<"chunks">; embedInput: string }> = [];
+    for await (const chunk of ctx.db
+      .query("chunks")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))) {
-      if (page.embedding) continue;
-      const text = page.text;
-      if (!text.trim()) continue;
-      out.push({ _id: page._id, text });
+      if (chunk.embedding) continue;
+      if (!chunk.text.trim()) continue;
+      out.push({
+        _id: chunk._id,
+        embedInput: embeddingText(
+          context,
+          applySpeakerNames(chunk.text, speakerNames)
+        ),
+      });
       if (out.length >= args.limit) break;
     }
     return out;
   },
 });
 
-export const storePageEmbeddings = internalMutation({
+export const storeChunkEmbeddings = internalMutation({
   args: {
     entries: v.array(
       v.object({
-        pageId: v.id("pages"),
+        chunkId: v.id("chunks"),
         embedding: v.array(v.float64()),
       })
     ),
   },
   handler: async (ctx, args) => {
     for (const entry of args.entries) {
-      await ctx.db.patch(entry.pageId, { embedding: entry.embedding });
+      // The chunk can be gone: a re-parse between this batch's query and its
+      // write deletes and rewrites every chunk of the document.
+      if ((await ctx.db.get(entry.chunkId)) === null) continue;
+      await ctx.db.patch(entry.chunkId, { embedding: entry.embedding });
     }
   },
 });
 
 /**
- * Embed every un-embedded page of a document (scheduled after
+ * Build this document's chunks if it has none.
+ *
+ * `ingestParseResults` is not the only path that commits pages. The native-PDF
+ * fast path in `runPipeline` takes pages written earlier by
+ * `nativeText.ingestNativePages` and schedules embedding directly, never
+ * touching ingest.ts — so hooking only that one chokepoint left those
+ * documents with pages, no chunks, and silently no semantic search.
+ *
+ * It lives here rather than in chunks.ts because this is the precondition of
+ * the embedding path specifically: every caller that wants embeddings already
+ * schedules `embedDocument`, so that stays the whole contract. A no-op on the
+ * ordinary path, where ingest has already built them.
+ */
+export const ensureChunksBuilt = internalMutation({
+  args: { documentId: v.id("documents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("chunks")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .first();
+    if (existing) return null;
+    await rebuildForDocument(ctx, args.documentId);
+    return null;
+  },
+});
+
+/**
+ * Embed every un-embedded chunk of a document (scheduled after
  * parse/transcribe). No-op without an API key.
  */
 export const embedDocument = internalAction({
@@ -242,21 +356,36 @@ export const embedDocument = internalAction({
       });
       return;
     }
-    // Documents are bounded in page count; loop batches until drained.
+    // Every path that wants embeddings schedules this action, so this is where
+    // "the chunks exist" is guaranteed — the native-PDF fast path commits its
+    // pages through nativeText and never passes ingestParseResults. A no-op
+    // on the ordinary path, where ingest already built them.
+    await ctx.runMutation(internal.embeddings.ensureChunksBuilt, {
+      documentId: args.documentId,
+    });
+    // Documents are bounded in chunk count; loop batches until drained.
     for (;;) {
-      const pages = await ctx.runQuery(
-        internal.embeddings.pagesNeedingEmbedding,
+      const chunks = await ctx.runQuery(
+        internal.embeddings.chunksNeedingEmbedding,
         { documentId: args.documentId, limit: BATCH_SIZE }
       );
-      if (pages.length === 0) break;
-      const vectors = await embedTexts(pages.map((p) => p.text), apiKey, {
-        log: usageLogger(ctx, { documentId: args.documentId }),
-        health: healthReporter(ctx),
+      if (chunks.length === 0) break;
+      const vectors = await embedTexts(
+        chunks.map((c) => c.embedInput),
+        apiKey,
+        {
+          taskType: "RETRIEVAL_DOCUMENT",
+          log: usageLogger(ctx, { documentId: args.documentId }),
+          health: healthReporter(ctx),
+        }
+      );
+      await ctx.runMutation(internal.embeddings.storeChunkEmbeddings, {
+        entries: chunks.map((c, i) => ({
+          chunkId: c._id,
+          embedding: vectors[i],
+        })),
       });
-      await ctx.runMutation(internal.embeddings.storePageEmbeddings, {
-        entries: pages.map((p, i) => ({ pageId: p._id, embedding: vectors[i] })),
-      });
-      if (pages.length < BATCH_SIZE) break;
+      if (chunks.length < BATCH_SIZE) break;
       await new Promise((r) => setTimeout(r, BATCH_PACING_MS));
     }
   },
@@ -285,6 +414,8 @@ export const checkHealth = authedAction({
     try {
       // No usage log — a 2-token probe would only clutter the API log.
       await embedTexts(["health check"], apiKey, {
+        // Probe shape follows the interactive path it is standing in for.
+        taskType: "RETRIEVAL_QUERY",
         health,
         retryOnRateLimit: false,
       });

@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { slugify } from "./slug";
+import { rebuildForDocument } from "./chunks";
 
 /**
  * Fill in `entities.slug` for rows written before the field existed, so
@@ -376,6 +377,95 @@ export const backfillRelationshipProjectIds = internalMutation({
         internal.migrations.backfillRelationshipProjectIds,
         { cursor: page.continueCursor }
       );
+    }
+    return null;
+  },
+});
+
+/**
+ * Build chunks for every document that has none, and queue their embeddings.
+ *
+ * Run once, after the schema push that adds the `chunks` table:
+ *   npx convex run migrations:backfillChunks
+ *
+ * This re-embeds the entire corpus, so it costs real money and should be run
+ * deliberately and watched — `budget.ts` and the `userUsage` ledger both apply,
+ * and a corpus large enough to matter will notice. It is emphatically not
+ * something to trigger from a deploy.
+ *
+ * One document per transaction. That looks wasteful next to the 200-row pages
+ * the other backfills use, and it is the point: a single 500-page PDF is a
+ * thousand chunk inserts, so a page of twenty such documents is twenty
+ * thousand writes in one transaction. Throughput here is scheduler-bound
+ * rather than transaction-bound, which is the trade worth making for a
+ * migration that must not fail halfway through a document.
+ *
+ * Skips documents that already have chunks, so it is safe to re-run and safe
+ * to run while the pipeline is writing new ones.
+ */
+export const backfillChunks = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("documents")
+      .paginate({ cursor: args.cursor ?? null, numItems: 1 });
+
+    for (const document of page.page) {
+      const already = await ctx.db
+        .query("chunks")
+        .withIndex("by_document", (q) => q.eq("documentId", document._id))
+        .first();
+      if (already) continue;
+      const built = await rebuildForDocument(ctx, document._id);
+      // No chunks means no pages yet — a document still in the pipeline, whose
+      // own parse stage will schedule this for itself.
+      if (built > 0) {
+        await ctx.scheduler.runAfter(0, internal.embeddings.embedDocument, {
+          documentId: document._id,
+        });
+      }
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillChunks, {
+        cursor: page.continueCursor,
+      });
+    }
+    return null;
+  },
+});
+
+/**
+ * Clear `pages.embedding` so the field and its vector index can be dropped.
+ *
+ * The narrow half of widen → migrate → narrow. Convex refuses to deploy a
+ * schema that no longer declares a field rows still carry, which is the good
+ * outcome — but it means this has to run to completion BEFORE `pages.embedding`
+ * and `pages.by_embedding` are removed from schema.ts:
+ *
+ *   npx convex run migrations:dropPageEmbeddings
+ *
+ * Only run it once `backfillChunks` has finished and search has been confirmed
+ * working off `chunks`. Until then these vectors are the rollback.
+ */
+export const dropPageEmbeddings = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("pages")
+      .paginate({ cursor: args.cursor ?? null, numItems: 100 });
+
+    for (const row of page.page) {
+      if (row.embedding === undefined) continue;
+      await ctx.db.patch(row._id, { embedding: undefined });
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.dropPageEmbeddings, {
+        cursor: page.continueCursor,
+      });
     }
     return null;
   },

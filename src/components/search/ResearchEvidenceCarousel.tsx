@@ -29,12 +29,35 @@ import type { CitationStyle } from "../../../convex/projectTemplates";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { SinglePagePreview } from "@/components/viewer/SinglePagePreview";
+import { formatTime } from "@/components/recordings/speakerColors";
 
 interface ResearchResult {
   documentId: Id<"documents">;
   documentName: string;
   pageNumber: number;
   snippet: string;
+  /** Seconds into a recording. Every page of a recording is page 0, so this
+   *  is the only thing that can point a citation at the moment. */
+  startTime?: number;
+}
+
+/** Where a hit sits, in the terms its medium is addressed by. */
+function hitLocation(result: ResearchResult): string {
+  return result.startTime !== undefined
+    ? formatTime(result.startTime)
+    : `Page ${result.pageNumber + 1}`;
+}
+
+/** The viewer address for a hit, seeking as well as scrolling when it can. */
+function hitHref(result: ResearchResult): string {
+  const params = new URLSearchParams({
+    page: String(result.pageNumber + 1),
+    highlight: result.snippet,
+  });
+  if (result.startTime !== undefined) {
+    params.set("t", String(Math.floor(result.startTime)));
+  }
+  return `/documents/${result.documentId}?${params.toString()}`;
 }
 
 interface MatchBox {
@@ -152,7 +175,7 @@ function CitationButton({
           <span className="block max-w-64 text-left">
             <span className="block font-medium">{result.documentName}</span>
             <span className="text-muted-foreground">
-              Page {result.pageNumber + 1}
+              {hitLocation(result)}
             </span>
           </span>
         }
@@ -160,7 +183,7 @@ function CitationButton({
         <button
           type="button"
           onClick={onSelect}
-          aria-label={`Citation ${number}: ${result.documentName}, page ${result.pageNumber + 1}`}
+          aria-label={`Citation ${number}: ${result.documentName}, ${hitLocation(result).toLowerCase()}`}
           // Single-select among N, not a toggle.
           aria-current={active ? "true" : undefined}
           className={`inline-flex items-center justify-center rounded-full border text-2xs font-semibold leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
@@ -287,13 +310,18 @@ function CitationPage({
   const isTranscript = mediaType === "audio" || mediaType === "video";
   const SourceIcon =
     mediaType === "webScrape" ? Globe : isTranscript ? AudioLines : FileText;
-  const contextLabel = drawable
-    ? `Page ${result.pageNumber + 1}`
-    : mediaType === "webScrape"
-      ? "Web clip"
-      : isTranscript
-        ? "Transcript"
-        : "Excerpt";
+  // A timecode beats "Transcript": it says where in the hour this came from,
+  // and it is what the card's link will actually seek to.
+  const contextLabel =
+    result.startTime !== undefined
+      ? formatTime(result.startTime)
+      : drawable
+        ? `Page ${result.pageNumber + 1}`
+        : mediaType === "webScrape"
+          ? "Web clip"
+          : isTranscript
+            ? "Transcript"
+            : "Excerpt";
 
   return (
     <article
@@ -325,7 +353,7 @@ function CitationPage({
           </span>
         )}
         <Link
-          to={`/documents/${result.documentId}?page=${result.pageNumber + 1}&highlight=${encodeURIComponent(result.snippet)}`}
+          to={hitHref(result)}
           className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
         >
           Open <ArrowUpRight className="size-3" />

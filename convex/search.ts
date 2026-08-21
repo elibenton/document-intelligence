@@ -66,6 +66,17 @@ export type PageHit = {
   documentId: Id<"documents">;
   pageNumber: number;
   snippet: string;
+  /**
+   * Seconds into a recording. Present only on hits that came from a
+   * time-anchored chunk, and it is what makes a citation land on the moment
+   * rather than on "this recording" — every page of a recording is page 0.
+   *
+   * Also decides how the hit fuses; see rrfFuse.
+   */
+  startTime?: number;
+  /** The chunk this hit came from, when it came from one. Both the fusion
+   *  key and synthesis hydration read it. */
+  chunkId?: Id<"chunks">;
 };
 
 /** The vector leg's hits, plus why there are none when there are none. */
@@ -473,6 +484,7 @@ export const update = internalMutation({
           snippet: v.string(),
           score: v.number(),
           sources: v.array(v.string()),
+          startTime: v.optional(v.number()),
         })
       )
     ),
@@ -653,22 +665,30 @@ export const textLeg = internalQuery({
 });
 
 
-/** The vector index is project-filtered at search time, so these ids are
- *  already scoped — this only turns them back into text. */
-export const hydratePageHits = internalQuery({
+/**
+ * The vector index is project-filtered at search time, so these ids are
+ * already scoped — this only turns them back into hits.
+ *
+ * The snippet is cut from the chunk rather than from the whole page, so it
+ * now guesses a window inside the right passage instead of inside a document
+ * that merely contains one.
+ */
+export const hydrateChunkHits = internalQuery({
   args: {
-    pageIds: v.array(v.id("pages")),
+    chunkIds: v.array(v.id("chunks")),
     queryText: v.string(),
   },
   handler: async (ctx, args): Promise<PageHit[]> => {
     const out: PageHit[] = [];
-    for (const pageId of args.pageIds.slice(0, VECTOR_LEG_HITS)) {
-      const page = await ctx.db.get(pageId);
-      if (!page) continue;
+    for (const chunkId of args.chunkIds.slice(0, VECTOR_LEG_HITS)) {
+      const chunk = await ctx.db.get(chunkId);
+      if (!chunk) continue;
       out.push({
-        documentId: page.documentId,
-        pageNumber: page.pageNumber,
-        snippet: makeSnippet(page.text, args.queryText),
+        documentId: chunk.documentId,
+        pageNumber: chunk.pageNumber,
+        snippet: makeSnippet(chunk.text, args.queryText),
+        ...(chunk.startTime !== undefined ? { startTime: chunk.startTime } : {}),
+        chunkId: chunk._id,
       });
     }
     return out;
@@ -821,11 +841,23 @@ export const entityLeg = internalQuery({
 });
 
 
-/** Document names + page texts for the fused result set / synthesis. */
+/**
+ * Document names + quotable text for the fused result set / synthesis.
+ *
+ * A key carrying a `chunkId` is quoted from that chunk; everything else is
+ * quoted from its whole page. That split is the fusion rule again: a page is
+ * the right amount of context for paper, and completely wrong for a recording
+ * whose only page holds an entire transcript — sending that whole would spend
+ * the budget on one document and repeat it once per time-anchored hit.
+ */
 export const hydrateForSynthesis = internalQuery({
   args: {
     keys: v.array(
-      v.object({ documentId: v.id("documents"), pageNumber: v.number() })
+      v.object({
+        documentId: v.id("documents"),
+        pageNumber: v.number(),
+        chunkId: v.optional(v.id("chunks")),
+      })
     ),
   },
   handler: async (ctx, args) => {
@@ -850,22 +882,31 @@ export const hydrateForSynthesis = internalQuery({
         name = (await ctx.db.get(key.documentId))?.name ?? "Unknown document";
         docNames.set(key.documentId, name);
       }
-      const page = await ctx.db
-        .query("pages")
-        .withIndex("by_document", (s) =>
-          s.eq("documentId", key.documentId).eq("pageNumber", key.pageNumber)
-        )
-        .unique();
-      const translated = page
-        ? await ctx.db
-            .query("pageTranslations")
-            .withIndex("by_page_and_target", (s) =>
-              s.eq("pageId", page._id).eq("targetLanguageCode", targetLanguageCode)
-            )
-            .unique()
-        : null;
-      const full =
-        translated?.status === "complete" ? translated.text : page?.text ?? "";
+      let full: string;
+      if (key.chunkId) {
+        // No translated counterpart: pageTranslations is per page, and a
+        // recording's translations live on its segments instead.
+        full = (await ctx.db.get(key.chunkId))?.text ?? "";
+      } else {
+        const page = await ctx.db
+          .query("pages")
+          .withIndex("by_document", (s) =>
+            s.eq("documentId", key.documentId).eq("pageNumber", key.pageNumber)
+          )
+          .unique();
+        const translated = page
+          ? await ctx.db
+              .query("pageTranslations")
+              .withIndex("by_page_and_target", (s) =>
+                s
+                  .eq("pageId", page._id)
+                  .eq("targetLanguageCode", targetLanguageCode)
+              )
+              .unique()
+          : null;
+        full =
+          translated?.status === "complete" ? translated.text : page?.text ?? "";
+      }
       // Pages are sent whole. The budget is spent in rank order, so the best
       // hits get their full text and a long page costs later ones their slot
       // rather than everyone a fixed slice of theirs.
@@ -952,6 +993,21 @@ const ANSWER_SCHEMA = {
 };
 
 
+/**
+ * What two hits have to agree on to be the same result.
+ *
+ * The page, for paper: the viewer scrolls to a page, so two chunks of one page
+ * should reinforce each other rather than compete for a slot. The moment, for
+ * a recording: every page of a recording is page 0, so keying by page would
+ * collapse an hour of interview into a single result — which is the shape of
+ * the bug chunking exists to fix.
+ */
+function fusionKey(hit: PageHit): string {
+  return hit.startTime !== undefined && hit.chunkId
+    ? `chunk:${hit.chunkId}`
+    : `${hit.documentId}:${hit.pageNumber}`;
+}
+
 function rrfFuse(
   legs: Array<{ source: string; hits: PageHit[] }>,
   k = 60
@@ -962,7 +1018,7 @@ function rrfFuse(
   >();
   for (const leg of legs) {
     leg.hits.forEach((hit, rank) => {
-      const key = `${hit.documentId}:${hit.pageNumber}`;
+      const key = fusionKey(hit);
       const entry = fused.get(key);
       const inc = 1 / (k + rank + 1);
       if (entry) {
@@ -1068,17 +1124,18 @@ export const execute = internalAction({
           if (!geminiKey) return { hits: [], unavailable: "not_configured" };
           try {
             const [vector] = await embedTexts([plan.semantic_query], geminiKey, {
+              taskType: "RETRIEVAL_QUERY",
               log: usageLogger(ctx, { projectId: args.projectId }),
               health: healthReporter(ctx),
             });
-            const matches = await ctx.vectorSearch("pages", "by_embedding", {
+            const matches = await ctx.vectorSearch("chunks", "by_embedding", {
               vector,
               limit: VECTOR_LEG_HITS,
               filter: (q) => q.eq("projectId", args.projectId),
             });
             const hits: PageHit[] = await ctx.runQuery(
-              internal.search.hydratePageHits,
-              { pageIds: matches.map((m) => m._id), queryText: args.query }
+              internal.search.hydrateChunkHits,
+              { chunkIds: matches.map((m) => m._id), queryText: args.query }
             );
             return { hits };
           } catch {
@@ -1120,19 +1177,25 @@ export const execute = internalAction({
         keys: fused.map((f) => ({
           documentId: f.hit.documentId,
           pageNumber: f.hit.pageNumber,
+          ...(f.hit.startTime !== undefined && f.hit.chunkId
+            ? { chunkId: f.hit.chunkId }
+            : {}),
         })),
       });
-      const nameByKey = new Map(
-        hydrated.map((h) => [`${h.documentId}:${h.pageNumber}`, h.documentName])
+      // Keyed by document, not by the fusion key: a name belongs to the file,
+      // and two hits in one recording now carry two different fusion keys.
+      const nameByDocument = new Map(
+        hydrated.map((h) => [h.documentId, h.documentName])
       );
 
       const results = fused.map((f) => ({
         documentId: f.hit.documentId,
-        documentName: nameByKey.get(f.key) ?? "Unknown document",
+        documentName: nameByDocument.get(f.hit.documentId) ?? "Unknown document",
         pageNumber: f.hit.pageNumber,
         snippet: f.hit.snippet,
         score: f.score,
         sources: f.sources,
+        ...(f.hit.startTime !== undefined ? { startTime: f.hit.startTime } : {}),
       }));
 
       await ctx.runMutation(internal.search.update, {

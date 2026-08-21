@@ -254,8 +254,9 @@ export default function DocumentPage({ id }: { id: string }) {
     [tocHeaders]
   );
 
-  // Deep link support (?page=N&highlight=text): arm the highlight search and
-  // scroll to the page once the viewer has rendered it.
+  // Deep link support (?page=N&highlight=text&t=seconds): arm the highlight
+  // search, then scroll to the page — or seek to the moment, for a recording,
+  // where every hit is on page 0 and only the timecode says anything.
   const [searchParams] = useSearchParams();
   useEffect(() => {
     const highlight = searchParams.get("highlight");
@@ -263,6 +264,24 @@ export default function DocumentPage({ id }: { id: string }) {
       setSearchQuery(highlight);
       setSelectedItem(highlight);
     }
+
+    const at = Number(searchParams.get("t"));
+    if (Number.isFinite(at) && at > 0) {
+      // The player mounts after this effect runs, so wait for the handle the
+      // same way the page path waits for its element.
+      let seekTries = 0;
+      const seekTimer = setInterval(() => {
+        seekTries++;
+        if (recordingRef.current) {
+          seekTo(at);
+          clearInterval(seekTimer);
+        } else if (seekTries > 40) {
+          clearInterval(seekTimer);
+        }
+      }, 250);
+      return () => clearInterval(seekTimer);
+    }
+
     const page = Number(searchParams.get("page"));
     if (!page || page < 1) return;
     let tries = 0;

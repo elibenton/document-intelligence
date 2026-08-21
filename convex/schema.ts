@@ -659,6 +659,56 @@ export default defineSchema({
       filterFields: ["targetLanguageCode", "status", "projectId"],
     }),
 
+  // The unit that gets embedded. NOT the page — see convex/chunking.ts for
+  // why, at both ends of the size range.
+  //
+  // Every document produces chunks the same way, so there is one embedding
+  // surface rather than a page path and a recording path. What differs is the
+  // anchor each chunk carries: paper anchors by character offset, audio by
+  // time, and A7's citations resolve whichever is present.
+  chunks: defineTable({
+    documentId: v.id("documents"),
+    // Denormalized for the vector index's filter, the same bargain as
+    // pages.projectId and for the same reason: vector filters are equality
+    // only, so a project-scoped search is impossible without the project on
+    // the row. Optional only until the backfill lands.
+    projectId: v.optional(v.id("projects")),
+    pageId: v.id("pages"),
+    pageNumber: v.number(),
+    /** Ordinal within the document: pages in order, chunks within a page. */
+    chunkIndex: v.number(),
+    /**
+     * The raw passage, as read — this is what a search result shows.
+     *
+     * The text actually SENT to the embedding provider is this plus a derived
+     * metadata header (chunking.embeddingText). That header is never stored:
+     * deriving it at embed time means a human correcting a title or naming a
+     * speaker improves every later embed with no schema change and no
+     * backfill, and it keeps the displayed snippet free of scaffolding.
+     */
+    text: v.string(),
+    // Character anchors into pages.text, for everything that is not a
+    // recording. Page text is `lineTexts.join("\n")` over the very lines that
+    // become blocks (convex/interfazeOcr.ts, and that invariant is load-
+    // bearing there for its own reasons), so an offset pair resolves to the
+    // blocks it covers — which is what lets a citation box a paragraph rather
+    // than name a page.
+    startChar: v.optional(v.number()),
+    endChar: v.optional(v.number()),
+    // Time anchors, for recordings. A transcript chunk is a window of whole
+    // diarized turns; half a turn has no anchor the player can seek to, so
+    // these never carry a character offset.
+    startTime: v.optional(v.number()),
+    endTime: v.optional(v.number()),
+    embedding: v.optional(v.array(v.float64())),
+  })
+    .index("by_document", ["documentId", "chunkIndex"])
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1536,
+      filterFields: ["documentId", "projectId"],
+    }),
+
   blocks: defineTable({
     documentId: v.id("documents"),
     pageId: v.id("pages"),
@@ -1115,6 +1165,10 @@ export default defineSchema({
           score: v.number(),
           // Which retrieval legs surfaced this hit: "text" | "semantic" | "entity"
           sources: v.array(v.string()),
+          // Seconds into a recording, on hits that came from a time-anchored
+          // chunk. Absent for paper — and for recordings indexed before
+          // chunking existed, whose hits could only name page 0.
+          startTime: v.optional(v.number()),
         })
       )
     ),

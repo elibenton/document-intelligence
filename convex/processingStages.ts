@@ -29,7 +29,7 @@ import {
   type NativeMetadataOmissions,
 } from "./analyzePrompt";
 import { usageLogger } from "./apiLogs";
-import { isCsvDocument } from "./mediaTypes";
+import { isCsvDocument, isRecordingDocument } from "./mediaTypes";
 import type { Doc, Id } from "./_generated/dataModel";
 import Papa from "papaparse";
 
@@ -497,8 +497,7 @@ export const runPipeline = internalAction({
     if (!apiKey) throw new Error("INTERFAZE_API_KEY not configured");
     const fileUrl = await requireFileUrl(ctx, document);
     const log = usageLogger(ctx, { documentId: args.documentId });
-    const isRecording =
-      document.mediaType === "audio" || document.mediaType === "video";
+    const isRecording = isRecordingDocument(document);
     const csv = isCsvDocument(document);
 
     await ctx.runMutation(internal.processing.updateStatus, {

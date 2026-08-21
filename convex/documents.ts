@@ -562,6 +562,7 @@ export const addKinds = authedMutation({
  */
 const DOCUMENT_SCOPED_TABLES = [
   "blocks",
+  "chunks",
   "pages",
   "pageTranslations",
   "transcriptSegments",

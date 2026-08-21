@@ -1,6 +1,7 @@
 import { internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import { rebuildForDocument } from "./chunks";
 import type { Id } from "./_generated/dataModel";
 import { recountEntity } from "./entityResolution";
 import { enforceDemoPageLimit } from "./demo";
@@ -325,6 +326,10 @@ export const ingestParseResults = internalMutation({
       return;
     }
     await reconcilePagesAndBlocks(ctx, { ...args, pageOffset: 0 });
+    // The embedding units, rebuilt from the text just written. Fewer rows than
+    // the blocks reconciled above — a chunk is ~1,800 characters where a block
+    // is one line — so a transaction that fits those fits these.
+    await rebuildForDocument(ctx, args.documentId);
   },
 });
 
